@@ -2920,6 +2920,22 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         textField.returnKeyType = UIReturnKeyDone;
         if (numerical) {
             textField.keyboardType = UIKeyboardTypeNumberPad;
+
+            UIToolbar *toolbar = [[UIToolbar alloc] init];
+            [toolbar sizeToFit];
+
+            UIBarButtonItem *flexibleSpace =
+                [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
+                                                            target:nil
+                                                            action:nil];
+
+            UIBarButtonItem *done =
+                [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                            target:textField
+                                                            action:@selector(resignFirstResponder)];
+
+            toolbar.items = @[flexibleSpace, done];
+            textField.inputAccessoryView = toolbar;
         }
 
         textField.translatesAutoresizingMaskIntoConstraints = NO;
