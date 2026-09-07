@@ -1,0 +1,60 @@
+name: Send IPA to Telegram
+
+on:
+  workflow_run:
+    workflows: ["Build IPA"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Find IPA artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          ARTIFACT=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | endswith(".ipa")) | .id' \
+            | head -n 1)
+
+          if [ -z "$ARTIFACT" ]; then
+            echo "No IPA artifact found."
+            exit 1
+          fi
+
+          echo "artifact_id=$ARTIFACT" >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          ARTIFACT_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID/artifacts/$ARTIFACT_ID"
+
+          MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
+
+          <b>Commit</b> <code>$SHORT_SHA</code>
+
+          <a href=\"$ARTIFACT_URL\">Download IPA</a>"
+
+          curl -sS -X POST \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$TELEGRAM_CHAT_ID" \
+            -d parse_mode="HTML" \
+            --data-urlencode text="$MESSAGE"
