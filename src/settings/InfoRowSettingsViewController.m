@@ -33,12 +33,13 @@
                                   onToggle:^(UISwitch *sender) {
         sIconRowMagnifier = sender.isOn;
         [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyIconRowMagnifier];
+        [weakSelf reloadRowWithID:@"infoRow.upvote"];
         ApolloLog(@"[InfoRowSettings] magnifier=%d", sender.isOn);
     }];
 
     ApolloSettingsRow *upvote =
         [ApolloSettingsRow switchRowWithID:@"infoRow.upvote"
-                                     title:@"Upvote"
+                                     title:@"Upvote on Release"
                                       isOn:^BOOL { return sInfoRowTapUpvote; }
                                   onToggle:^(UISwitch *sender) {
         sInfoRowTapUpvote = sender.isOn;
@@ -46,9 +47,13 @@
         ApolloLog(@"[InfoRowSettings] upvote=%d", sender.isOn);
     }];
 
+        upvote.visible = ^BOOL {
+        return sIconRowMagnifier;
+    };
+
     ApolloSettingsRow *comments =
         [ApolloSettingsRow switchRowWithID:@"infoRow.comments"
-                                     title:@"Comments"
+                                     title:@"Jump to Comments"
                                       isOn:^BOOL { return sInfoRowTapComments; }
                                   onToggle:^(UISwitch *sender) {
         sInfoRowTapComments = sender.isOn;
@@ -56,31 +61,21 @@
         ApolloLog(@"[InfoRowSettings] comments=%d", sender.isOn);
     }];
 
-    ApolloSettingsRow *popup =
-        [ApolloSettingsRow switchRowWithID:@"infoRow.popup"
-                                     title:@"Popup"
-                                      isOn:^BOOL { return sInfoRowPopupMode && !sInfoRowOverlayMode; }
-                                  onToggle:^(UISwitch *sender) {
-        sInfoRowPopupMode = sender.isOn;
-        if (sender.isOn) sInfoRowOverlayMode = NO;
-        [weakSelf persistInfoModesAndReloadRows];
-    }];
-    popup.enabled = ^BOOL { return !sInfoRowOverlayMode; };
-
-    ApolloSettingsRow *overlay =
-        [ApolloSettingsRow switchRowWithID:@"infoRow.overlay"
-                                     title:@"Overlay"
-                                      isOn:^BOOL { return sInfoRowOverlayMode && !sInfoRowPopupMode; }
-                                  onToggle:^(UISwitch *sender) {
-        sInfoRowOverlayMode = sender.isOn;
-        if (sender.isOn) sInfoRowPopupMode = NO;
-        [weakSelf persistInfoModesAndReloadRows];
-    }];
-    overlay.enabled = ^BOOL { return !sInfoRowPopupMode; };
+    ApolloSettingsRow *timestamp =
+    [ApolloSettingsRow valueRowWithID:@"infoRow.timestamp"
+                                title:@"Full Timestamp on Tap"
+                            detail:^NSString * {
+    if (sInfoRowPopupMode) return @"Pop-up";
+    if (sInfoRowOverlayMode) return @"Overlay";
+    return @"Off";
+}
+                            onSelect:^{
+    [weakSelf presentTimestampPicker];
+}];
 
     ApolloSettingsRow *translation =
         [ApolloSettingsRow switchRowWithID:@"infoRow.translation"
-                                     title:@"Translation"
+                                     title:@"Globe Toggles Translation"
                                       isOn:^BOOL {
         return [weakSelf translationMarkerAvailable] && sInfoRowTapTranslation;
     }
@@ -90,21 +85,17 @@
         ApolloLog(@"[InfoRowSettings] translation=%d", sender.isOn);
     }];
     translation.enabled = ^BOOL { return [weakSelf translationMarkerAvailable]; };
-
-    NSString *actionsFooter = @"Choose what the info-row icons do when tapped. Comments still opens the post when off; it just no longer jumps straight to the comments.\n\nPopup and Overlay control how % upvoted, timestamp and edited reveal their full details. Pick one style or neither.\n\nHold the score on one of your own comments for Reddit's author-only Comment Insights. Apollo shows Reddit-reported upvotes and ratio, and calculates downvotes only when the ratio is reliable. This uses the Reddit web session shared by Chat and Polls.";
-    if ([self translationMarkerAvailable]) {
-        actionsFooter = [actionsFooter stringByAppendingString:@"\n\nTranslation controls the 🌐 marker beside a post's stats. The Translate line under comment text remains controlled from Translation settings."];
-    } else {
-        actionsFooter = [actionsFooter stringByAppendingString:@"\n\nTranslation becomes available after enabling Tap to Translate or a Details toggle in Translation settings."];
-    }
+    translation.visible = ^BOOL {
+        return sShowTranslationTitleDetails && sEnableBulkTranslation && !sTapToTranslate;
+    };
 
     return @[
         [ApolloSettingsSection sectionWithTitle:@"Magnifier"
-                                         footer:@"Press and hold a post's info row to zoom its icons in a glass card, then slide and release to activate one."
+                                         footer:@"Slide and release on an icon to activate it."
                                            rows:@[ magnifier ]],
-        [ApolloSettingsSection sectionWithTitle:@"Tap Actions"
-                                         footer:actionsFooter
-                                           rows:@[ upvote, comments, popup, overlay, translation ]],
+        [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
+                                        footer: nil
+                                        rows:@[ upvote, comments, timestamp, translation ]],
     ];
 }
 
@@ -112,9 +103,36 @@
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setBool:sInfoRowPopupMode forKey:UDKeyInfoRowPopupMode];
     [defaults setBool:sInfoRowOverlayMode forKey:UDKeyInfoRowOverlayMode];
-    [self reloadRowWithID:@"infoRow.popup"];
-    [self reloadRowWithID:@"infoRow.overlay"];
-    ApolloLog(@"[InfoRowSettings] detail mode popup=%d overlay=%d", sInfoRowPopupMode, sInfoRowOverlayMode);
+    [self reloadRowWithID:@"infoRow.timestamp"];
+        NSString *mode = @"Off";
+        if (sInfoRowPopupMode) {
+            mode = @"Pop-up";
+        } else if (sInfoRowOverlayMode) {
+            mode = @"Overlay";
+        }
+    ApolloLog(@"[InfoRowSettings] Full Timestamp on Tap: %@", mode);
+}
+
+- (void)presentTimestampPicker {
+    __weak typeof(self) weakSelf = self;
+
+    NSInteger selectedIndex = 0;
+    if (sInfoRowOverlayMode) {
+        selectedIndex = 1;
+    } else if (sInfoRowPopupMode) {
+        selectedIndex = 2;
+    }
+
+    ApolloSettingsPresentPicker(self,
+                                [self cellForRowID:@"infoRow.timestamp"],
+                                @"Full Timestamp on Tap",
+                                @[@"Off", @"Overlay", @"Pop-up"],
+                                selectedIndex,
+                                ^(NSInteger pickedIndex) {
+        sInfoRowOverlayMode = (pickedIndex == 1);
+        sInfoRowPopupMode = (pickedIndex == 2);
+        [weakSelf persistInfoModesAndReloadRows];
+    });
 }
 
 @end
