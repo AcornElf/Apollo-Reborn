@@ -33,7 +33,7 @@
                                   onToggle:^(UISwitch *sender) {
         sIconRowMagnifier = sender.isOn;
         [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyIconRowMagnifier];
-        [weakSelf reloadRowWithID:@"infoRow.upvote"];
+        [self visibilityDidChange];
         ApolloLog(@"[InfoRowSettings] magnifier=%d", sender.isOn);
     }];
 
@@ -48,7 +48,7 @@
     }];
 
         upvote.visible = ^BOOL {
-        return sIconRowMagnifier;
+        return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIconRowMagnifier];
     };
 
     ApolloSettingsRow *comments =
@@ -86,7 +86,7 @@
     }];
     translation.enabled = ^BOOL { return [weakSelf translationMarkerAvailable]; };
     translation.visible = ^BOOL {
-        return sShowTranslationTitleDetails && sEnableBulkTranslation && !sTapToTranslate;
+        return [weakSelf translationMarkerAvailable];
     };
 
     return @[
