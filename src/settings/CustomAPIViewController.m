@@ -2775,7 +2775,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
     return [ApolloSettingsSection sectionWithTitle:nil
                                             footer:nil
                                               rows:@[ backendURL, registrationToken, barkSwitch, barkURL,
-                                                    testConnection, testBark, setupInstructions, installBark ]];
+                                                    testBark, testConnection, setupInstructions, installBark ]];
 }
 
 - (ApolloSettingsSection *)buildPrivacySection {
@@ -3327,14 +3327,26 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             initWithString:@""
             attributes:plainAttrs];
 
+        NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
+        boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
+            [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
+
         if (ApolloPushNotificationsSupported()) {
             if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery is optional. Enable Bark Delivery if you'd prefer to receive notifications through the free "
+                    initWithString:@"Bark Delivery"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" is optional. Enable Bark Delivery if you'd prefer to receive notifications through the free "
                     attributes:plainAttrs]];
             } else {
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery is optional. Once a valid backend is configured, you can enable it to receive notifications through the free "
+                    initWithString:@"Bark Delivery"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" is optional. Once a valid backend is configured, you can enable it to receive notifications through the free "
                     attributes:plainAttrs]];
             }
         } else {
@@ -3344,11 +3356,27 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 
             if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Enable Bark Delivery to receive notifications through the free "
+                    initWithString:@"Enable "
+                    attributes:plainAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"Bark Delivery"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" to receive notifications through the free "
                     attributes:plainAttrs]];
             } else {
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Once a valid backend is configured, you can enable Bark Delivery to receive notifications through the free "
+                    initWithString:@"Once a valid backend is configured, you can enable "
+                    attributes:plainAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"Bark Delivery"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" to receive notifications through the free "
                     attributes:plainAttrs]];
             }
         }
@@ -3364,10 +3392,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             initWithString:@".\n\n"
             attributes:plainAttrs]];
 
-        NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
-        boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
-            [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
-
         [text appendAttributedString:[[NSAttributedString alloc]
             initWithString:@"Note:"
             attributes:boldAttrs]];
@@ -3377,8 +3401,31 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             attributes:plainAttrs]];
 
         [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from the project's "
-            @"assets/Bark Sounds via Bark's Service tab → Alert Sound → View All Sounds → Upload Sound."
+            initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from "
+            attributes:plainAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Apollo-Reborn/assets/bark-sounds"
+            attributes:boldAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@" via Bark's "
+            attributes:plainAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Service"
+            attributes:boldAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@" tab → "
+            attributes:plainAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Alert Sound → View All Sounds → Upload Sound"
+            attributes:boldAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"."
             attributes:plainAttrs]];
     } else if ([sectionTitle isEqualToString:@"Privacy"]) {
         text = [[NSMutableAttributedString alloc]
