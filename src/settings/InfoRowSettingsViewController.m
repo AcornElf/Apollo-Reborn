@@ -19,10 +19,6 @@
     [self rebuildForm];
 }
 
-- (BOOL)translationMarkerAvailable {
-    return sTapToTranslate || sShowTranslationTitleDetails || sShowTranslationDetails;
-}
-
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak typeof(self) weakSelf = self;
 
@@ -77,25 +73,25 @@
         [ApolloSettingsRow switchRowWithID:@"infoRow.translation"
                                      title:@"Globe Toggles Translation"
                                       isOn:^BOOL {
-        return [weakSelf translationMarkerAvailable] && sInfoRowTapTranslation;
+        return sInfoRowTapTranslation;
     }
                                   onToggle:^(UISwitch *sender) {
         sInfoRowTapTranslation = sender.isOn;
         [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyInfoRowTapTranslation];
         ApolloLog(@"[InfoRowSettings] translation=%d", sender.isOn);
     }];
-    translation.enabled = ^BOOL { return [weakSelf translationMarkerAvailable]; };
+
     translation.visible = ^BOOL {
-        return [weakSelf translationMarkerAvailable];
+        return sEnableBulkTranslation;
     };
 
     return @[
         [ApolloSettingsSection sectionWithTitle:@"Magnifier"
                                          footer:@"Slide and release on an icon to activate it."
-                                           rows:@[ magnifier ]],
+                                           rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
                                         footer: nil
-                                        rows:@[ upvote, comments, timestamp, translation ]],
+                                        rows:@[ comments, timestamp, translation ]],
     ];
 }
 
