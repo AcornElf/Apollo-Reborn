@@ -2706,7 +2706,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
     return [ApolloSettingsSection sectionWithTitle:nil
                                             footer:nil
                                               rows:@[ backendURL, registrationToken, barkSwitch, barkURL,
-                                                    testConnection, testBark, setupInstructions, installBark ]];
+                                                    testBark, testConnection, setupInstructions, installBark ]];
 }
 
 - (ApolloSettingsSection *)buildPrivacySection {
@@ -3284,34 +3284,34 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             attributes:plainAttrs]];
     }
 
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@"Bark app"
-        attributes:@{
-            NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],
-            NSLinkAttributeName: [NSURL URLWithString:@"https://apps.apple.com/us/app/bark-custom-notifications/id1403753865"]
-        }]];
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from "
+            attributes:plainAttrs]];
 
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@".\n\n"
-        attributes:plainAttrs]];
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Apollo-Reborn/assets/bark-sounds"
+            attributes:boldAttrs]];
 
-    NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
-    boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
-        [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@" via Bark's "
+            attributes:plainAttrs]];
 
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@"Note:"
-        attributes:boldAttrs]];
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Service"
+            attributes:boldAttrs]];
 
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@" Notification content passes through the Bark relay unencrypted.\n\n"
-        attributes:plainAttrs]];
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@" tab → "
+            attributes:plainAttrs]];
 
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from the project's "
-        @"assets/Bark Sounds via Bark's Service tab → Alert Sound → View All Sounds → Upload Sound."
-        attributes:plainAttrs]];
-} else if ([sectionTitle isEqualToString:@"Privacy"]) {
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"Alert Sound → View All Sounds → Upload Sound"
+            attributes:boldAttrs]];
+
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"."
+            attributes:plainAttrs]];
+    } else if ([sectionTitle isEqualToString:@"Privacy"]) {
         text = [[NSMutableAttributedString alloc]
             initWithString:@"Sends one anonymous heartbeat so we can estimate active Apollo Reborn installs. No Reddit activity, account details, or feature usage is collected. More details can be found in our "
             attributes:plainAttrs];
