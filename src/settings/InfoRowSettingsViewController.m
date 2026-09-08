@@ -47,7 +47,7 @@
         ApolloLog(@"[InfoRowSettings] upvote=%d", sender.isOn);
     }];
 
-        upvote.visible = ^BOOL {
+    upvote.visible = ^BOOL {
         return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIconRowMagnifier];
     };
 
@@ -91,7 +91,7 @@
 
     return @[
         [ApolloSettingsSection sectionWithTitle:@"Magnifier"
-                                         footer:@"Slide and release on an icon to activate it."
+                                         footer:@"Hold, slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
                                         footer: ![self translationMarkerAvailable] ? @"Requires Bulk Translation to be enabled." : nil
