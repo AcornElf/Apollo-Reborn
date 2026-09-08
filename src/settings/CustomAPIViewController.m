@@ -1679,7 +1679,7 @@ typedef NS_ENUM(NSInteger, Tag) {
 
     ApolloSettingsRow *blockAnnouncements =
         [ApolloSettingsRow switchRowWithID:@"gen.blockAnnouncements"
-                                     title:@"Block Announcements"
+                                     title:@"Block Apollo Announcements"
                                       isOn:^BOOL { return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBlockAnnouncements]; }
                                   onToggle:^(UISwitch *sender) { [weakSelf blockAnnouncementsSwitchToggled:sender]; }];
 
