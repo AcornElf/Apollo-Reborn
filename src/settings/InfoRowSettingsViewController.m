@@ -81,7 +81,7 @@
         ApolloLog(@"[InfoRowSettings] translation=%d", sender.isOn);
     }];
 
-    translation.visible = ^BOOL {
+    translation.enabled = ^BOOL {
         return sEnableBulkTranslation;
     };
 
@@ -90,7 +90,7 @@
                                          footer:@"Slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
-                                        footer: nil
+                                        footer: !sEnableBulkTranslation ? @"Requires Bulk Translation to be enabled." : nil
                                         rows:@[ comments, timestamp, translation ]],
     ];
 }
