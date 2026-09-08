@@ -3298,10 +3298,117 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 // not position) so a buildForm reorder can never misfile a footer.
 - (NSAttributedString *)footerAttributedTextForSection:(NSInteger)section {
     NSString *sectionTitle = [self tableView:self.tableView titleForHeaderInSection:section];
+    // Find Notification Backend section without heading using its first row
+    ApolloSettingsSection *currentSection =
+        (section >= 0 && (NSUInteger)section < _sections.count) ? _sections[(NSUInteger)section] : nil;
+    BOOL isNotificationBackend =
+        [currentSection.rows.firstObject.rowID isEqualToString:@"notif.url"];
+    //
     NSDictionary *plainAttrs = @{NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote], NSForegroundColorAttributeName: [UIColor secondaryLabelColor]};
     NSMutableAttributedString *text;
 
-    if ([sectionTitle isEqualToString:@"Setup"]) {
+        if (isNotificationBackend) {
+            NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
+                initWithString:@""
+                attributes:plainAttrs];
+
+            NSString *backendURL = [[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL];
+            BOOL backendValid = [self isNotificationBackendURLValid:backendURL];
+            BOOL barkEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled];
+
+            if (ApolloPushNotificationsSupported()) {
+                if (backendValid) {
+                    if (barkEnabled) {
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"Notifications will be delivered through the free Bark app."
+                            attributes:plainAttrs]];
+                    } else {
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"Bark Delivery can optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+                            attributes:plainAttrs]];
+                    }
+                } else {
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@"A backend URL is required. Bark Delivery can then optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+                        attributes:plainAttrs]];
+                }
+            } else {
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
+                    attributes:plainAttrs]];
+
+                if (backendValid) {
+                    if (barkEnabled) {
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"Notifications will be delivered through the free Bark app."
+                            attributes:plainAttrs]];
+                    } else {
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"Bark Delivery can be enabled to receive notifications through the free Bark app."
+                            attributes:plainAttrs]];
+                    }
+                } else {
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
+                        attributes:plainAttrs]];
+                }
+            }
+
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Bark app"
+                attributes:@{
+                    NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],
+                    NSLinkAttributeName: [NSURL URLWithString:@"https://apps.apple.com/us/app/bark-custom-notifications/id1403753865"]
+                }]];
+
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@".\n\n"
+                attributes:plainAttrs]];
+
+            NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
+            boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
+                [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
+
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Note:"
+                attributes:boldAttrs]];
+
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@" Notification content passes through the Bark relay unencrypted.\n\n"
+                attributes:plainAttrs]];
+
+            if (barkEnabled) {
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from "
+                    attributes:plainAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"Apollo-Reborn/assets/bark-sounds"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" via Bark's "
+                    attributes:plainAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"Service"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@" tab → "
+                    attributes:plainAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"Alert Sound → View All Sounds → Upload Sound"
+                    attributes:boldAttrs]];
+
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:@"."
+                    attributes:plainAttrs]];
+            }
+
+            return text;
+    } else if ([sectionTitle isEqualToString:@"Setup"]) {
         // Onboarding nudge (replaces the old Get Started card): with no Reddit
         // key, sign-in can't happen, and the key field is now one level down
         // under Accounts & API Keys — so point new users there. Collapses to
