@@ -19,6 +19,10 @@
     [self rebuildForm];
 }
 
+- (BOOL)translationMarkerAvailable {
+    return sEnableBulkTranslation && sTapToTranslate && sTranslatePostTitles;
+}
+
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak typeof(self) weakSelf = self;
 
@@ -81,8 +85,8 @@
         ApolloLog(@"[InfoRowSettings] translation=%d", sender.isOn);
     }];
 
-    translation.visible = ^BOOL {
-        return sEnableBulkTranslation;
+    translation.enabled = ^BOOL {
+        return [weakSelf translationMarkerAvailable];
     };
 
     return @[
@@ -90,7 +94,7 @@
                                          footer:@"Slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
-                                        footer: nil
+                                        footer: ![self translationMarkerAvailable] ? @"Requires Bulk Translation to be enabled." : nil
                                         rows:@[ comments, timestamp, translation ]],
     ];
 }
