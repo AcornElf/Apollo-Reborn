@@ -3331,103 +3331,43 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
             [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
 
-        if (ApolloPushNotificationsSupported()) {
-            if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery"
-                    attributes:boldAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@" is optional. Enable Bark Delivery if you'd prefer to receive notifications through the free "
-                    attributes:plainAttrs]];
-            } else {
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery"
-                    attributes:boldAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@" is optional. Once a valid backend is configured, you can enable it to receive notifications through the free "
-                    attributes:plainAttrs]];
-            }
+if (ApolloPushNotificationsSupported()) {
+    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Notifications will be delivered through the free Bark app."
+                attributes:plainAttrs]];
         } else {
             [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
+                initWithString:@"Bark Delivery can optionally be enabled to receive notifications through the free Bark app instead of through APNs."
                 attributes:plainAttrs]];
-
-            if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Enable "
-                    attributes:plainAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery"
-                    attributes:boldAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@" to receive notifications through the free "
-                    attributes:plainAttrs]];
-            } else {
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Once a valid backend is configured, you can enable "
-                    attributes:plainAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Bark Delivery"
-                    attributes:boldAttrs]];
-
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@" to receive notifications through the free "
-                    attributes:plainAttrs]];
-            }
         }
-
+    } else {
         [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"Bark app"
-            attributes:@{
-                NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],
-                NSLinkAttributeName: [NSURL URLWithString:@"https://apps.apple.com/us/app/bark-custom-notifications/id1403753865"]
-            }]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@".\n\n"
+            initWithString:@"A backend URL is required. Bark Delivery can then optionally be enabled to receive notifications through the free Bark app instead of through APNs."
             attributes:plainAttrs]];
+    }
+} else {
+    [text appendAttributedString:[[NSAttributedString alloc]
+        initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
+        attributes:plainAttrs]];
 
+    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Notifications will be delivered through the free Bark app."
+                attributes:plainAttrs]];
+        } else {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Bark Delivery can be enabled to receive notifications through the free Bark app."
+                attributes:plainAttrs]];
+        }
+    } else {
         [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"Note:"
-            attributes:boldAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@" Notification content passes through the Bark relay unencrypted.\n\n"
+            initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
             attributes:plainAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"To use one of Apollo's notification sounds, import the matching .caf from "
-            attributes:plainAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"Apollo-Reborn/assets/bark-sounds"
-            attributes:boldAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@" via Bark's "
-            attributes:plainAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"Service"
-            attributes:boldAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@" tab → "
-            attributes:plainAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"Alert Sound → View All Sounds → Upload Sound"
-            attributes:boldAttrs]];
-
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"."
-            attributes:plainAttrs]];
-    } else if ([sectionTitle isEqualToString:@"Privacy"]) {
+    }
+} else if ([sectionTitle isEqualToString:@"Privacy"]) {
         text = [[NSMutableAttributedString alloc]
             initWithString:@"Sends one anonymous heartbeat so we can estimate active Apollo Reborn installs. No Reddit activity, account details, or feature usage is collected. More details can be found in our "
             attributes:plainAttrs];
