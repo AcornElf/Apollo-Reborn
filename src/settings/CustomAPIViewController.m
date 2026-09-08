@@ -10,6 +10,7 @@
 #import "InlineMediaSettingsViewController.h"
 #import "settings/ApolloPollSettingsViewController.h"
 #import "settings/ApolloSettingsRouter.h"
+#import "settings/ApolloNotificationBackendViewController.h"
 #import "InfoRowSettingsViewController.h"
 #import "ApolloWebSessionLoginViewController.h"
 #import "ApolloDirectChatWeb.h"
