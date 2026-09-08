@@ -3378,6 +3378,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             attributes:plainAttrs];
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     } else if ([sectionTitle isEqualToString:@"Notification Backend"]) {
     text = [[NSMutableAttributedString alloc]
         initWithString:@""
@@ -3469,6 +3470,54 @@ if (ApolloPushNotificationsSupported()) {
     }
 =======
 >>>>>>> 0c77b16 (Remove duplicate notification backend footer)
+} else if ([sectionTitle isEqualToString:@"Privacy"]) {
+>>>>>>> ad443d1 (Refine notification backend footer messaging)
+=======
+        } else if ([self isKindOfClass:[ApolloNotificationBackendViewController class]]) {
+        text = [[NSMutableAttributedString alloc]
+            initWithString:@""
+            attributes:plainAttrs];
+
+        NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
+        boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
+            [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
+
+if (ApolloPushNotificationsSupported()) {
+    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Notifications will be delivered through the free Bark app."
+                attributes:plainAttrs]];
+        } else {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Bark Delivery can optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+                attributes:plainAttrs]];
+        }
+    } else {
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"A backend URL is required. Bark Delivery can then optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+            attributes:plainAttrs]];
+    }
+} else {
+    [text appendAttributedString:[[NSAttributedString alloc]
+        initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
+        attributes:plainAttrs]];
+
+    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Notifications will be delivered through the free Bark app."
+                attributes:plainAttrs]];
+        } else {
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"Bark Delivery can be enabled to receive notifications through the free Bark app."
+                attributes:plainAttrs]];
+        }
+    } else {
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
+            attributes:plainAttrs]];
+    }
 } else if ([sectionTitle isEqualToString:@"Privacy"]) {
 >>>>>>> ad443d1 (Refine notification backend footer messaging)
         text = [[NSMutableAttributedString alloc]
