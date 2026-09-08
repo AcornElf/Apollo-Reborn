@@ -20,6 +20,7 @@
 #import "settings/ApolloSubredditSectionsViewController.h"
 #import "settings/ApolloProfileLayoutViewController.h"
 #import "settings/TranslationSettingsViewController.h"
+#import "settings/ApolloNotificationBackendViewController.h"
 
 typedef UIViewController *(^ApolloSettingsRouteBuilder)(void);
 

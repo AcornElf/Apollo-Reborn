@@ -28,6 +28,98 @@ static char kApolloPrimaryTextCellKey;
     return ApolloInheritedSettingsThemeSourceTableView(self);
 }
 
+// Detail-carrying switch cell (subtitle style). Title-only switches use the
+// form layer's switch rows; these stay custom because the shared switch cell
+// has no subtitle line.
+- (UITableViewCell *)switchCellWithIdentifier:(NSString *)identifier
+                                        label:(NSString *)label
+                                       detail:(NSString *)detail
+                                           on:(BOOL)on
+                                       action:(SEL)action {
+    return [self switchCellWithIdentifier:identifier label:label detail:detail on:on enabled:YES action:action];
+}
+
+// A title + optional multi-line subtitle + trailing switch. Hand-laid with Auto
+// Layout (not UITableViewCellStyleSubtitle nor a content-configuration + switch
+// accessory): both of those measure the labels at the full cell width — the
+// switch accessory isn't reserved during self-sizing — so a wrapping subtitle
+// under-measures and its last line clips against the cell's bottom edge. Here
+// the switch is constrained inline, so the labels wrap at the true available
+// width and the cell height is exact.
+- (UITableViewCell *)switchCellWithIdentifier:(NSString *)identifier
+                                        label:(NSString *)label
+                                       detail:(NSString *)detail
+                                           on:(BOOL)on
+                                      enabled:(BOOL)enabled
+                                       action:(SEL)action {
+    static const NSInteger kTitleTag = 7001, kDetailTag = 7002, kSwitchTag = 7003;
+    UITableViewCell *cell = [self.tableView dequeueReusableCellWithIdentifier:identifier];
+    UILabel *titleLabel; UILabel *detailLabel; UISwitch *toggleSwitch;
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+        titleLabel = [[UILabel alloc] init];
+        titleLabel.tag = kTitleTag;
+        titleLabel.numberOfLines = 0;
+        titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        titleLabel.adjustsFontForContentSizeCategory = YES;
+
+        detailLabel = [[UILabel alloc] init];
+        detailLabel.tag = kDetailTag;
+        detailLabel.numberOfLines = 0;
+        detailLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+        detailLabel.adjustsFontForContentSizeCategory = YES;
+
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[ titleLabel, detailLabel ]];
+        stack.axis = UILayoutConstraintAxisVertical;
+        stack.spacing = 3.0;
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+
+        toggleSwitch = [[UISwitch alloc] init];
+        toggleSwitch.tag = kSwitchTag;
+        [toggleSwitch addTarget:self action:action forControlEvents:UIControlEventValueChanged];
+        toggleSwitch.translatesAutoresizingMaskIntoConstraints = NO;
+        [toggleSwitch setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [toggleSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+        [cell.contentView addSubview:stack];
+        [cell.contentView addSubview:toggleSwitch];
+        UILayoutGuide *m = cell.contentView.layoutMarginsGuide;
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.leadingAnchor constraintEqualToAnchor:m.leadingAnchor],
+            [stack.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:11.0],
+            [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-11.0],
+            [toggleSwitch.leadingAnchor constraintEqualToAnchor:stack.trailingAnchor constant:12.0],
+            [toggleSwitch.trailingAnchor constraintEqualToAnchor:m.trailingAnchor],
+            [toggleSwitch.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+        ]];
+    } else {
+        titleLabel = [cell.contentView viewWithTag:kTitleTag];
+        detailLabel = [cell.contentView viewWithTag:kDetailTag];
+        toggleSwitch = (UISwitch *)[cell.contentView viewWithTag:kSwitchTag];
+    }
+
+    titleLabel.text = label;
+    titleLabel.textColor = enabled ? [UIColor labelColor] : [UIColor tertiaryLabelColor];
+    detailLabel.text = detail;
+    detailLabel.textColor = enabled ? [UIColor secondaryLabelColor] : [UIColor tertiaryLabelColor];
+    detailLabel.hidden = (detail.length == 0);
+    toggleSwitch.on = on;
+    toggleSwitch.enabled = enabled;
+    toggleSwitch.onTintColor = [self apollo_themeAccentColor];
+    return cell;
+}
+
+- (void)showAlertWithTitle:(NSString *)title message:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+        message:message
+        preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil];
+    [alert addAction:okAction];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (UIColor *)apollo_themeCellBackgroundColor {
     UITableView *source = [self apollo_sourceThemeTableView];
     if (!ApolloThemeSourceTableIsStale(source)) {
