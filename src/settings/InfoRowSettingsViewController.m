@@ -19,6 +19,10 @@
     [self rebuildForm];
 }
 
+- (BOOL)translationMarkerAvailable {
+    return sEnableBulkTranslation && sTapToTranslate && sTranslatePostTitles;
+}
+
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak typeof(self) weakSelf = self;
 
@@ -82,7 +86,7 @@
     }];
 
     translation.enabled = ^BOOL {
-        return sEnableBulkTranslation;
+        return [weakSelf translationMarkerAvailable];
     };
 
     return @[
@@ -90,7 +94,7 @@
                                          footer:@"Slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
-                                        footer: !sEnableBulkTranslation ? @"Requires Bulk Translation to be enabled." : nil
+                                        footer: ![self translationMarkerAvailable] ? @"Requires Bulk Translation to be enabled." : nil
                                         rows:@[ comments, timestamp, translation ]],
     ];
 }
