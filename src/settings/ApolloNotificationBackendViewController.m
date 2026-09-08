@@ -37,6 +37,7 @@
             for (UIView *subview in cell.contentView.subviews) {
                 if ([subview isKindOfClass:[UITextField class]]) {
                     UITextField *tf = (UITextField *)subview;
+                    tf.delegate = weakSelf;
                     tf.keyboardType = UIKeyboardTypeURL;
                     tf.textColor = [weakSelf isNotificationBackendURLValid:currentURL] ? [UIColor labelColor] : [UIColor systemRedColor];
                     break;
@@ -111,13 +112,21 @@
         [ApolloSettingsRow customRowWithID:@"notif.token"
                                       cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
             NSString *currentToken = [[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendRegistrationToken] ?: @"";
-            return [weakSelf stackedTextFieldCellWithIdentifier:@"Cell_NotifBackend_Token"
-                                                          label:@"Registration Token"
-                                                    placeholder:@"(optional)"
-                                                           text:currentToken
-                                                            tag:TagNotificationBackendRegistrationToken
-                                                         detail:@"Required only if the backend has REGISTRATION_SECRET set."]
-                ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+            UITableViewCell *cell = [weakSelf stackedTextFieldCellWithIdentifier:@"Cell_NotifBackend_Token"
+                                                               label:@"Registration Token"
+                                                         placeholder:@"(optional)"
+                                                                text:currentToken
+                                                                 tag:TagNotificationBackendRegistrationToken
+                                                              detail:@"Required only if the backend has REGISTRATION_SECRET set."];
+
+            for (UIView *subview in cell.contentView.subviews) {
+                if ([subview isKindOfClass:[UITextField class]]) {
+                    ((UITextField *)subview).delegate = weakSelf;
+                    break;
+                }
+            }
+
+            return cell ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         }
                                   onSelect:nil];
 
@@ -155,6 +164,7 @@
             for (UIView *subview in cell.contentView.subviews) {
                 if ([subview isKindOfClass:[UITextField class]]) {
                     UITextField *tf = (UITextField *)subview;
+                    tf.delegate = weakSelf;
                     tf.keyboardType = UIKeyboardTypeURL;
                     tf.textColor = [weakSelf isNotificationBackendURLValid:currentURL] ? [UIColor labelColor] : [UIColor systemRedColor];
                     break;

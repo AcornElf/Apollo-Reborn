@@ -217,7 +217,6 @@ static char kApolloPrimaryTextCellKey;
 
         UITextField *textField = [[UITextField alloc] init];
         textField.tag = tag;
-        textField.delegate = self;
         textField.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCallout];
         textField.adjustsFontForContentSizeCategory = YES;
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;

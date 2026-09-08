@@ -1,4 +1,4 @@
 #import "ApolloSettingsForm.h"
 
-@interface ApolloNotificationBackendViewController : ApolloSettingsFormViewController // Advanced → Notification Backend
+@interface ApolloNotificationBackendViewController : ApolloSettingsFormViewController <UITextFieldDelegate> // Advanced → Notification Backend
 @end
