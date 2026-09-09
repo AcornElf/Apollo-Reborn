@@ -844,6 +844,8 @@ typedef NS_ENUM(NSInteger, Tag) {
     // Refresh the Profile Layout summary after returning from that screen
     // (Density/Avatar/band switches may have just changed).
     [self reloadRowWithID:@"feat.profileLayout"];
+    // Refresh the Notification Backend summary after returning from that screen.
+    [self reloadRowWithID:@"adv.backend"];
     // The Setup section footer (onboarding nudge) collapses once a Reddit key
     // exists, which may have just been entered on the pushed API Keys screen.
     // Section 0 is Setup on the hub; reloading it re-evaluates the footer.
@@ -1080,9 +1082,25 @@ typedef NS_ENUM(NSInteger, Tag) {
                                title:@"Notification Backend"
                             subtitle:^NSString * {
             NSString *url = [[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL] ?: @"";
-            return url.length > 0 ? url : @"Self-hosted apollo-backend · off";
+            BOOL backendValid = [self isNotificationBackendURLValid:url];
+            BOOL barkEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled];
+
+            if (!backendValid) {
+                return @"Not configured";
+            }
+
+            if (barkEnabled) {
+                return [NSString stringWithFormat:@"%@ · via Bark", url];
+            }
+
+            if (ApolloPushNotificationsSupported()) {
+                return [NSString stringWithFormat:@"%@ · via APNs", url];
+            }
+
+            return @"Not enabled";
         }
-                                push:^UIViewController * {
+
+        push:^UIViewController * {
             return [[ApolloNotificationBackendViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
 
@@ -1116,9 +1134,9 @@ typedef NS_ENUM(NSInteger, Tag) {
         cell.detailTextLabel.textColor = (forceMiss || noRecover) ? [UIColor systemRedColor] : [UIColor secondaryLabelColor];
     };
 
-    backend.iconSystemName    = @"bell.badge.fill";              backend.iconTileColor    = [UIColor systemRedColor];
-    flex.iconSystemName       = @"ant.fill";                     flex.iconTileColor       = [UIColor systemGrayColor];
-    exportLogs.iconSystemName = @"square.and.arrow.up.on.square.fill"; exportLogs.iconTileColor = [UIColor systemGrayColor];
+    backend.iconSystemName    = @"bell.badge.fill";                     backend.iconTileColor    = [UIColor systemRedColor];
+    flex.iconSystemName       = @"ant.fill";                            flex.iconTileColor       = [UIColor systemGrayColor];
+    exportLogs.iconSystemName = @"square.and.arrow.up.on.square.fill";  exportLogs.iconTileColor = [UIColor systemGrayColor];
     // TEMPORARY dev-only: presents the What's New sheet on demand, bypassing
     // gating (never touches UDKeyLastSeenWhatsNewVersion, so it's safe to tap
     // repeatedly). Remove this row and ApolloWhatsNewPresentForDebug() once the
@@ -2708,8 +2726,8 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         [ApolloSettingsRow customRowWithID:@"notif.barkSwitch"
                                       cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
             return [weakSelf switchCellWithIdentifier:@"Cell_NotifBackend_BarkSwitch"
-                                                label:@"Bark Delivery"
-                                               detail:@"Deliver notifications through the free Bark app instead of native push. Works without a push entitlement."
+                                                label:@"Deliver via Bark"
+                                               detail:@"Doesn't require a paid Apple Developer account."
                                                    on:[[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]
                                                action:@selector(barkNotificationsSwitchToggled:)]
                 ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
@@ -3283,6 +3301,11 @@ BOOL isNotificationBackend =
     notificationBackendIndexPath && notificationBackendIndexPath.section == section;
     //
     NSDictionary *plainAttrs = @{NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote], NSForegroundColorAttributeName: [UIColor secondaryLabelColor]};
+
+    NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
+    boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
+        [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
+
     NSMutableAttributedString *text;
 
         if (isNotificationBackend) {
@@ -3294,58 +3317,91 @@ BOOL isNotificationBackend =
             BOOL backendValid = [self isNotificationBackendURLValid:backendURL];
             BOOL barkEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled];
 
+            NSAttributedString *barkAppLink = [[NSAttributedString alloc]
+                initWithString:@"Bark app"
+                attributes:@{
+                    NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],
+                    NSLinkAttributeName: [NSURL URLWithString:@"https://apps.apple.com/us/app/bark-custom-notifications/id1403753865"]
+                }];
+
+            NSAttributedString *deliverViaBark = [[NSAttributedString alloc]
+                initWithString:@"Deliver via Bark"
+                attributes:boldAttrs];
+
             if (ApolloPushNotificationsSupported()) {
                 if (backendValid) {
                     if (barkEnabled) {
                         [text appendAttributedString:[[NSAttributedString alloc]
-                            initWithString:@"Notifications will be delivered through the free Bark app."
+                            initWithString:@"Notifications will be delivered through the free "
+                            attributes:plainAttrs]];
+                        [text appendAttributedString:barkAppLink];
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"."
                             attributes:plainAttrs]];
                     } else {
+                        [text appendAttributedString:deliverViaBark];
                         [text appendAttributedString:[[NSAttributedString alloc]
-                            initWithString:@"Bark Delivery can optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+                            initWithString:@" can optionally be enabled to receive notifications through the free "
+                            attributes:plainAttrs]];
+                        [text appendAttributedString:barkAppLink];
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@" instead of APNs."
                             attributes:plainAttrs]];
                     }
                 } else {
                     [text appendAttributedString:[[NSAttributedString alloc]
-                        initWithString:@"A backend URL is required. Bark Delivery can then optionally be enabled to receive notifications through the free Bark app instead of through APNs."
+                        initWithString:@"Enter a backend URL, then optionally enable "
+                        attributes:plainAttrs]];
+                    [text appendAttributedString:deliverViaBark];
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@" to receive notifications through the free "
+                        attributes:plainAttrs]];
+                    [text appendAttributedString:barkAppLink];
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@" instead of APNs."
                         attributes:plainAttrs]];
                 }
             } else {
-                [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
-                    attributes:plainAttrs]];
-
                 if (backendValid) {
                     if (barkEnabled) {
                         [text appendAttributedString:[[NSAttributedString alloc]
-                            initWithString:@"Notifications will be delivered through the free Bark app."
+                            initWithString:@"Notifications will be delivered through the free "
+                            attributes:plainAttrs]];
+                        [text appendAttributedString:barkAppLink];
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"."
                             attributes:plainAttrs]];
                     } else {
                         [text appendAttributedString:[[NSAttributedString alloc]
-                            initWithString:@"Bark Delivery can be enabled to receive notifications through the free Bark app."
+                            initWithString:@"Enable "
+                            attributes:plainAttrs]];
+                        [text appendAttributedString:deliverViaBark];
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@" to receive notifications through the free "
+                            attributes:plainAttrs]];
+                        [text appendAttributedString:barkAppLink];
+                        [text appendAttributedString:[[NSAttributedString alloc]
+                            initWithString:@"."
                             attributes:plainAttrs]];
                     }
                 } else {
                     [text appendAttributedString:[[NSAttributedString alloc]
-                        initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
+                        initWithString:@"Enter a backend URL, then enable "
+                        attributes:plainAttrs]];
+                    [text appendAttributedString:deliverViaBark];
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@" to receive notifications through the free "
+                        attributes:plainAttrs]];
+                    [text appendAttributedString:barkAppLink];
+                    [text appendAttributedString:[[NSAttributedString alloc]
+                        initWithString:@"."
                         attributes:plainAttrs]];
                 }
             }
 
             [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"Bark app"
-                attributes:@{
-                    NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],
-                    NSLinkAttributeName: [NSURL URLWithString:@"https://apps.apple.com/us/app/bark-custom-notifications/id1403753865"]
-                }]];
-
-            [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@".\n\n"
+                initWithString:@"\n\n"
                 attributes:plainAttrs]];
-
-            NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
-            boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
-                [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
 
             [text appendAttributedString:[[NSAttributedString alloc]
                 initWithString:@"Note:"
@@ -3944,9 +4000,12 @@ BOOL isNotificationBackend =
     [self visibilityDidChange];
     
     if (self.tableView) {
-        NSIndexSet *sections = [NSIndexSet indexSetWithIndex:self.notificationBackendSection]; // Use your section index
-        [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationAutomatic];
-    }
+        NSIndexPath *notificationBackendIndexPath = [self indexPathForRowID:@"notif.url"];
+        if (notificationBackendIndexPath) {
+            NSIndexSet *sections = [NSIndexSet indexSetWithIndex:notificationBackendIndexPath.section];
+            [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationAutomatic];
+        }
+}
 
     if (sender.isOn) {
         // Flip the backend device row to transport=bark right away. With no
