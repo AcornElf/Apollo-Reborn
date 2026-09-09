@@ -3889,6 +3889,11 @@ BOOL isNotificationBackend =
 - (void)barkNotificationsSwitchToggled:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyBarkNotificationsEnabled];
     [self visibilityDidChange];
+    
+    if (self.tableView) {
+        NSIndexSet *sections = [NSIndexSet indexSetWithIndex:self.notificationBackendSection]; // Use your section index
+        [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationAutomatic];
+    }
 
     if (sender.isOn) {
         // Flip the backend device row to transport=bark right away. With no
