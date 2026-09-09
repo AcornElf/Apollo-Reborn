@@ -997,7 +997,7 @@ typedef NS_ENUM(NSInteger, Tag) {
             return [[ApolloMediaSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
     ApolloSettingsRow *subreddits =
-        [self hubDisclosureRowWithID:@"feat.subreddits" title:@"Subreddits" subtitle:nil
+        [self hubDisclosureRowWithID:@"feat.subredditlist" title:@"Subreddit List" subtitle:nil
                                 push:^UIViewController * {
             return [[ApolloSubredditsSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
@@ -2293,8 +2293,8 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         }];
 
     return [ApolloSettingsSection sectionWithTitle:nil
-                                            footer:@"Feed Shortcuts customizes the Home, Popular, All and Moderator Posts rows — their icons, layout, visibility and descriptions. Subreddit Sections arranges the rest of the subreddit list — section order, followed users, multireddit descriptions and the list style toggles live there."
-                                              rows:@[ feedShortcuts, subredditSections ]];
+                                         footer:@"Change the appearance of the Home, Popular, All and Moderator Posts shortcuts.\n\nChoose which sections appear above your alphabetical subreddit list."
+                                           rows:@[ feedShortcuts, subredditSections ]];
 }
 
 - (ApolloSettingsSection *)buildFeedShortcutsVisibilitySection {
@@ -4375,7 +4375,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 @end
 
 @implementation ApolloSubredditsSettingsViewController
-- (NSString *)apollo_screenTitle { return @"Subreddits"; }
+- (NSString *)apollo_screenTitle { return @"Subreddit List"; }
 - (void)viewDidLoad {
     [super viewDidLoad];
     // The quick account switcher leaves this controller on screen, so it does
