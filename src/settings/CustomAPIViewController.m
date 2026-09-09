@@ -1017,7 +1017,6 @@ typedef NS_ENUM(NSInteger, Tag) {
 }
 
 - (ApolloSettingsSection *)buildFeaturesSection {
-    __weak typeof(self) weakSelf = self;
 
     ApolloSettingsRow *posts =
         [self hubDisclosureRowWithID:@"feat.posts" title:@"Posts & Feeds" subtitle:nil
@@ -2332,7 +2331,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 
     return [ApolloSettingsSection sectionWithTitle:nil
                                             footer:@"Feed Shortcuts customizes the Home, Popular, All and Moderator Posts rows — their icons, layout, visibility and descriptions. Subreddit Sections arranges the rest of the subreddit list — section order, followed users, multireddit descriptions and the list style toggles live there."
-                                              rows:@[ feedShortcuts, subredditSections, subredditLayout ]];
+                                              rows:@[ feedShortcuts, subredditSections ]];
 }
 
 - (ApolloSettingsSection *)buildFeedShortcutsVisibilitySection {
