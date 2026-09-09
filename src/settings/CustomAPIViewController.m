@@ -1002,8 +1002,8 @@ typedef NS_ENUM(NSInteger, Tag) {
         }];
     ApolloSettingsRow *layout =
         [self hubDisclosureRowWithID:@"feat.layout"
-                               title:@"Layout"
-                            subtitle:^NSString * { return @"Profiles and subreddits"; }
+                               title:@"Profiles & Subreddits Layout"
+                            subtitle:nil
                                 push:^UIViewController * {
             return [[ApolloLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];

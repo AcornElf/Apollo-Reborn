@@ -11,6 +11,13 @@
     self.title = @"Layout";
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+
+    [self reloadRowWithID:@"layout.profile"];
+    [self reloadRowWithID:@"layout.subreddit"];
+}
+
 - (NSString *)profileLayoutSummaryText {
     if (!sShowDetailedProfiles) {
         return @"Native";
