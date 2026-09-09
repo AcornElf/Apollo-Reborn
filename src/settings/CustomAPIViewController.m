@@ -28,7 +28,7 @@
 #import "ApolloLinkPreviewShapeMemory.h"
 #import "settings/ApolloDeletedCommentsSettingsViewController.h"
 #import "settings/ApolloLinkPreviewSettingsViewController.h"
-#import "settings/ApolloProfileLayoutViewController.h"
+#import "settings/ApolloLayoutViewController.h"
 #import "ApolloSubredditCustomBannerCache.h"
 #import "ApolloSubredditCustomIconCache.h"
 #import "ApolloSubredditInfoCache.h"
@@ -53,7 +53,6 @@
 #import "crash/ApolloCrashReportsViewController.h"
 #import "settings/ApolloOpenInAppViewController.h"
 #import "settings/SavedCategoriesViewController.h"
-#import "settings/ApolloSubredditLayoutViewController.h"
 #import "settings/ApolloSubredditSectionsViewController.h"
 #import "ApolloFollowingSection.h"
 #import "settings/TranslationSettingsViewController.h"
@@ -842,9 +841,8 @@ typedef NS_ENUM(NSInteger, Tag) {
     // returning to Interface or after preferences are restored elsewhere.
     [self reloadRowWithID:@"interface.hideBarsOnScroll"];
     [self reloadRowWithID:@"interface.tabBarScrollBehavior"];
-    // Refresh the Profile Layout summary after returning from that screen
-    // (Density/Avatar/band switches may have just changed).
-    [self reloadRowWithID:@"feat.profileLayout"];
+    // Refresh the Layout summaries after returning from that screen.
+    [self reloadRowWithID:@"feat.layout"];
     // The Setup section footer (onboarding nudge) collapses once a Reddit key
     // exists, which may have just been entered on the pushed API Keys screen.
     // Section 0 is Setup on the hub; reloading it re-evaluates the footer.
@@ -1041,12 +1039,12 @@ typedef NS_ENUM(NSInteger, Tag) {
                                 push:^UIViewController * {
             return [[ApolloSubredditsSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
-    ApolloSettingsRow *profileLayout =
-        [self hubDisclosureRowWithID:@"feat.profileLayout"
-                               title:@"Profile Layout"
-                            subtitle:^NSString * { return [weakSelf profileLayoutSummaryText]; }
+    ApolloSettingsRow *layout =
+        [self hubDisclosureRowWithID:@"feat.layout"
+                               title:@"Layout"
+                            subtitle:^NSString * { return @"Profiles and subreddits"; }
                                 push:^UIViewController * {
-            return [[ApolloProfileLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+            return [[ApolloLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
     ApolloSettingsRow *interface_ =
         [self hubDisclosureRowWithID:@"feat.interface" title:@"Interface" subtitle:nil
@@ -1061,15 +1059,15 @@ typedef NS_ENUM(NSInteger, Tag) {
     comments.iconSystemName     = @"text.bubble.fill";            comments.iconTileColor     = [UIColor systemGreenColor];
     media.iconSystemName        = @"play.rectangle.fill";         media.iconTileColor        = [UIColor systemPinkColor];
     subreddits.iconSystemName   = @"person.3.fill";               subreddits.iconTileColor   = [UIColor systemRedColor];
-    profileLayout.iconSystemName = @"person.crop.circle.fill";   profileLayout.iconTileColor = [UIColor systemTealColor];
+    layout.iconSystemName = @"photo.fill.on.rectangle.fill";      layout.iconTileColor       = [UIColor systemTealColor];
     interface_.iconSystemName   = @"slider.horizontal.3";         interface_.iconTileColor   = [UIColor systemPurpleColor];
     linkPreviews.iconSystemName = @"link";                        linkPreviews.iconTileColor = [UIColor systemBlueColor];
     polls.iconSystemName        = @"chart.bar.fill";              polls.iconTileColor        = [UIColor systemYellowColor];
     apolloAI.iconSystemName     = @"sparkles";                    apolloAI.iconTileColor     = [UIColor systemIndigoColor];
 
     return [ApolloSettingsSection sectionWithTitle:@"Features"
-                                            footer:@"Fine-tune posts, comments, media, subreddits, profile layout and the interface."
-                                              rows:@[ posts, comments, media, subreddits, profileLayout, interface_,
+                                            footer:nil
+                                              rows:@[ posts, comments, media, subreddits, layout, interface_,
                                                       linkPreviews, polls, apolloAI ]];
 }
 
@@ -2304,26 +2302,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
                                               rows:@[ proxyImgur, albumFallback ]];
 }
 
-- (NSString *)profileLayoutSummaryText {
-    if (!sShowDetailedProfiles) return @"Native (Apollo)";
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    [parts addObject:sProfileHeaderImmersive ? @"Immersive" : @"Compact"];
-    switch (sProfileAvatarStyle) {
-        case 1:  [parts addObject:@"Circle"]; break;
-        case 2:  [parts addObject:@"Square"]; break;
-        default: [parts addObject:@"Full"]; break;
-    }
-    NSInteger hiddenCount = (!sProfileShowBanner ? 1 : 0)
-        + (!sProfileShowStatCards ? 1 : 0)
-        + (!sProfileShowSocialLinks ? 1 : 0)
-        + (!sBadgeBookEnabled ? 1 : 0)
-        + (!sProfileShowActions ? 1 : 0);
-    if (hiddenCount > 0) {
-        [parts addObject:[NSString stringWithFormat:@"%ld hidden", (long)hiddenCount]];
-    }
-    return [parts componentsJoinedByString:@" · "];
-}
-
 // Subreddits group screen (ApolloSubredditsSettingsViewController), two
 // sections: the list/browsing toggles and the custom Sources.
 - (ApolloSettingsSection *)buildSubredditsMainSection {
@@ -2341,19 +2319,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             return ApolloSettingsRouteInstantiate(@"feed-shortcuts");
         }];
 
-    // Pushes the dedicated Subreddit Layout screen — the single customize
-    // screen for everything subreddit-page-related: Density (New, Classic, or
-    // Apollo's native header), the Apollo Reborn header show switches, and
-    // Community Highlights (also a subreddit-page feature, not a
-    // subreddit-list one).
-    ApolloSettingsRow *subredditLayout =
-        [self hubDisclosureRowWithID:@"sub.layout"
-                                title:@"Subreddit Layout"
-                             subtitle:^NSString * { return [weakSelf subredditLayoutSummaryText]; }
-                                 push:^UIViewController * {
-            return [[ApolloSubredditLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-        }];
-
     // Pushes the dedicated Subreddit Sections screen: the FOLLOWING section
     // for followed users, drag-to-reorder for the special sections, and a
     // live preview of the list layout (see ApolloSubredditSectionsViewController).
@@ -2366,7 +2331,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         }];
 
     return [ApolloSettingsSection sectionWithTitle:nil
-                                            footer:@"Feed Shortcuts customizes the Home, Popular, All and Moderator Posts rows — their icons, layout, visibility and descriptions. Subreddit Sections arranges the rest of the subreddit list — section order, followed users, multireddit descriptions and the list style toggles live there. Subreddit Layout customizes subreddit pages."
+                                            footer:@"Feed Shortcuts customizes the Home, Popular, All and Moderator Posts rows — their icons, layout, visibility and descriptions. Subreddit Sections arranges the rest of the subreddit list — section order, followed users, multireddit descriptions and the list style toggles live there."
                                               rows:@[ feedShortcuts, subredditSections, subredditLayout ]];
 }
 
@@ -2540,20 +2505,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
     return [ApolloSettingsSection sectionWithTitle:@"Favorites"
                                             footer:@"Per-Account Favorites saves a separate list and sorting preference for each account. First enable copies the current list to existing accounts; new accounts start empty. Turning it off restores the shared list.\nAlphabetical sorting keeps existing and new favorites in order. Turn it off to rearrange them manually while editing the subreddit list."
                                               rows:@[ perAccountFavorites, sortFavoritesAlphabetically ]];
-}
-
-- (NSString *)subredditLayoutSummaryText {
-    if (!sShowSubredditHeaders) return @"Native (Apollo)";
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    [parts addObject:sSubredditHeaderImmersive ? @"New (Immersive)" : @"Classic (Compact)"];
-    NSMutableArray<NSString *> *hidden = [NSMutableArray array];
-    if (!sSubredditShowBanner) [hidden addObject:@"Banner"];
-    if (!sSubredditShowJoinButton) [hidden addObject:@"Join Button"];
-    if (!sSubredditShowDisplayName) [hidden addObject:@"Subreddit Name"];
-    if (hidden.count > 0) {
-        [parts addObject:[NSString stringWithFormat:@"%@ off", [hidden componentsJoinedByString:@", "]]];
-    }
-    return [parts componentsJoinedByString:@" · "];
 }
 
 - (ApolloSettingsSection *)buildSubredditsSourcesSection {
