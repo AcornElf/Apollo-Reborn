@@ -3429,51 +3429,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         text = [[NSMutableAttributedString alloc]
             initWithString:@"Proxy Imgur via DuckDuckGo loads Imgur images through DuckDuckGo's image cache, so they still show where Imgur is blocked (like the UK).\n\nDuckDuckGo can't fetch an album's list of images, so Album Fallback Proxies gets it through public text proxies (r.jina.ai, allorigins.win, codetabs.com) instead. Only the album's Imgur address is sent to them. Turn it off and albums won't load while Imgur is blocked.\n\nVideos and uploads can't be proxied."
             attributes:plainAttrs];
-        } else if ([self isKindOfClass:[ApolloNotificationBackendViewController class]]) {
-        text = [[NSMutableAttributedString alloc]
-            initWithString:@""
-            attributes:plainAttrs];
-
-        NSMutableDictionary *boldAttrs = [plainAttrs mutableCopy];
-        boldAttrs[NSFontAttributeName] = [UIFont boldSystemFontOfSize:
-            [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote].pointSize];
-
-if (ApolloPushNotificationsSupported()) {
-    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
-            [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"Notifications will be delivered through the free Bark app."
-                attributes:plainAttrs]];
-        } else {
-            [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"Bark Delivery can optionally be enabled to receive notifications through the free Bark app instead of through APNs."
-                attributes:plainAttrs]];
-        }
-    } else {
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"A backend URL is required. Bark Delivery can then optionally be enabled to receive notifications through the free Bark app instead of through APNs."
-            attributes:plainAttrs]];
-    }
-} else {
-    [text appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@"This build can't receive native push notifications because it isn't signed with a paid Apple Developer account. "
-        attributes:plainAttrs]];
-
-    if ([self isNotificationBackendURLValid:[[NSUserDefaults standardUserDefaults] stringForKey:UDKeyNotificationBackendURL]]) {
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyBarkNotificationsEnabled]) {
-            [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"Notifications will be delivered through the free Bark app."
-                attributes:plainAttrs]];
-        } else {
-            [text appendAttributedString:[[NSAttributedString alloc]
-                initWithString:@"Bark Delivery can be enabled to receive notifications through the free Bark app."
-                attributes:plainAttrs]];
-        }
-    } else {
-        [text appendAttributedString:[[NSAttributedString alloc]
-            initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
-            attributes:plainAttrs]];
-    }
 } else if ([sectionTitle isEqualToString:@"Privacy"]) {
         text = [[NSMutableAttributedString alloc]
             initWithString:@"Sends one anonymous heartbeat so we can estimate active Apollo Reborn installs. No Reddit activity, account details, or feature usage is collected. More details can be found in our "
