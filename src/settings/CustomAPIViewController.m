@@ -3377,6 +3377,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
             initWithString:@"Proxy Imgur via DuckDuckGo loads Imgur images through DuckDuckGo's image cache, so they still show where Imgur is blocked (like the UK).\n\nDuckDuckGo can't fetch an album's list of images, so Album Fallback Proxies gets it through public text proxies (r.jina.ai, allorigins.win, codetabs.com) instead. Only the album's Imgur address is sent to them. Turn it off and albums won't load while Imgur is blocked.\n\nVideos and uploads can't be proxied."
             attributes:plainAttrs];
 <<<<<<< HEAD
+<<<<<<< HEAD
     } else if ([sectionTitle isEqualToString:@"Notification Backend"]) {
     text = [[NSMutableAttributedString alloc]
         initWithString:@""
@@ -3466,6 +3467,8 @@ if (ApolloPushNotificationsSupported()) {
             initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
             attributes:plainAttrs]];
     }
+=======
+>>>>>>> 0c77b16 (Remove duplicate notification backend footer)
 } else if ([sectionTitle isEqualToString:@"Privacy"]) {
 >>>>>>> ad443d1 (Refine notification backend footer messaging)
         text = [[NSMutableAttributedString alloc]
