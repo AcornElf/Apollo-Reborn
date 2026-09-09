@@ -3277,11 +3277,10 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 // not position) so a buildForm reorder can never misfile a footer.
 - (NSAttributedString *)footerAttributedTextForSection:(NSInteger)section {
     NSString *sectionTitle = [self tableView:self.tableView titleForHeaderInSection:section];
-    // Find Notification Backend section without heading using its first row
-    ApolloSettingsSection *currentSection =
-        (section >= 0 && (NSUInteger)section < _sections.count) ? _sections[(NSUInteger)section] : nil;
-    BOOL isNotificationBackend =
-        [currentSection.rows.firstObject.rowID isEqualToString:@"notif.url"];
+// Find Notification Backend section without heading using its first row
+NSIndexPath *notificationBackendIndexPath = [self indexPathForRowID:@"notif.url"];
+BOOL isNotificationBackend =
+    notificationBackendIndexPath && notificationBackendIndexPath.section == section;
     //
     NSDictionary *plainAttrs = @{NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote], NSForegroundColorAttributeName: [UIColor secondaryLabelColor]};
     NSMutableAttributedString *text;
