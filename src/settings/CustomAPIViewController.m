@@ -2296,6 +2296,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 }
 
 - (NSString *)profileLayoutSummaryText {
+    if (!sShowDetailedProfiles) return @"Native (Apollo)";
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     [parts addObject:sProfileHeaderImmersive ? @"Immersive" : @"Compact"];
     switch (sProfileAvatarStyle) {
