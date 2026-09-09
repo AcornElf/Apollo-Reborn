@@ -3379,6 +3379,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     } else if ([sectionTitle isEqualToString:@"Notification Backend"]) {
     text = [[NSMutableAttributedString alloc]
         initWithString:@""
@@ -3518,6 +3519,8 @@ if (ApolloPushNotificationsSupported()) {
             initWithString:@"A backend URL is required. Bark Delivery can then be enabled to receive notifications through the free Bark app."
             attributes:plainAttrs]];
     }
+=======
+>>>>>>> 0c77b16 (Remove duplicate notification backend footer)
 } else if ([sectionTitle isEqualToString:@"Privacy"]) {
 >>>>>>> ad443d1 (Refine notification backend footer messaging)
         text = [[NSMutableAttributedString alloc]
