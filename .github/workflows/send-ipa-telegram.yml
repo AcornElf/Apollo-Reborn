@@ -7,9 +7,12 @@ on:
     types:
       - completed
 
+env:
+  RELEASE_TAG: build-${{ github.run_number }}
+
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 jobs:
   notify:
@@ -37,6 +40,22 @@ jobs:
 
           echo "artifact_id=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v3
+        with:
+        name: ipa
+        path: ipa
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v1
+        with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: Latest build
+        draft: false
+        files: ipa/Apollo-Reborn.ipa
+        env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Send Telegram notification
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -47,13 +66,14 @@ jobs:
           COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
-          ARTIFACT_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID/artifacts/$ARTIFACT_ID"
+          RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/Apollo-Reborn.ipa"
+          SIDESTORE_URL="sidestore://install?url=$RELEASE_URL"
 
           MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
 
           <b>Commit</b> <code>$SHORT_SHA</code>
 
-          <a href=\"$ARTIFACT_URL\">Download IPA</a>"
+          <a href=\"$SIDESTORE_URL\">Install IPA</a>"
 
           curl -sS -X POST \
             "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
