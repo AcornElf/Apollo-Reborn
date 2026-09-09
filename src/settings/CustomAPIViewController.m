@@ -963,43 +963,6 @@ typedef NS_ENUM(NSInteger, Tag) {
                                               rows:@[ themeManager, openInApp, pip, translation, savedCategories, tagFilters, colorFlairs ]];
 }
 
-// Shared plain disclosure-row builder for the hub's navigation rows: title
-// (+ optional status subtitle block, re-evaluated on reload) and a push.
-- (ApolloSettingsRow *)hubDisclosureRowWithID:(NSString *)rowID
-                                        title:(NSString *)title
-                                     subtitle:(NSString * (^)(void))subtitle
-                                         push:(UIViewController * (^)(void))makeVC {
-    __weak typeof(self) weakSelf = self;
-    NSString *reuseID = [@"Cell_Hub_" stringByAppendingString:rowID];
-    return [ApolloSettingsRow customRowWithID:rowID
-                                         cell:^UITableViewCell *(UITableView *tableView, __unused ApolloSettingsRow *row) {
-        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseID];
-        if (!cell) {
-            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuseID];
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-            cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
-            cell.detailTextLabel.numberOfLines = 0;
-            cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
-        }
-        cell.textLabel.text = title;
-        cell.textLabel.numberOfLines = 0;
-        cell.detailTextLabel.text = subtitle ? subtitle() : nil;
-        [weakSelf apollo_applyPrimaryTextColorToCell:cell];
-        return cell;
-    }
-                                     onSelect:^{
-        UIViewController *vc = makeVC();
-        if (!vc) return;
-        if (weakSelf.navigationController) {
-            [weakSelf.navigationController pushViewController:vc animated:YES];
-        } else {
-            UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:vc];
-            [weakSelf presentViewController:navigation animated:YES completion:nil];
-        }
-    }];
-}
-
 - (ApolloSettingsSection *)buildSetupSection {
     ApolloSettingsRow *apiKeys =
         [self hubDisclosureRowWithID:@"setup.apiKeys"
