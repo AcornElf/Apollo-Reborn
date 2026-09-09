@@ -3374,11 +3374,11 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
                     attributes:boldAttrs]];
 
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@" tab → "
+                    initWithString:@" tab "
                     attributes:plainAttrs]];
 
                 [text appendAttributedString:[[NSAttributedString alloc]
-                    initWithString:@"Alert Sound → View All Sounds → Upload Sound"
+                    initWithString:@"→ Alert Sound → View All Sounds → Upload Sound"
                     attributes:boldAttrs]];
 
                 [text appendAttributedString:[[NSAttributedString alloc]
