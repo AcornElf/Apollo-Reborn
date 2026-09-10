@@ -8,7 +8,7 @@ on:
       - completed
 
 env:
-  RELEASE_TAG: build-${{ github.run_number }}
+  RELEASE_TAG: latest-build
 
 permissions:
   actions: read
@@ -38,42 +38,82 @@ jobs:
             exit 1
           fi
 
+          echo "Found IPA artifact: $ARTIFACT"
           echo "artifact_id=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
       - name: Download IPA artifact
-        uses: actions/download-artifact@v3
-        with:
-        name: ipa
-        path: ipa
-
-      - name: Create or update release
-        uses: softprops/action-gh-release@v1
-        with:
-        tag_name: ${{ env.RELEASE_TAG }}
-        name: Latest build
-        draft: false
-        files: ipa/Apollo-Reborn.ipa
         env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+        run: |
+          mkdir -p artifact
+
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > artifact.zip
+
+          unzip -q artifact.zip -d artifact
+
+          IPA_FILE=$(find artifact -type f -name "*.ipa" -print -quit)
+
+          if [ -z "$IPA_FILE" ]; then
+            echo "No IPA file found inside the artifact."
+            exit 1
+          fi
+
+          echo "Found IPA: $IPA_FILE"
+          cp "$IPA_FILE" Apollo-Reborn.ipa
+
+      - name: Create or update latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "Latest build release already exists."
+          else
+            echo "Creating latest build release."
+            gh release create "$RELEASE_TAG" \
+              --repo "$REPOSITORY" \
+              --target "$COMMIT_SHA" \
+              --title "Latest build" \
+              --notes "Automatically updated latest build of Apollo Reborn." \
+              --latest=false
+          fi
+
+          echo "Uploading latest IPA..."
+          gh release upload "$RELEASE_TAG" \
+            Apollo-Reborn.ipa \
+            --repo "$REPOSITORY" \
+            --clobber
 
       - name: Send Telegram notification
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
           COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
+
           RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/Apollo-Reborn.ipa"
-          SIDESTORE_URL="sidestore://install?url=$RELEASE_URL"
+
+          ENCODED_RELEASE_URL=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_URL")
+
+          SIDESTORE_URL="sidestore://install?url=$ENCODED_RELEASE_URL"
 
           MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
 
           <b>Commit</b> <code>$SHORT_SHA</code>
 
-          <a href=\"$SIDESTORE_URL\">Install IPA</a>"
+          <a href=\"$SIDESTORE_URL\">Install in SideStore</a>
+
+          <a href=\"$RELEASE_URL\">Download IPA</a>"
 
           curl -sS -X POST \
             "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
