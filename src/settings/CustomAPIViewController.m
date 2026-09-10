@@ -810,11 +810,22 @@ typedef NS_ENUM(NSInteger, Tag) {
 
     self.title = [self apollo_screenTitle];
     self.tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+
+    UITapGestureRecognizer *tapGesture =
+        [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                action:@selector(dismissKeyboard)];
+    tapGesture.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:tapGesture];
+
     if (![self apollo_isHub]) return;
 
     [[ApolloSubredditInfoCache sharedCache] requestInfoForSubreddit:kApolloRebornSubredditName completion:^(ApolloSubredditInfo *info) {
         (void)info;
     }];
+}
+
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
