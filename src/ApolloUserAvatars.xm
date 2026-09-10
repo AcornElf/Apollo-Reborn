@@ -3238,7 +3238,7 @@ static void ApolloProfileSyncAmbient(ApolloProfileHeaderView *header) {
         fallback = objc_getAssociatedObject(viewController, kApolloProfileOriginalTableBackgroundKey)
             ?: UIColor.systemBackgroundColor;
     }
-    UIColor *pageColor = ApolloImmersiveResolvedPageColor(fallback);
+    UIColor *pageColor = ApolloImmersiveResolvedPageColor(fallback, viewController.traitCollection);
     viewController.view.backgroundColor = pageColor;
 
     // adjustedContentInset.top is the chrome above the table header (safe
