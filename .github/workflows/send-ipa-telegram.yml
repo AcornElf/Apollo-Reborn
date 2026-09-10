@@ -24,6 +24,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
+    environment:
+      name: github-pages
+
     steps:
       - name: Determine Build IPA run
         id: run
@@ -133,6 +136,8 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Create SideStore redirect page
         env:
@@ -188,7 +193,7 @@ jobs:
           echo "SideStore URL: $SIDESTORE_URL"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: pages
 
