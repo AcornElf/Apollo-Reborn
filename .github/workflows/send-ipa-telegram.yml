@@ -11,10 +11,13 @@ on:
 
 env:
   RELEASE_TAG: latest-build
+  PAGES_URL: https://acornelf.github.io/Apollo-Reborn/
 
 permissions:
   actions: read
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   notify:
@@ -34,15 +37,15 @@ jobs:
               "/repos/$REPOSITORY/actions/workflows/build-ipa.yml/runs?status=success&per_page=1" \
               --jq '.workflow_runs[0].id')
 
-            COMMIT_SHA=$(gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPOSITORY/actions/runs/$RUN_ID" \
-              --jq '.head_sha')
-
             if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
               echo "No successful Build IPA workflow run found."
               exit 1
             fi
+
+            COMMIT_SHA=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/runs/$RUN_ID" \
+              --jq '.head_sha')
 
             echo "Using latest successful Build IPA run: $RUN_ID"
           else
@@ -128,6 +131,71 @@ jobs:
             --repo "$REPOSITORY" \
             --clobber
 
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Create SideStore redirect page
+        env:
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/Apollo-Reborn.ipa
+        run: |
+          ENCODED_RELEASE_URL=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_URL")
+
+          SIDESTORE_URL="sidestore://install?url=$ENCODED_RELEASE_URL"
+
+          mkdir -p pages
+
+          cat > pages/index.html <<EOF
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="0;url=$SIDESTORE_URL">
+            <title>Install Apollo Reborn</title>
+            <style>
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                text-align: center;
+                padding: 3rem 1.5rem;
+              }
+
+              a {
+                display: inline-block;
+                padding: 0.8rem 1.2rem;
+                border-radius: 0.7rem;
+                background: #007aff;
+                color: white;
+                text-decoration: none;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>Apollo Reborn</h1>
+            <p>Opening SideStore…</p>
+            <p>
+              <a href="$SIDESTORE_URL">Install in SideStore</a>
+            </p>
+
+            <script>
+              window.location.replace("$SIDESTORE_URL");
+            </script>
+          </body>
+          </html>
+          EOF
+
+          echo "Generated SideStore redirect page."
+          echo "IPA URL: $RELEASE_URL"
+          echo "SideStore URL: $SIDESTORE_URL"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
       - name: Send Telegram notification
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -135,20 +203,17 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ steps.run.outputs.commit_sha }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          PAGES_URL: ${{ env.PAGES_URL }}
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
 
           RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/Apollo-Reborn.ipa"
 
-          ENCODED_RELEASE_URL=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_URL")
-
-          SIDESTORE_URL="sidestore://install?url=$ENCODED_RELEASE_URL"
-
           MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
 
           <b>Commit</b> <code>$SHORT_SHA</code>
 
-          <a href=\"$SIDESTORE_URL\">Install in SideStore</a>
+          <a href=\"$PAGES_URL\">Install in SideStore</a>
 
           <a href=\"$RELEASE_URL\">Download IPA</a>"
 
