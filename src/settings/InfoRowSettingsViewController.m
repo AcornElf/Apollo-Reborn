@@ -65,7 +65,7 @@
     [ApolloSettingsRow valueRowWithID:@"infoRow.timestamp"
                                 title:@"Full Timestamp on Tap"
                             detail:^NSString * {
-    if (sInfoRowPopupMode) return @"Pop-up";
+    if (sInfoRowPopupMode) return @"Pop-Up";
     if (sInfoRowOverlayMode) return @"Overlay";
     return @"Off";
 }
@@ -108,7 +108,7 @@
     [self reloadRowWithID:@"infoRow.timestamp"];
         NSString *mode = @"Off";
         if (sInfoRowPopupMode) {
-            mode = @"Pop-up";
+            mode = @"Pop-Up";
         } else if (sInfoRowOverlayMode) {
             mode = @"Overlay";
         }
@@ -128,7 +128,7 @@
     ApolloSettingsPresentPicker(self,
                                 [self cellForRowID:@"infoRow.timestamp"],
                                 @"Full Timestamp on Tap",
-                                @[@"Off", @"Overlay", @"Pop-up"],
+                                @[@"Off", @"Overlay", @"Pop-Up"],
                                 selectedIndex,
                                 ^(NSInteger pickedIndex) {
         sInfoRowOverlayMode = (pickedIndex == 1);
