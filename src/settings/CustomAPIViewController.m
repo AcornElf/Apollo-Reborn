@@ -1618,10 +1618,14 @@ typedef NS_ENUM(NSInteger, Tag) {
         [parts addObject:@"Magnifier"];
     }
 
+    if (sInfoRowTapUpvote) {
+        [parts addObject:@"Upvote on Release"]
+    }
+
     if (sInfoRowOverlayMode) {
         [parts addObject:@"Timestamp Overlay"];
     } else if (sInfoRowPopupMode) {
-        [parts addObject:@"Timestamp Pop-up"];
+        [parts addObject:@"Timestamp Pop-Up"];
     }
 
     if (sInfoRowTapUpvote) {
@@ -1629,7 +1633,7 @@ typedef NS_ENUM(NSInteger, Tag) {
     }
 
     if (sInfoRowTapComments) {
-        [parts addObject:@"Comments"];
+        [parts addObject:@"Jump to Comments"];
     }
 
     BOOL translationAvailable = sTapToTranslate || sShowTranslationTitleDetails || sShowTranslationDetails;
