@@ -30,11 +30,12 @@ static NSString *ApolloSettingsDefaultLibreTranslateURL(void) {
 // the sTapToTranslate / sAutoTranslateOnAppear defaults (no migration needed):
 //   Automatic        -> tap = NO,  auto = YES  (opens everything translated)
 //   Tap to Translate -> tap = YES              (keep original, tappable Translate)
-//   Manual           -> tap = NO,  auto = NO   (tap the globe per feed/thread)
+//   OnDemand           -> tap = NO,  auto = NO   (tap the globe per feed/thread)
+
 typedef NS_ENUM(NSInteger, TranslationMode) {
     TranslationModeAutomatic = 0,
+    TranslationModeOnDemand,
     TranslationModeTapToTranslate,
-    TranslationModeManual,
     TranslationModeCount,
 };
 
@@ -107,7 +108,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 
     ApolloSettingsRow *enableBulk =
         [ApolloSettingsRow switchRowWithID:@"enableBulk"
-                                     title:@"Enable Bulk Translation"
+                                     title:@"Enable In-Place Translation"
                                       isOn:^BOOL { return sEnableBulkTranslation; }
                                   onToggle:^(UISwitch *sender) { [weakSelf enableBulkTranslationSwitchToggled:sender]; }];
 
@@ -286,7 +287,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     NSMutableArray<ApolloSettingsSection *> *sections = [NSMutableArray array];
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"General"
-                                         footer:@"Translates comments and post titles in place.\n\nAutomatic translates on open. Tap to Translate adds a per-item tap. Manual waits for the globe.\n\nDetails rows add \"Translated from …\" labels.\n\nGoogle is free but rate-limits heavy use. Apple is offline and unlimited (iOS 18+). Microsoft and LibreTranslate need their own keys, set up below."
+                                         footer:@"Translates comments and post titles in place.\n\nAutomatic translates on open. Tap to Translate adds a per-item tap. On Demand waits for the globe.\n\nDetails rows add \"Translated from …\" labels.\n\nGoogle is free but rate-limits heavy use. Apple is offline and unlimited (iOS 18+). Microsoft and LibreTranslate need their own keys, set up below."
                                            rows:@[ enableBulk, translationMode, translateTitles, showDetails, titleDetails, markerColor, targetLanguage, provider ]]];
 
     // Apollo's own Translate button (the native action-sheet item on comment/post
@@ -298,28 +299,53 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 #if APOLLO_HAS_APPLE_TRANSLATE
     if ([ApolloAppleTranslateSheet isSupported]) {
         ApolloSettingsRow *appleSheet =
-            [ApolloSettingsRow switchRowWithID:@"appleSheet"
-                                         title:@"Use Apple Translate Sheet"
-                                          isOn:^BOOL { return sAppleTranslateSheet; }
-                                      onToggle:^(UISwitch *sender) { [weakSelf appleTranslateSheetSwitchToggled:sender]; }];
+            [ApolloSettingsRow valueRowWithID:@"appleSheet"
+                                         title:@"Translation Provider"
+                                        detail:^NSString * {
+                                            return sAppleTranslateSheet ? @"Apple Translate" : @"Google";
+                            }
+                          onSelect:^{
+                              [weakSelf presentTranslationProviderPicker];
+                          }];
         [sections addObject:
             [ApolloSettingsSection sectionWithTitle:@"Context Menu"
-                                             footer:@"Opens iOS's Translate sheet instead of a Google Translate page. Not always on-device — iOS may send text to Apple's servers unless offline mode is on in the Translate app."
+                                             footer:@"Apple Translate can work entirely on-device when On-Device Mode is enabled in Settings."
                                                rows:@[ appleSheet ]]];
     }
+
+- (void)presentTranslationProviderPicker {
+    NSArray<NSString *> *titles = @[
+        @"Apple Translate",
+        @"Google"
+    ];
+
+    __weak __typeof(self) weakSelf = self;
+    ApolloSettingsPresentPicker(self,
+                                [self cellForRowID:@"appleSheet"],
+                                @"Translation Provider",
+                                titles,
+                                sAppleTranslateSheet ? 0 : 1,
+                                ^(NSInteger pickedIndex) {
+        sAppleTranslateSheet = (pickedIndex == 0);
+        [[NSUserDefaults standardUserDefaults] setBool:sAppleTranslateSheet
+                                                forKey:UDKeyAppleTranslateSheet];
+        [weakSelf reloadRowWithID:@"appleSheet"];
+    });
+}
+
 #endif
 
     [sections addObject:
-        [ApolloSettingsSection sectionWithTitle:@"Don't Translate"
-                                         footer:@"Posts and comments detected as one of these languages will be left in their original form. Mixed-language text is still translated so embedded foreign words come through."
+        [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
+                                         footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
                                            rows:skipRows]];
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"Microsoft"
-                                         footer:@"Free Azure key — 2 million characters a month. Add a Translator resource on the F0 plan in the Azure portal, then paste a key here. Region is the resource's location; leave empty only if it's Global."
+                                         footer:@"A free Azure key provides 2 million characters of translation per month.\n\nGo to the Azure portal and create a Translator resource on the F0 plan, then paste the key here.\n\nSet Region to the resource's location; for Global, leave it empty."
                                            rows:@[ microsoftAPIKey, microsoftRegion ]]];
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"LibreTranslate"
-                                         footer:@"A key is required — the free public instances shut down. Get one at portal.libretranslate.com, or point the URL at your own server, which needs no key."
+                                         footer:@"A key is required — the free public instances have shut down. Get a key at portal.libretranslate.com, or point the URL to your own server, which needs no key."
                                            rows:@[ libreURL, libreAPIKey ]]];
 
     return sections;
@@ -598,14 +624,15 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 - (TranslationMode)currentTranslationMode {
     if (sTapToTranslate) return TranslationModeTapToTranslate;
     if (sAutoTranslateOnAppear) return TranslationModeAutomatic;
-    return TranslationModeManual;
+    return TranslationModeOnDemand;
 }
 
 - (NSString *)titleForTranslationMode:(TranslationMode)mode {
     switch (mode) {
         case TranslationModeAutomatic:      return @"Automatic";
-        case TranslationModeTapToTranslate: return @"Tap to Translate";
-        default:                            return @"Manual (Globe)";
+        case TranslationModeOnDemand:        return @"Show on Demand";
+        case TranslationModeTapToTranslate:  return @"Tap to Translate";
+        default:                             return @"Show on Demand";
     }
 }
 
