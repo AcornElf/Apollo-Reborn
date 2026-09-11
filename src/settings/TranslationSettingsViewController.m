@@ -101,6 +101,31 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 #endif
 }
 
+    // Apollo's own Translate button (the native action-sheet item on comment/post
+    // long-press) is unrelated to the bulk pipeline above, so it gets its own
+    // section rather than a row gated on sEnableBulkTranslation. Only built at
+    // all when the OS can present Apple's sheet (iOS 17.4+) — the framework has
+    // no way to hide a whole section, so an unsupported OS would otherwise leave
+    // a header/footer floating over zero rows.
+#if APOLLO_HAS_APPLE_TRANSLATE
+    if ([ApolloAppleTranslateSheet isSupported]) {
+        ApolloSettingsRow *appleSheet =
+            [ApolloSettingsRow valueRowWithID:@"appleSheet"
+                                         title:@"Translation Provider"
+                                        detail:^NSString * {
+                                            return sAppleTranslateSheet ? @"Apple Translate" : @"Google";
+                            }
+                          onSelect:^{
+                              [weakSelf presentTranslationProviderPicker];
+                          }];
+        [sections addObject:
+            [ApolloSettingsSection sectionWithTitle:@"Context Menu"
+                                             footer:@"Apple Translate can work entirely on-device when On-Device Mode is enabled in Settings."
+                                               rows:@[ appleSheet ]]];
+    }
+
+#endif
+
 #pragma mark - Form
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
@@ -290,51 +315,6 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
                                          footer:@"Translates comments and post titles in place.\n\nAutomatic translates on open. Tap to Translate adds a per-item tap. On Demand waits for the globe.\n\nDetails rows add \"Translated from …\" labels.\n\nGoogle is free but rate-limits heavy use. Apple is offline and unlimited (iOS 18+). Microsoft and LibreTranslate need their own keys, set up below."
                                            rows:@[ enableBulk, translationMode, translateTitles, showDetails, titleDetails, markerColor, targetLanguage, provider ]]];
 
-    // Apollo's own Translate button (the native action-sheet item on comment/post
-    // long-press) is unrelated to the bulk pipeline above, so it gets its own
-    // section rather than a row gated on sEnableBulkTranslation. Only built at
-    // all when the OS can present Apple's sheet (iOS 17.4+) — the framework has
-    // no way to hide a whole section, so an unsupported OS would otherwise leave
-    // a header/footer floating over zero rows.
-#if APOLLO_HAS_APPLE_TRANSLATE
-    if ([ApolloAppleTranslateSheet isSupported]) {
-        ApolloSettingsRow *appleSheet =
-            [ApolloSettingsRow valueRowWithID:@"appleSheet"
-                                         title:@"Translation Provider"
-                                        detail:^NSString * {
-                                            return sAppleTranslateSheet ? @"Apple Translate" : @"Google";
-                            }
-                          onSelect:^{
-                              [weakSelf presentTranslationProviderPicker];
-                          }];
-        [sections addObject:
-            [ApolloSettingsSection sectionWithTitle:@"Context Menu"
-                                             footer:@"Apple Translate can work entirely on-device when On-Device Mode is enabled in Settings."
-                                               rows:@[ appleSheet ]]];
-    }
-
-- (void)presentTranslationProviderPicker {
-    NSArray<NSString *> *titles = @[
-        @"Apple Translate",
-        @"Google"
-    ];
-
-    __weak __typeof(self) weakSelf = self;
-    ApolloSettingsPresentPicker(self,
-                                [self cellForRowID:@"appleSheet"],
-                                @"Translation Provider",
-                                titles,
-                                sAppleTranslateSheet ? 0 : 1,
-                                ^(NSInteger pickedIndex) {
-        sAppleTranslateSheet = (pickedIndex == 0);
-        [[NSUserDefaults standardUserDefaults] setBool:sAppleTranslateSheet
-                                                forKey:UDKeyAppleTranslateSheet];
-        [weakSelf reloadRowWithID:@"appleSheet"];
-    });
-}
-
-#endif
-
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
                                          footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
@@ -343,10 +323,30 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
         [ApolloSettingsSection sectionWithTitle:@"Microsoft"
                                          footer:@"A free Azure key provides 2 million characters of translation per month.\n\nGo to the Azure portal and create a Translator resource on the F0 plan, then paste the key here.\n\nSet Region to the resource's location; for Global, leave it empty."
                                            rows:@[ microsoftAPIKey, microsoftRegion ]]];
-    [sections addObject:
+    NSString *libreFooterText =
+    @"A key is required - the free public instances have shut down. Get a key at portal.libretranslate.com, or point the URL to your own server, which needs no key.";
+
+    NSMutableAttributedString *libreFooter =
+        [[NSMutableAttributedString alloc] initWithString:libreFooterText];
+
+    NSRange portalRange =
+        [libreFooterText rangeOfString:@"portal.libretranslate.com"];
+
+    [libreFooter addAttribute:NSLinkAttributeName
+                        value:@"https://portal.libretranslate.com"
+                        range:portalRange];
+
+    ApolloSettingsSection *libreTranslateSection =
         [ApolloSettingsSection sectionWithTitle:@"LibreTranslate"
-                                         footer:@"A key is required — the free public instances have shut down. Get a key at portal.libretranslate.com, or point the URL to your own server, which needs no key."
-                                           rows:@[ libreURL, libreAPIKey ]]];
+                                        footer:nil
+                                        rows:@[
+        libreURL,
+        libreAPIKey
+    ]];
+
+    libreTranslateSection.footerAttributedText = libreFooter;
+
+    [sections addObject:libreTranslateSection];
 
     return sections;
 }
