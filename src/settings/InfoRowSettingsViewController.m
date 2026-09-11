@@ -86,7 +86,7 @@
     }];
 
     translation.enabled = ^BOOL {
-        return [weakSelf translationMarkerAvailable];
+        return sEnableBulkTranslation;
     };
 
     return @[
@@ -94,7 +94,7 @@
                                          footer:@"Hold, slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
-                                        footer: ![self translationMarkerAvailable] ? @"Requires Bulk Translation to be enabled." : nil
+                                        footer: !sEnableBulkTranslation ? @"Enable Bulk Translation to use this setting." : nil
                                         rows:@[ comments, timestamp, translation ]],
     ];
 }
