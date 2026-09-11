@@ -210,39 +210,33 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     // so these rows always mirror the list.
     NSMutableArray<ApolloSettingsRow *> *skipRows = [NSMutableArray array];
     NSArray<NSString *> *codes = [self skipLanguageCodes];
-    for (NSUInteger idx = 0; idx < codes.count; idx++) {
-        NSString *code = codes[idx];
+    for (NSString *code in codes) {
         NSString *rowID = [@"skipLang." stringByAppendingString:code];
+
         ApolloSettingsRow *languageRow =
             [ApolloSettingsRow customRowWithID:rowID
-                                          cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
-                // Fresh cell each time so the accessoryView (trash button) carries the right index.
-                UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
-                cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-                cell.textLabel.text = [weakSelf displayNameForLanguageCode:code];
-                cell.detailTextLabel.text = code.uppercaseString;
-                [weakSelf apollo_applyPrimaryTextColorToCell:cell];
-                UIButton *trash = [UIButton buttonWithType:UIButtonTypeSystem];
-                if (@available(iOS 13.0, *)) {
-                    [trash setImage:[UIImage systemImageNamed:@"trash"] forState:UIControlStateNormal];
-                    trash.tintColor = [UIColor systemRedColor];
-                } else {
-                    [trash setTitle:@"Remove" forState:UIControlStateNormal];
-                    [trash setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
-                }
-                trash.tag = (NSInteger)idx;
-                [trash addTarget:weakSelf action:@selector(skipLanguageTrashTapped:) forControlEvents:UIControlEventTouchUpInside];
-                [trash sizeToFit];
-                CGRect f = trash.frame;
-                f.size.width = MAX(44.0, f.size.width + 12.0);
-                f.size.height = MAX(44.0, f.size.height);
-                trash.frame = f;
-                cell.accessoryView = trash;
-                return cell;
-            }
-                                      onSelect:^{
-                [weakSelf presentRemoveSkipLanguageConfirmForCode:code sourceView:[weakSelf cellForRowID:rowID]];
-            }];
+                                        cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
+            UITableViewCell *cell =
+                [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                    reuseIdentifier:nil];
+
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+            cell.textLabel.text = [weakSelf displayNameForLanguageCode:code];
+            cell.detailTextLabel.text = code.uppercaseString;
+            [weakSelf apollo_applyPrimaryTextColorToCell:cell];
+
+            return cell;
+        }
+                                    onSelect:^{
+            [weakSelf presentRemoveSkipLanguageConfirmForCode:code
+                                                sourceView:[weakSelf cellForRowID:rowID]];
+        }];
+
+        languageRow.onDelete = ^{
+            [weakSelf presentRemoveSkipLanguageConfirmForCode:code
+                                                sourceView:[weakSelf cellForRowID:rowID]];
+        };
+
         [skipRows addObject:languageRow];
     }
 

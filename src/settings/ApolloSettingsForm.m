@@ -71,6 +71,7 @@ typedef NS_ENUM(NSInteger, ApolloSFRowKind) {
 @property (nonatomic, copy) void (^onSelect)(void);
 @property (nonatomic, copy) UIViewController * (^push)(void);
 @property (nonatomic, copy) ApolloSettingsCellBlock cellBlock;
+@property (nonatomic, copy) void (^onDelete)(void);
 @end
 
 @implementation ApolloSettingsRow
@@ -235,6 +236,7 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 52.0;
     [self rebuildForm];
+    [self.tableView setEditing:YES animated:NO];
 }
 
 - (void)rebuildForm {
@@ -539,6 +541,23 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
 - (BOOL)tableView:(UITableView *)tableView shouldHighlightRowAtIndexPath:(NSIndexPath *)indexPath {
     ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
     return row.isSelectable && (!row.enabled || row.enabled());
+}
+
+- (BOOL)tableView:(UITableView *)tableView
+canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
+    return row.onDelete != nil;
+}
+
+- (void)tableView:(UITableView *)tableView
+commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle != UITableViewCellEditingStyleDelete) return;
+
+    ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
+    if (row.onDelete) {
+        row.onDelete();
+    }
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {

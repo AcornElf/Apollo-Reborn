@@ -92,6 +92,9 @@ typedef UITableViewCell *_Nonnull (^ApolloSettingsCellBlock)(UITableView *tableV
 // Optional fixed height (evaluated per layout pass). nil == table default.
 @property (nonatomic, copy, nullable) CGFloat (^height)(void);
 
+// Optional delete action for native UITableView editing/swipe-to-delete.
+@property (nonatomic, copy, nullable) void (^onDelete)(void);
+
 @end
 
 @interface ApolloSettingsSection : NSObject
