@@ -1635,17 +1635,29 @@ typedef NS_ENUM(NSInteger, Tag) {
 // needs an identity-based reload of the hub row.
 - (NSString *)infoRowSummaryText {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    [parts addObject:sIconRowMagnifier ? @"Magnifier on" : @"Magnifier off"];
-    [parts addObject:sInfoRowOverlayMode ? @"Overlays" : sInfoRowPopupMode ? @"Popups" : @"Info taps off"];
-
-    NSMutableArray<NSString *> *disabled = [NSMutableArray array];
-    if (!sInfoRowTapUpvote) [disabled addObject:@"Upvote"];
-    if (!sInfoRowTapComments) [disabled addObject:@"Comments"];
-    BOOL translationAvailable = sTapToTranslate || sShowTranslationTitleDetails || sShowTranslationDetails;
-    if (translationAvailable && !sInfoRowTapTranslation) [disabled addObject:@"Translation"];
-    if (disabled.count > 0) {
-        [parts addObject:[NSString stringWithFormat:@"%@ off", [disabled componentsJoinedByString:@", "]]];
+    if (sIconRowMagnifier) {
+        [parts addObject:@"Magnifier"];
     }
+
+    if (sInfoRowOverlayMode) {
+        [parts addObject:@"Timestamp Overlay"];
+    } else if (sInfoRowPopupMode) {
+        [parts addObject:@"Timestamp Pop-up"];
+    }
+
+    if (sInfoRowTapUpvote) {
+        [parts addObject:@"Upvote"];
+    }
+
+    if (sInfoRowTapComments) {
+        [parts addObject:@"Comments"];
+    }
+
+    BOOL translationAvailable = sTapToTranslate || sShowTranslationTitleDetails || sShowTranslationDetails;
+    if (translationAvailable && sInfoRowTapTranslation) {
+        [parts addObject:@"Toggle Translation"];
+    }
+
     return [parts componentsJoinedByString:@" · "];
 }
 
