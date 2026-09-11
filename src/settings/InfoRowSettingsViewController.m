@@ -19,10 +19,6 @@
     [self rebuildForm];
 }
 
-- (BOOL)translationMarkerAvailable {
-    return sEnableBulkTranslation && sTapToTranslate && sTranslatePostTitles;
-}
-
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak typeof(self) weakSelf = self;
 
