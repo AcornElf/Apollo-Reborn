@@ -16,6 +16,7 @@
 #if APOLLO_SIM_BUILD
 
 #import "ApolloAccountCredentials.h"
+#import "ApolloChatRoomDirectory.h"
 #import "ApolloCommentVoteInsights.h"
 #import "ApolloCommon.h"
 #import "ApolloFloatingTabs.h"
@@ -751,6 +752,37 @@ static void ApolloSimDebugTapNotification(CFNotificationCenterRef center, void *
         if ([contents hasPrefix:@"devvitjs "]) {
             extern void ApolloDevvitDebugEvaluateJS(NSString *js);
             ApolloDevvitDebugEvaluateJS([contents substringFromIndex:9]);
+            return;
+        }
+        // "chatjs <js>" command: evaluate JS in the most recently created
+        // modern Chat/Modmail web view (the Inbox hub's, normally) and log
+        // the result. Lets a sim reproduce web-side states the sim's own
+        // WebKit never produces — e.g. `chatjs history.replaceState(null,"",
+        // "/chat")` inside a room mimics the device's room-under-a-list-URL
+        // desync. See ApolloDirectChatDebugEvaluateJS in ApolloDirectChatWeb.xm.
+        if ([contents hasPrefix:@"chatjs "]) {
+            extern void ApolloDirectChatDebugEvaluateJS(NSString *js);
+            ApolloDirectChatDebugEvaluateJS([contents substringFromIndex:7]);
+            return;
+        }
+        // "chatrooms": log the cached chat room directory (names, participants,
+        // newest-message timestamps). "chatresolve <subject>|<partner>|<ts>":
+        // resolve a chat mirror's room the way a tapped inbox row does and log
+        // the result — exercises the titled-subject corroboration guard with
+        // arbitrary partner / timestamp combinations.
+        if ([contents hasPrefix:@"chatrooms"]) {
+            ApolloChatRoomDirectoryDebugDump();
+            return;
+        }
+        if ([contents hasPrefix:@"chatresolve "]) {
+            NSArray<NSString *> *parts = [[contents substringFromIndex:12] componentsSeparatedByString:@"|"];
+            NSString *subject = parts.count > 0 ? parts[0] : @"";
+            NSString *partner = parts.count > 1 && parts[1].length > 0 ? parts[1] : nil;
+            NSTimeInterval timestamp = parts.count > 2 ? parts[2].doubleValue : 0;
+            ApolloChatRoomDirectoryResolve(subject, partner, timestamp, ^(NSString *chatPath) {
+                ApolloLog(@"[SimDebugTap] chatresolve subject=%@ partner=%@ ts=%.0f -> %@",
+                          subject, partner ?: @"(nil)", timestamp, chatPath ?: @"(nil: legacy thread)");
+            });
             return;
         }
         // "devvitload <url>": load another URL in the first on-window widget.
