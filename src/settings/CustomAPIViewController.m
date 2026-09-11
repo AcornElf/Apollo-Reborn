@@ -810,7 +810,7 @@ typedef NS_ENUM(NSInteger, Tag) {
     [super viewDidLoad];
 
     self.title = [self apollo_screenTitle];
-    self.tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+
     if (![self apollo_isHub]) return;
 
     [[ApolloSubredditInfoCache sharedCache] requestInfoForSubreddit:kApolloRebornSubredditName completion:^(ApolloSubredditInfo *info) {
