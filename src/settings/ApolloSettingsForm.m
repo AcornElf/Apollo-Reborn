@@ -71,7 +71,6 @@ typedef NS_ENUM(NSInteger, ApolloSFRowKind) {
 @property (nonatomic, copy) void (^onSelect)(void);
 @property (nonatomic, copy) UIViewController * (^push)(void);
 @property (nonatomic, copy) ApolloSettingsCellBlock cellBlock;
-@property (nonatomic, copy) void (^onDelete)(void);
 @end
 
 @implementation ApolloSettingsRow
@@ -236,6 +235,7 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 52.0;
     [self rebuildForm];
+    self.tableView.allowsSelectionDuringEditing = YES;
     [self.tableView setEditing:YES animated:NO];
 }
 

@@ -101,31 +101,6 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 #endif
 }
 
-    // Apollo's own Translate button (the native action-sheet item on comment/post
-    // long-press) is unrelated to the bulk pipeline above, so it gets its own
-    // section rather than a row gated on sEnableBulkTranslation. Only built at
-    // all when the OS can present Apple's sheet (iOS 17.4+) — the framework has
-    // no way to hide a whole section, so an unsupported OS would otherwise leave
-    // a header/footer floating over zero rows.
-#if APOLLO_HAS_APPLE_TRANSLATE
-    if ([ApolloAppleTranslateSheet isSupported]) {
-        ApolloSettingsRow *appleSheet =
-            [ApolloSettingsRow valueRowWithID:@"appleSheet"
-                                         title:@"Translation Provider"
-                                        detail:^NSString * {
-                                            return sAppleTranslateSheet ? @"Apple Translate" : @"Google";
-                            }
-                          onSelect:^{
-                              [weakSelf presentTranslationProviderPicker];
-                          }];
-        [sections addObject:
-            [ApolloSettingsSection sectionWithTitle:@"Context Menu"
-                                             footer:@"Apple Translate can work entirely on-device when On-Device Mode is enabled in Settings."
-                                               rows:@[ appleSheet ]]];
-    }
-
-#endif
-
 #pragma mark - Form
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
@@ -313,6 +288,32 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
         [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
                                          footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
                                            rows:skipRows]];
+
+    // Apollo's own Translate button (the native action-sheet item on comment/post
+    // long-press) is unrelated to the bulk pipeline above, so it gets its own
+    // section rather than a row gated on sEnableBulkTranslation. Only built at
+    // all when the OS can present Apple's sheet (iOS 17.4+) — the framework has
+    // no way to hide a whole section, so an unsupported OS would otherwise leave
+    // a header/footer floating over zero rows.
+    #if APOLLO_HAS_APPLE_TRANSLATE
+        if ([ApolloAppleTranslateSheet isSupported]) {
+            ApolloSettingsRow *appleSheet =
+                [ApolloSettingsRow valueRowWithID:@"appleSheet"
+                                            title:@"Translation Provider"
+                                            detail:^NSString * {
+                                                return sAppleTranslateSheet ? @"Apple Translate" : @"Google";
+                                }
+                            onSelect:^{
+                                [weakSelf presentTranslationProviderPicker];
+                            }];
+            [sections addObject:
+                [ApolloSettingsSection sectionWithTitle:@"Context Menu"
+                                                footer:@"Apple Translate can work entirely on-device when On-Device Mode is enabled in Settings."
+                                                rows:@[ appleSheet ]]];
+        }
+
+    #endif
+
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"Microsoft"
                                          footer:@"A free Azure key provides 2 million characters of translation per month.\n\nGo to the Azure portal and create a Translator resource on the F0 plan, then paste the key here.\n\nSet Region to the resource's location; for Global, leave it empty."
@@ -346,6 +347,26 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 }
 
 #pragma mark - Helpers
+
+- (void)presentTranslationProviderPicker {
+    NSArray<NSString *> *titles = @[
+        @"Apple Translate",
+        @"Google"
+    ];
+
+    __weak __typeof(self) weakSelf = self;
+    ApolloSettingsPresentPicker(self,
+                                [self cellForRowID:@"appleSheet"],
+                                @"Translation Provider",
+                                titles,
+                                sAppleTranslateSheet ? 0 : 1,
+                                ^(NSInteger pickedIndex) {
+        sAppleTranslateSheet = (pickedIndex == 0);
+        [[NSUserDefaults standardUserDefaults] setBool:sAppleTranslateSheet
+                                                forKey:UDKeyAppleTranslateSheet];
+        [weakSelf reloadRowWithID:@"appleSheet"];
+    });
+}
 
 - (NSString *)normalizedLanguageCodeFromIdentifier:(NSString *)identifier {
     if (![identifier isKindOfClass:[NSString class]] || identifier.length == 0) return nil;
