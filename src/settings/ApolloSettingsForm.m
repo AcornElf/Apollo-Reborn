@@ -1,8 +1,58 @@
 #import "ApolloSettingsForm.h"
 
 #import <objc/runtime.h>
+#import <SafariServices/SafariServices.h>
 
 #import "ApolloCommon.h"
+
+@interface ApolloSettingsAttributedFooterView : UITableViewHeaderFooterView <UITextViewDelegate>
+
+@property (nonatomic, strong) UITextView *textView;
+@property (nonatomic, copy) void (^linkHandler)(NSURL *URL);
+
+@end
+
+@implementation ApolloSettingsAttributedFooterView
+
+- (instancetype)initWithReuseIdentifier:(NSString *)reuseIdentifier {
+    self = [super initWithReuseIdentifier:reuseIdentifier];
+    if (!self) return nil;
+
+    self.textView = [UITextView new];
+    self.textView.editable = NO;
+    self.textView.selectable = YES;
+    self.textView.delegate = self;
+    self.textView.scrollEnabled = NO;
+    self.textView.backgroundColor = UIColor.clearColor;
+    self.textView.textContainerInset = UIEdgeInsetsZero;
+    self.textView.textContainer.lineFragmentPadding = 0.0;
+    self.textView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [self.contentView addSubview:self.textView];
+
+    UILayoutGuide *layoutGuide = self.contentView.layoutMarginsGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.textView.topAnchor constraintEqualToAnchor:layoutGuide.topAnchor],
+        [self.textView.leadingAnchor constraintEqualToAnchor:layoutGuide.leadingAnchor],
+        [self.textView.trailingAnchor constraintEqualToAnchor:layoutGuide.trailingAnchor],
+        [self.textView.bottomAnchor constraintEqualToAnchor:layoutGuide.bottomAnchor],
+    ]];
+
+    return self;
+}
+
+- (BOOL)textView:(UITextView *)textView
+    shouldInteractWithURL:(NSURL *)URL
+                   inRange:(NSRange)characterRange
+               interaction:(UITextItemInteraction)interaction {
+    if (self.linkHandler) {
+        self.linkHandler(URL);
+    }
+
+    return NO;
+}
+
+@end
 
 typedef NS_ENUM(NSInteger, ApolloSFRowKind) {
     ApolloSFRowKindSwitch = 0,
@@ -107,6 +157,10 @@ typedef NS_ENUM(NSInteger, ApolloSFRowKind) {
     section.footer = footer;
     section.rows = rows;
     return section;
+}
+
+- (BOOL)isVisible {
+    return self.visible ? self.visible() : YES;
 }
 
 @end
@@ -255,6 +309,11 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
 - (NSArray<NSArray<ApolloSettingsRow *> *> *)computeVisibleRows {
     NSMutableArray *all = [NSMutableArray arrayWithCapacity:_sections.count];
     for (ApolloSettingsSection *section in _sections) {
+        if (!section.isVisible) {
+            [all addObject:@[]];
+            continue;
+        }
+
         NSMutableArray *visible = [NSMutableArray arrayWithCapacity:section.rows.count];
         for (ApolloSettingsRow *row in section.rows) {
             if (row.isVisible) [visible addObject:row];
@@ -404,13 +463,51 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
     return _sections[(NSUInteger)section].title;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
     ApolloSettingsSection *model = _sections[(NSUInteger)section];
     return model.footer;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+    if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
+
+    ApolloSettingsSection *model = _sections[(NSUInteger)section];
+    NSAttributedString *attributedFooter = model.footerAttributedText;
+    if (attributedFooter.length == 0) return nil;
+
+    static NSString * const reuseIdentifier = @"ApolloSettingsAttributedFooterView";
+
+    ApolloSettingsAttributedFooterView *footerView =
+        [tableView dequeueReusableHeaderFooterViewWithIdentifier:reuseIdentifier];
+
+    if (!footerView) {
+        footerView = [[ApolloSettingsAttributedFooterView alloc]
+            initWithReuseIdentifier:reuseIdentifier];
+    }
+
+    footerView.textView.attributedText = attributedFooter;
+    footerView.textView.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    footerView.textView.textColor = UIColor.secondaryLabelColor;
+
+    __weak typeof(self) weakSelf = self;
+    footerView.linkHandler = ^(NSURL *URL) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !URL) return;
+
+        SFSafariViewController *safariVC =
+            [[SFSafariViewController alloc] initWithURL:URL];
+
+        [strongSelf presentViewController:safariVC animated:YES completion:nil];
+    };
+
+    return footerView;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -503,6 +600,23 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
     return row.isSelectable && (!row.enabled || row.enabled());
 }
 
+- (BOOL)tableView:(UITableView *)tableView
+canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
+    return row.onDelete != nil;
+}
+
+- (void)tableView:(UITableView *)tableView
+commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle != UITableViewCellEditingStyleDelete) return;
+
+    ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
+    if (row.onDelete) {
+        row.onDelete();
+    }
+}
+
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -546,9 +660,21 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
 // every header height (55/38pt instead of 45.3) on every form screen.
 - (CGFloat)apollo_sf_fittedHeightForFooterView:(UIView *)view inTableView:(UITableView *)tableView {
     if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return 0.0;
+
+    if ([view isKindOfClass:[ApolloSettingsAttributedFooterView class]]) {
+        ApolloSettingsAttributedFooterView *footerView =
+            (ApolloSettingsAttributedFooterView *)view;
+
+        CGFloat width = CGRectGetWidth(tableView.bounds);
+        if (width <= 0.0) return 0.0;
+
+        return [footerView sizeThatFits:CGSizeMake(width, 0.0)].height;
+    }
+
     if (((UITableViewHeaderFooterView *)view).textLabel.text.length == 0) return 0.0;
     CGFloat width = CGRectGetWidth(tableView.bounds);
     if (width <= 0.0) return 0.0;
+
     return [view sizeThatFits:CGSizeMake(width, 0.0)].height;
 }
 
