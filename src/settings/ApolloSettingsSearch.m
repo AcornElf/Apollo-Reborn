@@ -279,13 +279,9 @@ static NSArray<ApolloSettingsSearchEntry *> *ApolloSettingsSearchBuildIndex(UITr
         if (entry.iconImage) continue;
         UIImage *icon = lookup(entry.title);              // the row/screen's own icon
         if (!icon && entry.breadcrumb.length) {
-            NSArray<NSString *> *crumbs =
-            [entry.breadcrumb componentsSeparatedByString:@" → "];
-
-            icon = lookup(crumbs.lastObject);    // nearest parent page
-            if (!icon && crumbs.count > 1) {
-                icon = lookup(crumbs.firstObject); // top-level page fallback
-            }
+            NSArray<NSString *> *crumbs = [entry.breadcrumb componentsSeparatedByString:@" → "];
+            icon = lookup(crumbs.firstObject);            // top-level parent (General, Apollo Reborn, …)
+            if (!icon && crumbs.count > 1) icon = lookup(crumbs.lastObject); // nearest parent
         }
         entry.iconImage = icon ?: generic;
     }
