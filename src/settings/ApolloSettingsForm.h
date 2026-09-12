@@ -29,6 +29,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef UITableViewCell *_Nonnull (^ApolloSettingsCellBlock)(UITableView *tableView, ApolloSettingsRow *row);
 
+typedef NS_ENUM(NSInteger, ApolloSettingsDisabledSwitchState) {
+    ApolloSettingsDisabledSwitchStatePreserve = 0,
+    ApolloSettingsDisabledSwitchStateOff,
+    ApolloSettingsDisabledSwitchStateOn,
+};
+
 @interface ApolloSettingsRow : NSObject
 
 // A UISwitch row. isOn is re-read on every (re)configure; onToggle runs on
@@ -73,6 +79,10 @@ typedef UITableViewCell *_Nonnull (^ApolloSettingsCellBlock)(UITableView *tableV
 // Control enablement, re-read on every configure. Built-in selectable rows
 // dim and stop accepting selection while disabled. nil == enabled.
 @property (nonatomic, copy, nullable) BOOL (^enabled)(void);
+
+// Visual state for disabled switch rows. Preserve keeps the row's normal
+// isOn value; Off/On explicitly control the displayed state while disabled.
+@property (nonatomic) ApolloSettingsDisabledSwitchState disabledSwitchState;
 
 // Settings-app-style leading icon tile: a white SF symbol on a colored 29pt
 // rounded square (like Settings.app's row icons). Set both or neither.

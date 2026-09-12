@@ -91,6 +91,8 @@
         return [weakSelf translationMarkerAvailable];
     };
 
+    translation.disabledSwitchState = ApolloSettingsDisabledSwitchStateOff;
+
     return @[
         [ApolloSettingsSection sectionWithTitle:@"Magnifier"
                                          footer:@"Hold, slide and release on an icon to activate it."
