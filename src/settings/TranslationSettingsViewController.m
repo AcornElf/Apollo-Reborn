@@ -127,7 +127,6 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     translationMode.configure = ^(UITableViewCell *cell) {
         cell.textLabel.enabled = sEnableBulkTranslation;
         cell.detailTextLabel.textColor = sEnableBulkTranslation ? [UIColor secondaryLabelColor] : [UIColor tertiaryLabelColor];
-        cell.accessoryType = sEnableBulkTranslation ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
         cell.selectionStyle = sEnableBulkTranslation ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     };
 
@@ -166,18 +165,12 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
                                     title:@"Target Language"
                                    detail:^NSString * { return [weakSelf currentTargetLanguageDetailText]; }
                                  onSelect:^{ [weakSelf presentTargetLanguagePicker]; }];
-    targetLanguage.configure = ^(UITableViewCell *cell) {
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    };
 
     ApolloSettingsRow *provider =
         [ApolloSettingsRow valueRowWithID:@"provider"
                                     title:@"Primary Provider"
                                    detail:^NSString * { return [weakSelf providerDetailText]; }
                                  onSelect:^{ [weakSelf presentProviderPicker]; }];
-    provider.configure = ^(UITableViewCell *cell) {
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    };
 
     // Don't Translate — one row per currently-skipped language, in the order
     // they were added, plus the trailing "Add Language…" row. Adds/removes
@@ -219,9 +212,6 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
         [ApolloSettingsRow buttonRowWithID:@"skipAdd"
                                      title:@"Add Language…"
                                     action:^{ [weakSelf presentSkipLanguageSheetFromSourceView:[weakSelf cellForRowID:@"skipAdd"]]; }];
-    addLanguage.configure = ^(UITableViewCell *cell) {
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    };
     [skipRows addObject:addLanguage];
 
     ApolloSettingsRow *libreURL =
