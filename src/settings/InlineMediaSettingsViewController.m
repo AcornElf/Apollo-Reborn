@@ -895,7 +895,6 @@ static BOOL ApolloIMViewIsInSlider(UIView *view) {
 
 - (UITableViewCell *)valueCellLabel:(NSString *)label detail:(NSString *)detail enabled:(BOOL)enabled {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle = enabled ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     cell.textLabel.text = label;
     cell.textLabel.enabled = enabled;
