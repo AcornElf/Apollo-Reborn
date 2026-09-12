@@ -1619,17 +1619,13 @@ typedef NS_ENUM(NSInteger, Tag) {
     }
 
     if (sInfoRowTapUpvote) {
-        [parts addObject:@"Upvote on Release"]
+        [parts addObject:@"Upvote on Release"];
     }
 
     if (sInfoRowOverlayMode) {
         [parts addObject:@"Timestamp Overlay"];
     } else if (sInfoRowPopupMode) {
         [parts addObject:@"Timestamp Pop-Up"];
-    }
-
-    if (sInfoRowTapUpvote) {
-        [parts addObject:@"Upvote"];
     }
 
     if (sInfoRowTapComments) {
