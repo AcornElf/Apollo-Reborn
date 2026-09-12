@@ -159,6 +159,10 @@ typedef NS_ENUM(NSInteger, ApolloSFRowKind) {
     return section;
 }
 
+- (BOOL)isVisible {
+    return self.visible ? self.visible() : YES;
+}
+
 @end
 
 #pragma mark - Icon tiles
@@ -260,6 +264,11 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
 - (NSArray<NSArray<ApolloSettingsRow *> *> *)computeVisibleRows {
     NSMutableArray *all = [NSMutableArray arrayWithCapacity:_sections.count];
     for (ApolloSettingsSection *section in _sections) {
+        if (!section.isVisible) {
+            [all addObject:@[]];
+            continue;
+        }
+
         NSMutableArray *visible = [NSMutableArray arrayWithCapacity:section.rows.count];
         for (ApolloSettingsRow *row in section.rows) {
             if (row.isVisible) [visible addObject:row];
@@ -409,17 +418,20 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
     return _sections[(NSUInteger)section].title;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
     ApolloSettingsSection *model = _sections[(NSUInteger)section];
     return model.footer;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
     if ((NSUInteger)section >= _sections.count) return nil;
+    if ([self tableView:tableView numberOfRowsInSection:section] == 0) return nil;
 
     ApolloSettingsSection *model = _sections[(NSUInteger)section];
     NSAttributedString *attributedFooter = model.footerAttributedText;

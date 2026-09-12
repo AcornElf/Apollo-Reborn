@@ -282,12 +282,33 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"General"
                                          footer:@"Translates comments and post titles in place.\n\nAutomatic translates on open. Tap to Translate adds a per-item tap. On Demand waits for the globe.\n\nDetails rows add \"Translated from …\" labels.\n\nGoogle is free but rate-limits heavy use. Apple is offline and unlimited (iOS 18+). Microsoft and LibreTranslate need their own keys, set up below."
-                                           rows:@[ enableBulk, translationMode, translateTitles, showDetails, titleDetails, markerColor, targetLanguage, provider ]]];
+                                           rows:@[
+        enableBulk,
+        translationMode,
+        translateTitles,
+        showDetails,
+        titleDetails,
+        markerColor,
+        targetLanguage,
+        provider
+    ]]];
 
-    [sections addObject:
+    translationMode.visible = ^BOOL { return sEnableBulkTranslation; };
+    translateTitles.visible = ^BOOL { return sEnableBulkTranslation; };
+    showDetails.visible     = ^BOOL { return sEnableBulkTranslation; };
+    titleDetails.visible    = ^BOOL { return sEnableBulkTranslation; };
+    markerColor.visible     = ^BOOL { return sEnableBulkTranslation; };
+    targetLanguage.visible  = ^BOOL { return sEnableBulkTranslation; };
+    provider.visible        = ^BOOL { return sEnableBulkTranslation; };
+
+    ApolloSettingsSection *excludeSection =
         [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
-                                         footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
-                                           rows:skipRows]];
+                                        footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
+                                        rows:skipRows];
+
+    excludeSection.visible = ^BOOL { return sEnableBulkTranslation; };
+
+    [sections addObject:excludeSection];
 
     // Apollo's own Translate button (the native action-sheet item on comment/post
     // long-press) is unrelated to the bulk pipeline above, so it gets its own
@@ -314,10 +335,15 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 
     #endif
 
-    [sections addObject:
+    ApolloSettingsSection *microsoftSection =
         [ApolloSettingsSection sectionWithTitle:@"Microsoft"
                                          footer:@"A free Azure key provides 2 million characters of translation per month.\n\nGo to the Azure portal and create a Translator resource on the F0 plan, then paste the key here.\n\nSet Region to the resource's location; for Global, leave it empty."
-                                           rows:@[ microsoftAPIKey, microsoftRegion ]]];
+                                           rows:@[ microsoftAPIKey, microsoftRegion ]];
+
+    microsoftSection.visible = ^BOOL { return sEnableBulkTranslation; };
+
+    [sections addObject:microsoftSection];
+
     NSString *libreFooterText =
     @"A key is required - the free public instances have shut down. Get a key at portal.libretranslate.com, or point the URL to your own server, which needs no key.";
 
@@ -340,6 +366,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     ]];
 
     libreTranslateSection.footerAttributedText = libreFooter;
+    libreTranslateSection.visible = ^BOOL { return sEnableBulkTranslation; };
 
     [sections addObject:libreTranslateSection];
 
@@ -899,12 +926,8 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     sEnableBulkTranslation = sender.isOn;
     [[NSUserDefaults standardUserDefaults] setBool:sEnableBulkTranslation forKey:UDKeyEnableBulkTranslation];
 
-    // Re-read every dependent row's enabled/on state.
-    [self reloadRowWithID:@"translationMode"];
-    [self reloadRowWithID:@"translateTitles"];
-    [self reloadRowWithID:@"showDetails"];
-    [self reloadRowWithID:@"titleDetails"];
-    [self reloadRowWithID:@"markerColor"];
+    [self visibilityDidChange];
+
     [[NSNotificationCenter defaultCenter] postNotificationName:ApolloRichPreviewTranslationDidUpdateNotification object:nil userInfo:ApolloRichPreviewSettingsChangeUserInfo()];
 }
 
