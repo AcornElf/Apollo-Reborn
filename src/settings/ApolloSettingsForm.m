@@ -658,9 +658,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (row.onSelect) row.onSelect();
 }
 
-- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    ApolloSettingsRow *row = [self apollo_sf_rowAtIndexPath:indexPath];
-    return row.height ? row.height() : tableView.rowHeight;
+- (CGFloat)tableView:(UITableView *)tableView
+heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return 56.0;
 }
 
 #pragma mark section footer heights
@@ -741,6 +741,61 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 #pragma mark - Shared picker
 
+@interface ApolloSettingsPickerTableViewController : UITableViewController
+
+@property (nonatomic, copy) NSArray<NSString *> *optionTitles;
+@property (nonatomic, assign) NSInteger currentIndex;
+@property (nonatomic, copy) void (^apply)(NSInteger pickedIndex);
+
+@end
+
+@implementation ApolloSettingsPickerTableViewController
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return self.optionTitles.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"OptionPickerCell"];
+
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                      reuseIdentifier:@"OptionPickerCell"];
+    }
+
+    cell.textLabel.text = self.optionTitles[(NSUInteger)indexPath.row];
+    cell.textLabel.font = [UIFont systemFontOfSize:19.0];
+    cell.textLabel.textColor = UIColor.systemBlueColor;
+    cell.backgroundColor = UIColor.clearColor;
+
+    if (indexPath.row == self.currentIndex) {
+        cell.accessoryView =
+            [[UIImageView alloc] initWithImage:
+                [UIImage imageNamed:@"ios-13-checkmark"]];
+    } else {
+        cell.accessoryView = nil;
+    }
+
+    if (indexPath.row == self.currentIndex) {
+        cell.accessoryView = [[UIImageView alloc] initWithImage:
+            [UIImage imageNamed:@"ios-13-checkmark"]];
+    } else {
+        cell.accessoryView = nil;
+    }
+
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (self.apply) {
+        self.apply(indexPath.row);
+    }
+}
+
+@end
+
 void ApolloSettingsPresentPicker(UIViewController *presenter,
                                  UIView *sourceView,
                                  NSString *title,
@@ -750,25 +805,58 @@ void ApolloSettingsPresentPicker(UIViewController *presenter,
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:title
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSInteger i = 0; i < (NSInteger)optionTitles.count; i++) {
-        NSString *optionTitle = (i == currentIndex)
-            ? [optionTitles[(NSUInteger)i] stringByAppendingString:@" (Current)"]
-            : optionTitles[(NSUInteger)i];
-        [sheet addAction:[UIAlertAction actionWithTitle:optionTitle
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction *action) {
-            // Fires even when the current option is re-picked: every legacy sheet
-            // did (their handlers re-write + re-notify, and some rely on it — e.g.
-            // re-picking the current provider still marks it user-selected), so
-            // apply blocks must be idempotent.
-            if (apply) apply(i);
-        }]];
+    if (UITraitCollection.currentTraitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+    sheet.view.backgroundColor =
+        [UIColor colorWithRed:19.0 / 255.0
+                        green:21.0 / 255.0
+                         blue:22.0 / 255.0
+                        alpha:1.0];
     }
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+
+    if (title.length > 0) {
+        NSMutableAttributedString *attributedTitle =
+            [[NSMutableAttributedString alloc] initWithString:title];
+
+        [attributedTitle addAttribute:NSFontAttributeName
+                                value:[UIFont systemFontOfSize:12.0]
+                                range:NSMakeRange(0, attributedTitle.length)];
+
+        [attributedTitle addAttribute:NSForegroundColorAttributeName
+                                value:UIColor.secondaryLabelColor
+                                range:NSMakeRange(0, attributedTitle.length)];
+
+        [sheet setValue:attributedTitle forKey:@"attributedTitle"];
+    }
+
+    ApolloSettingsPickerTableViewController *tableController =
+    [[ApolloSettingsPickerTableViewController alloc] initWithStyle:UITableViewStylePlain];
+
+    tableController.tableView.scrollEnabled = NO;
+    tableController.tableView.showsVerticalScrollIndicator = NO;
+    tableController.tableView.backgroundColor = UIColor.clearColor;
+    tableController.optionTitles = optionTitles;
+    tableController.currentIndex = currentIndex;
+    tableController.apply = ^(NSInteger pickedIndex) {
+        if (apply) apply(pickedIndex);
+        [sheet dismissViewControllerAnimated:YES completion:nil];
+    };
+
+    // Size the embedded table to fit all options.
+    CGFloat rowHeight = 56.0;
+    tableController.preferredContentSize =
+        CGSizeMake(0, rowHeight * optionTitles.count);
+
+    [sheet setValue:tableController forKey:@"contentViewController"];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+
     // iPad popover anchoring; fall back to the presenter's view center.
     UIView *anchor = sourceView ?: presenter.view;
     sheet.popoverPresentationController.sourceView = anchor;
     sheet.popoverPresentationController.sourceRect = sourceView ? sourceView.bounds
         : CGRectMake(CGRectGetMidX(anchor.bounds), CGRectGetMidY(anchor.bounds), 1, 1);
+
     [presenter presentViewController:sheet animated:YES completion:nil];
 }
