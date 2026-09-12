@@ -185,6 +185,7 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
         [[UITapGestureRecognizer alloc] initWithTarget:self
                                                 action:@selector(dismissKeyboard)];
     tapGesture.cancelsTouchesInView = NO;
+    tapGesture.delegate = self;
     [self.view addGestureRecognizer:tapGesture];
     // Let standard cells grow for Dynamic Type and long localized labels.
     // Returning UITableViewAutomaticDimension from the delegate below keeps
