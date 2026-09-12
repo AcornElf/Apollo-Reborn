@@ -291,14 +291,14 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     targetLanguage.visible  = ^BOOL { return sEnableBulkTranslation; };
     provider.visible        = ^BOOL { return sEnableBulkTranslation; };
 
-    ApolloSettingsSection *excludeSection =
-        [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
-                                        footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
-                                        rows:skipRows];
+    if (sEnableBulkTranslation) {
+        ApolloSettingsSection *excludeSection =
+            [ApolloSettingsSection sectionWithTitle:@"Exclude from Automatic Translation"
+                                         footer:@"Languages listed here will be left untranslated; mixed-language text will still be translated."
+                                          rows:skipRows];
 
-    excludeSection.visible = ^BOOL { return sEnableBulkTranslation; };
-
-    [sections addObject:excludeSection];
+        [sections addObject:excludeSection];
+    }
 
     // Apollo's own Translate button (the native action-sheet item on comment/post
     // long-press) is unrelated to the bulk pipeline above, so it gets its own
