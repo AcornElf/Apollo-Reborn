@@ -107,6 +107,7 @@ typedef UITableViewCell *_Nonnull (^ApolloSettingsCellBlock)(UITableView *tableV
 @property (nonatomic, copy, nullable) NSString *footer;
 @property (nonatomic, copy, nullable) NSAttributedString *footerAttributedText;
 @property (nonatomic, copy, readonly) NSArray<ApolloSettingsRow *> *rows;
+@property (nonatomic, copy, nullable) BOOL (^visible)(void);
 
 @end
 
