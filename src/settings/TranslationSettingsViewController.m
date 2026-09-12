@@ -287,7 +287,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
         [NSMutableString stringWithString:@"Show “Translated from” labels and language indicators."];
 
     if ([self currentTranslationMode] == TranslationModeTapToTranslate) {
-        [translationDetailsFooter appendString:@"\n\nRequired while Tap to Translate is turned on."];
+        [translationDetailsFooter appendString:@" Required while Tap to Translate is turned on."];
     }
 
     if (!sTranslationMarkerUseThemeColor) {
@@ -709,6 +709,8 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     [self reloadRowWithID:@"translationMode"];
     [self reloadRowWithID:@"showDetails"];
     [self reloadRowWithID:@"titleDetails"];
+    [self rebuildSectionContainingRowID:@"showDetails"
+                   withRowAnimation:UITableViewRowAnimationNone];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ApolloShowTranslationDetailsChanged" object:nil];
     [[NSNotificationCenter defaultCenter] postNotificationName:ApolloRichPreviewTranslationDidUpdateNotification object:nil userInfo:ApolloRichPreviewSettingsChangeUserInfo()];
 }
@@ -969,6 +971,8 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 - (void)markerColorSwitchToggled:(UISwitch *)sender {
     sTranslationMarkerUseThemeColor = sender.isOn;
     [[NSUserDefaults standardUserDefaults] setBool:sTranslationMarkerUseThemeColor forKey:UDKeyTranslationMarkerUseThemeColor];
+    [self rebuildSectionContainingRowID:@"showDetails"
+                   withRowAnimation:UITableViewRowAnimationNone];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ApolloShowTranslationDetailsChanged" object:nil];
     [[NSNotificationCenter defaultCenter] postNotificationName:ApolloRichPreviewTranslationDidUpdateNotification object:nil userInfo:ApolloRichPreviewSettingsChangeUserInfo()];
 }
