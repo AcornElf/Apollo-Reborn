@@ -4060,7 +4060,7 @@ static BOOL ApolloDefaultsKeyChangesNativeFavorites(NSString *key) {
     sTabBarHideStyle = (ApolloTabBarHideStyle)storedTabBarHideStyle;
     sKeepSearchBarInPlace = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyKeepSearchBarInPlace];
     sIPadTabBarBottom = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIPadTabBarBottom];
-    sIconRowMagnifier = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIconRowMagnifier];
+    sInfoRowMagnifier = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIconRowMagnifier];
     sInfoRowTapUpvote = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapUpvote];
     sInfoRowTapComments = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapComments];
     sInfoRowPopupMode = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowPopupMode];

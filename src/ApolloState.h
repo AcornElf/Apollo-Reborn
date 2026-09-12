@@ -198,7 +198,7 @@ extern BOOL sKeepSearchBarInPlace;
 // When ON (default), press-and-hold on a post info row shows the glass-slider
 // magnifier loupe: slide to pick an icon, release to activate it (upvote /
 // comments / posted / % upvoted / translation). See ApolloStatsRowTouch.xm.
-extern BOOL sIconRowMagnifier;
+extern BOOL sInfoRowMagnifier;
 // Info Row settings sub-screen switches. Disabled icons still appear in the
 // magnifier loupe but do nothing on release. Disabled direct taps keep Apollo's
 // stock behavior instead of being consumed by the tweak.
