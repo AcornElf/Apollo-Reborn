@@ -396,7 +396,11 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
     for (NSUInteger s = 0; s < _sections.count; s++) {
         for (ApolloSettingsRow *row in _sections[s].rows) {
             if ([row.rowID isEqualToString:rowID]) {
-                [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:s] withRowAnimation:animation];
+                [UIView performWithoutAnimation:^{
+                    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:s]
+                                withRowAnimation:animation];
+                    [self.tableView layoutIfNeeded];
+                 }];
                 return;
             }
         }
