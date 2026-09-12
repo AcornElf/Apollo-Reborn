@@ -291,17 +291,20 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     }
 
     if (!sTranslationMarkerUseThemeColor) {
-        [translationDetailsFooter appendString:@"\nUse the active theme’s accent color instead of green."];
+        [translationDetailsFooter appendString:@"\n\nUse the active theme’s accent color instead of green."];
     }
 
-    [sections addObject:
-        [ApolloSettingsSection sectionWithTitle:@"Translation Details"
-                                        footer:translationDetailsFooter
-                                        rows:@[
-        showDetails,
-        titleDetails,
-        markerColor
-    ]]];
+    //Hide Translation Details when Show On Demand is selected
+    if ([self currentTranslationMode] != TranslationModeOnDemand) {
+        [sections addObject:
+            [ApolloSettingsSection sectionWithTitle:@"Translation Details"
+                                            footer:translationDetailsFooter
+                                            rows:@[
+            showDetails,
+            titleDetails,
+            markerColor
+        ]]];
+    }
 
     [sections addObject:
     [ApolloSettingsSection sectionWithTitle:@"Language & Provider"
