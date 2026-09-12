@@ -239,8 +239,6 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 52.0;
     [self rebuildForm];
-    self.tableView.allowsSelectionDuringEditing = YES;
-    [self.tableView setEditing:YES animated:NO];
 }
 
 - (void)rebuildForm {
