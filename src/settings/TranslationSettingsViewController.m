@@ -142,14 +142,14 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     ApolloSettingsRow *showDetails =
         [ApolloSettingsRow switchRowWithID:@"showDetails"
                                      title:@"Details on Comments & Posts"
-                                      isOn:^BOOL { return sShowTranslationDetails && sEnableBulkTranslation && !sTapToTranslate; }
+                                      isOn:^BOOL { return sTapToTranslate ? YES : (sShowTranslationTitleDetails && sEnableBulkTranslation); }
                                   onToggle:^(UISwitch *sender) { [weakSelf showTranslationDetailsSwitchToggled:sender]; }];
     showDetails.enabled = ^BOOL { return sEnableBulkTranslation && !sTapToTranslate; };
 
     ApolloSettingsRow *titleDetails =
         [ApolloSettingsRow switchRowWithID:@"titleDetails"
                                      title:@"Details on Titles"
-                                      isOn:^BOOL { return sShowTranslationTitleDetails && sEnableBulkTranslation && !sTapToTranslate; }
+                                      isOn:^BOOL { return sTapToTranslate ? YES : (sShowTranslationTitleDetails && sEnableBulkTranslation); }
                                   onToggle:^(UISwitch *sender) { [weakSelf showTranslationTitleDetailsSwitchToggled:sender]; }];
     titleDetails.enabled = ^BOOL { return sEnableBulkTranslation && !sTapToTranslate; };
 
@@ -273,9 +273,9 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
         [ApolloSettingsSection sectionWithTitle:@"General"
                                          footer:(sEnableBulkTranslation
                                               ? @"Translation Mode determines how translations are displayed:\n\n"
-                                                "  •  Automatic - Shows translations by default. Tap the globe to show the original language.\n\n"
-                                                "  •  Show on Demand - Shows the original language by default. Tap the globe to show translations.\n\n"
-                                                "  •  Tap to Translate - Shows the original language by default, with a Translate option below supported comments."
+                                                "  •  Automatic: Shows translations by default. Tap the globe to show the original language.\n"
+                                                "  •  Show on Demand: Shows the original language by default. Tap the globe to show translations.\n"
+                                                "  •  Tap to Translate: Shows the original language by default, with a Translate option below supported comments."
                                               : nil)
                                        rows:@[
         enableBulk,
@@ -291,7 +291,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     }
 
     if (!sTranslationMarkerUseThemeColor) {
-        [translationDetailsFooter appendString:@"\n\nUse the active theme’s accent color instead of green."];
+        [translationDetailsFooter appendString:@"\nUse the active theme’s accent color instead of green."];
     }
 
     [sections addObject:
