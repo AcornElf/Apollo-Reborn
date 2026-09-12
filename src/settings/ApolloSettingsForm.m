@@ -386,8 +386,27 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
             }
             cell.textLabel.text = row.title;
             cell.textLabel.numberOfLines = 0;
-            toggle.on = row.isOn ? row.isOn() : NO;
             BOOL enabled = row.enabled ? row.enabled() : YES;
+
+            BOOL isOn = row.isOn ? row.isOn() : NO;
+
+            if (!enabled) {
+                switch (row.disabledSwitchState) {
+                    case ApolloSettingsDisabledSwitchStateOff:
+                        isOn = NO;
+                        break;
+
+                    case ApolloSettingsDisabledSwitchStateOn:
+                        isOn = YES;
+                        break;
+
+                    case ApolloSettingsDisabledSwitchStatePreserve:
+                    default:
+                        break;
+                }
+            }
+
+            toggle.on = isOn;            
             toggle.enabled = enabled;
             toggle.accessibilityLabel = row.title;
             cell.textLabel.enabled = enabled;
