@@ -22,7 +22,7 @@
 - (BOOL)translationMarkerAvailable {
     return sEnableBulkTranslation
         && sTranslatePostTitles
-        && [self currentTranslationMode] != TranslationModeManual;
+        && (sTapToTranslate || sAutoTranslateOnAppear);
 }
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
