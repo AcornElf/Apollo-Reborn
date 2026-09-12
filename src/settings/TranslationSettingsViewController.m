@@ -271,14 +271,42 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     NSMutableArray<ApolloSettingsSection *> *sections = [NSMutableArray array];
     [sections addObject:
         [ApolloSettingsSection sectionWithTitle:@"General"
-                                         footer:@"Translates comments and post titles in place.\n\nAutomatic translates on open. Tap to Translate adds a per-item tap. On Demand waits for the globe.\n\nDetails rows add \"Translated from …\" labels.\n\nGoogle is free but rate-limits heavy use. Apple is offline and unlimited (iOS 18+). Microsoft and LibreTranslate need their own keys, set up below."
-                                           rows:@[
+                                         footer:(sEnableBulkTranslation
+                                              ? @"Translation Mode determines how translations are displayed:\n\n"
+                                                "  •  Automatic - Shows translations by default. Tap the globe to show the original language.\n\n"
+                                                "  •  Show on Demand - Shows the original language by default. Tap the globe to show translations.\n\n"
+                                                "  •  Tap to Translate - Shows the original language by default, with a Translate option below supported comments."
+                                              : nil)
+                                       rows:@[
         enableBulk,
         translationMode,
-        translateTitles,
+        translateTitles
+    ]]];
+
+    NSMutableString *translationDetailsFooter =
+        [NSMutableString stringWithString:@"Show “Translated from” labels and language indicators."];
+
+    if ([self currentTranslationMode] == TranslationModeTapToTranslate) {
+        [translationDetailsFooter appendString:@"\n\nRequired while Tap to Translate is turned on."];
+    }
+
+    if (!sTranslationMarkerUseThemeColor) {
+        [translationDetailsFooter appendString:@"\n\nUse the active theme’s accent color instead of green."];
+    }
+
+    [sections addObject:
+        [ApolloSettingsSection sectionWithTitle:@"Translation Details"
+                                        footer:translationDetailsFooter
+                                        rows:@[
         showDetails,
         titleDetails,
-        markerColor,
+        markerColor
+    ]]];
+
+    [sections addObject:
+    [ApolloSettingsSection sectionWithTitle:@"Language & Provider"
+                                     footer:nil
+                                       rows:@[
         targetLanguage,
         provider
     ]]];
