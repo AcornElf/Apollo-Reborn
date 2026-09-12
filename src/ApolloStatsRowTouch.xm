@@ -13,7 +13,7 @@
 //      under the nav bar — the "Discussion so far" summary and the comments follow
 //      right below it. The bubble also gets a comfortable tap target.
 //
-//   2. Press-and-hold magnifier (sIconRowMagnifier) — added in a later section.
+//   2. Press-and-hold magnifier (sInfoRowMagnifier) — added in a later section.
 //
 // Design notes:
 //   * The info-row buttons (pointsButtonNode / commentsInfoNode / ageButtonNode)
@@ -814,7 +814,7 @@ static void SRTWireCornerFailureRequirements(UIGestureRecognizer *loupe, UIView 
     NSNumber *type = objc_getAssociatedObject(gr, kSRTGestureTypeKey);
     if (!cell) return NO;
     if (type.integerValue == kSRTGestureTypeLoupe) {
-        if (!sIconRowMagnifier) return NO;
+        if (!sInfoRowMagnifier) return NO;
         // Take the touch only where the loupe owns it (in the row band, not on
         // a subreddit/author/••• neighbour); anywhere else everything — context
         // menu included — behaves stock.
@@ -932,7 +932,7 @@ static const CGFloat kSRTHoldMaxTravel  = 40.0;
     if (type.integerValue == kSRTGestureTypeCommentTap) return [self srtCommentTapShouldBegin:gr];
     if (type.integerValue != kSRTGestureTypeLoupe) return YES;
     id cell = SRTCellForGesture(gr);
-    if (!sIconRowMagnifier || !cell) return NO;
+    if (!sInfoRowMagnifier || !cell) return NO;
 
     // The feed is already scrolling under this touch — that's a swipe, not a hold.
     UIView *cellView = nil;
@@ -978,7 +978,7 @@ static const CGFloat kSRTHoldMaxTravel  = 40.0;
 // for the loupe to fail (which it does instantly outside the strip).
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr
         shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
-    if (!sIconRowMagnifier) return NO;   // feature off -> never touch the context menu
+    if (!sInfoRowMagnifier) return NO;   // feature off -> never touch the context menu
     NSNumber *type = objc_getAssociatedObject(gr, kSRTGestureTypeKey);
     if (type.integerValue != kSRTGestureTypeLoupe) return NO;
     if (objc_getAssociatedObject(other, kSRTGestureTypeKey)) return NO;   // our own gestures
@@ -1055,7 +1055,7 @@ static const CGFloat kSRTCancelSlopY = 64.0;
 
     switch (gr.state) {
         case UIGestureRecognizerStateBegan: {
-            if (!sIconRowMagnifier) return;
+            if (!sInfoRowMagnifier) return;
             NSArray<ApolloSRTTarget *> *targets = SRTTargetsForCell(cell, cellView);
             UIView *host = cellView.window;
             if (targets.count == 0 || !host) return;
@@ -1433,7 +1433,7 @@ static void SRTScheduleTick(__weak UIViewController *weakVC, long gen, NSDate *d
 // nil only where the loupe would claim the press (SRTPointClaimedForLoupe) and
 // the magnifier is on; everywhere else %orig runs and the menu behaves stock.
 static BOOL SRTShouldSuppressMenu(id interaction, CGPoint location) {
-    if (!sIconRowMagnifier) return NO;
+    if (!sInfoRowMagnifier) return NO;
     UIView *iview = nil;
     @try { if ([interaction respondsToSelector:@selector(view)]) iview = [interaction view]; } @catch (__unused id e) {}
     if (![iview isKindOfClass:[UIView class]]) return NO;

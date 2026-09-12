@@ -1635,11 +1635,11 @@ typedef NS_ENUM(NSInteger, Tag) {
 // needs an identity-based reload of the hub row.
 - (NSString *)infoRowSummaryText {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    if (sIconRowMagnifier) {
+    if (sInfoRowMagnifier) {
         [parts addObject:@"Magnifier"];
     }
 
-    if (sInfoRowTapUpvote) {
+    if (sInfoRowMagnifier && sInfoRowTapUpvote) {
         [parts addObject:@"Upvote on Release"];
     }
 

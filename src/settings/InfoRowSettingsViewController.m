@@ -31,9 +31,9 @@
     ApolloSettingsRow *magnifier =
         [ApolloSettingsRow switchRowWithID:@"infoRow.magnifier"
                                      title:@"Magnify Info Row on Hold"
-                                      isOn:^BOOL { return sIconRowMagnifier; }
+                                      isOn:^BOOL { return sInfoRowMagnifier; }
                                   onToggle:^(UISwitch *sender) {
-        sIconRowMagnifier = sender.isOn;
+        sInfoRowMagnifier = sender.isOn;
         [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyIconRowMagnifier];
         [self visibilityDidChange];
         ApolloLog(@"[InfoRowSettings] magnifier=%d", sender.isOn);
