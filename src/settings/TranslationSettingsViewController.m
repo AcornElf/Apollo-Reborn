@@ -616,8 +616,8 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
     [defaults setBool:sTapToTranslate forKey:UDKeyTapToTranslate];
     [defaults setBool:sAutoTranslateOnAppear forKey:UDKeyAutoTranslateOnAppear];
 
-    // Tap mode changes the enabled state of the two Details rows, plus this
-    // row's own detail text.
+    // Translation mode changes the enabled state of the two Details rows,
+    // plus this row's own detail text.
     [self reloadRowWithID:@"translationMode"];
     [self reloadRowWithID:@"showDetails"];
     [self reloadRowWithID:@"titleDetails"];
