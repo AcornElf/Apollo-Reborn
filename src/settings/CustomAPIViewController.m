@@ -3466,6 +3466,7 @@ BOOL isNotificationBackend =
     UITextView *textView = [[ApolloFooterLinkTextView alloc] init];
     textView.editable = NO;
     textView.scrollEnabled = NO;
+    textView.delegate = self;
     textView.backgroundColor = [UIColor clearColor];
     textView.textContainerInset = UIEdgeInsetsMake(8, 16, 8, 16);
     textView.tintColor = [self apollo_themeAccentColor];
