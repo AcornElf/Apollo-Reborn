@@ -2935,6 +2935,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 
             UIToolbar *toolbar = [[UIToolbar alloc] init];
             [toolbar sizeToFit];
+            toolbar.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
 
             UIBarButtonItem *flexibleSpace =
                 [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
