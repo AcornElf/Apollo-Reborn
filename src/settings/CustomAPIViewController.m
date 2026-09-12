@@ -2607,6 +2607,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
                                         SFSafariViewController *safariVC = [[SFSafariViewController alloc] initWithURL:url];
                                         [weakSelf presentViewController:safariVC animated:YES completion:nil];
 }];
+
     ApolloSettingsRow *installBark = nil;
     if (![[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:@"bark://"]]) {
         installBark =
@@ -3402,6 +3403,7 @@ BOOL isNotificationBackend =
             }
 
             return text;
+
     } else if ([sectionTitle isEqualToString:@"Setup"]) {
         // Onboarding nudge (replaces the old Get Started card): with no Reddit
         // key, sign-in can't happen, and the key field is now one level down
@@ -4045,7 +4047,18 @@ static NSDictionary *ApolloWidgetAccountCredentials(void) {
 - (void)barkNotificationsSwitchToggled:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:UDKeyBarkNotificationsEnabled];
     [self visibilityDidChange];
-    
+        [self.tableView setNeedsLayout];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.tableView) {
+            NSIndexPath *notificationBackendIndexPath = [self indexPathForRowID:@"notif.url"];
+            if (notificationBackendIndexPath) {
+                NSIndexSet *sections = [NSIndexSet indexSetWithIndex:notificationBackendIndexPath.section];
+                [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationAutomatic];
+            }
+        }
+    });
+
     if (self.tableView) {
         NSIndexPath *notificationBackendIndexPath = [self indexPathForRowID:@"notif.url"];
         if (notificationBackendIndexPath) {
