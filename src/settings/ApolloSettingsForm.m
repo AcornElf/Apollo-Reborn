@@ -199,6 +199,11 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     [self.view endEditing:YES];
 }
 
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+
 - (void)rebuildForm {
     _sections = [self buildForm] ?: @[];
     _visibleRows = [self computeVisibleRows];
