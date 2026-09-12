@@ -278,6 +278,11 @@ static NSArray<ApolloSettingsSearchEntry *> *ApolloSettingsSearchBuildIndex(UITr
     for (ApolloSettingsSearchEntry *entry in entries) {
         if (entry.iconImage) continue;
         UIImage *icon = lookup(entry.title);              // the row/screen's own icon
+        // Reborn rows know their parent screen directly via routeId.
+        if (!icon && entry.routeId.length) {
+            icon = lookup(ApolloSettingsRouteTitle(entry.routeId));
+        }
+
         if (!icon && entry.breadcrumb.length) {
             NSArray<NSString *> *crumbs = [entry.breadcrumb componentsSeparatedByString:@" → "];
             icon = lookup(crumbs.firstObject);            // top-level parent (General, Apollo Reborn, …)
