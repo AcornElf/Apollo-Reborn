@@ -161,7 +161,7 @@ static char kApolloFeedHeroNodeKey;
 // Apollo's standard large-cell horizontal content margin (matches the feed
 // search bar and the title/body text), so the rounded hero lines up with the
 // rest of the cell instead of bleeding to the screen edge.
-static const CGFloat kApolloFeedHeroSideInset = 16.0;
+static const CGFloat kApolloFeedHeroSideInset = 0.0;
 
 // Associated-object on the hero node: the RDKLink it currently displays
 // (updated every layout pass — cells get reused for different links).
@@ -900,7 +900,7 @@ static void ApolloFeedReapplyCleanup(id node, BOOL triggerLayout) {
             @try {
                 hero.contentMode = UIViewContentModeScaleAspectFill;
                 hero.clipsToBounds = YES;
-                hero.cornerRadius = 10.0;
+                hero.cornerRadius = 0.0;
                 // Keep the reserved hero area transparent so it blends with the
                 // post card (any theme) instead of flashing a bright/grey box
                 // while the image downloads.
