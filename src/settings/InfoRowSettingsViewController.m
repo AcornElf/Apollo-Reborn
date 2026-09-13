@@ -20,9 +20,11 @@
 }
 
 - (BOOL)translationMarkerAvailable {
-    return sEnableBulkTranslation
-        && sTranslatePostTitles
-        && (sTapToTranslate || sAutoTranslateOnAppear);
+    if (!sEnableBulkTranslation) {
+        return NO;
+    }
+
+    return sTapToTranslate || sShowTranslationTitleDetails || sShowTranslationDetails;
 }
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
