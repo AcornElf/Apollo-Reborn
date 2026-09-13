@@ -393,18 +393,6 @@ static BOOL ApolloSubredditSectionsPreviewPinnedPreference(void) {
 
 @implementation ApolloSubredditSectionsFormViewController
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    // Drag & drop powers the Section Order rows' reordering (long-press a row,
-    // then drag). Scoped hard to that section by the drag delegate + drop
-    // proposal; every other row refuses to lift. This keeps UISwitch rows
-    // fully functional (a persistent editing mode would hide their
-    // accessoryViews).
-    self.tableView.dragInteractionEnabled = YES;
-    self.tableView.dragDelegate = self;
-    self.tableView.dropDelegate = self;
-}
-
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak typeof(self) weakSelf = self;
 
@@ -462,11 +450,7 @@ static BOOL ApolloSubredditSectionsPreviewPinnedPreference(void) {
         if (!cell) {
             cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseID];
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
-            UIImageView *grip = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.horizontal.3"]];
-            grip.tintColor = UIColor.tertiaryLabelColor;
-            grip.contentMode = UIViewContentModeScaleAspectFit;
-            cell.accessoryView = grip;
-            [grip sizeToFit];
+            cell.showsReorderControl = YES;
         }
         cell.textLabel.text = ApolloSubredditSectionDisplayName(token);
         return cell;
@@ -805,6 +789,14 @@ static BOOL ApolloSubredditSectionsPreviewPinnedPreference(void) {
 - (void)viewWillDisappear:(BOOL)animated {
     [self apollo_finishPreviewTransition];
     [super viewWillDisappear:animated];
+}
+
+- (void)tableView:(UITableView *)tableView
+    willDisplayCell:(UITableViewCell *)cell
+    forRowAtIndexPath:(NSIndexPath *)indexPath {
+
+    cell.showsReorderControl =
+        [self tableView:tableView canMoveRowAtIndexPath:indexPath];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
