@@ -379,6 +379,8 @@ static ApolloSubredditSectionsPreviewState *ApolloSubredditSectionsCurrentPrevie
 @property (nonatomic, strong) ApolloSubredditSectionsPreviewView *currentPreviewView;
 @property (nonatomic, strong) UIViewPropertyAnimator *previewAnimator;
 @property (nonatomic) NSUInteger previewTransitionGeneration;
+//Test section
+@property (nonatomic, strong) NSMutableArray<NSString *> *nativeReorderTestItems;
 @property (nonatomic) BOOL previewRefreshPending;
 - (void)apollo_refreshPreviewAnimated:(BOOL)animated;
 - (void)apollo_formDidScroll:(UIScrollView *)scrollView;
