@@ -980,7 +980,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 }
 
 - (UIColor *)apollo_themeCellBackgroundColor {
-    return self.tableView.backgroundColor ?: [super apollo_themeCellBackgroundColor];
+    return [super apollo_themeCellBackgroundColor];
 }
 
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
