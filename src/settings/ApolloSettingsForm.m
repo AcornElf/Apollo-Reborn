@@ -766,16 +766,9 @@ heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 
     cell.textLabel.text = self.optionTitles[(NSUInteger)indexPath.row];
     cell.textLabel.font = [UIFont systemFontOfSize:19.0];
+    cell.textLabel.numberOfLines = 0;
     cell.textLabel.textColor = UIColor.systemBlueColor;
     cell.backgroundColor = UIColor.clearColor;
-
-    if (indexPath.row == self.currentIndex) {
-        cell.accessoryView =
-            [[UIImageView alloc] initWithImage:
-                [UIImage imageNamed:@"ios-13-checkmark"]];
-    } else {
-        cell.accessoryView = nil;
-    }
 
     if (indexPath.row == self.currentIndex) {
         cell.accessoryView = [[UIImageView alloc] initWithImage:
@@ -796,6 +789,24 @@ heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 
 @end
 
+static void ApolloSettingsLogViewHierarchy(UIView *view, NSInteger depth) {
+    NSMutableString *indent = [NSMutableString string];
+    for (NSInteger i = 0; i < depth; i++) {
+        [indent appendString:@"  "];
+    }
+
+    NSLog(@"%@%@ frame=%@ bg=%@ alpha=%.2f",
+          indent,
+          NSStringFromClass(view.class),
+          NSStringFromCGRect(view.frame),
+          view.backgroundColor,
+          view.alpha);
+
+    for (UIView *subview in view.subviews) {
+        ApolloSettingsLogViewHierarchy(subview, depth + 1);
+    }
+}
+
 void ApolloSettingsPresentPicker(UIViewController *presenter,
                                  UIView *sourceView,
                                  NSString *title,
@@ -805,13 +816,6 @@ void ApolloSettingsPresentPicker(UIViewController *presenter,
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:title
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    if (UITraitCollection.currentTraitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-    sheet.view.backgroundColor =
-        [UIColor colorWithRed:19.0 / 255.0
-                        green:21.0 / 255.0
-                         blue:22.0 / 255.0
-                        alpha:1.0];
-    }
 
     if (title.length > 0) {
         NSMutableAttributedString *attributedTitle =
@@ -831,10 +835,11 @@ void ApolloSettingsPresentPicker(UIViewController *presenter,
     ApolloSettingsPickerTableViewController *tableController =
     [[ApolloSettingsPickerTableViewController alloc] initWithStyle:UITableViewStylePlain];
 
-    tableController.tableView.scrollEnabled = NO;
     tableController.tableView.showsVerticalScrollIndicator = NO;
     tableController.tableView.backgroundColor = UIColor.clearColor;
-    tableController.optionTitles = optionTitles;
+    tableController.tableView.scrollEnabled = NO;
+    tableController.tableView.estimatedRowHeight = 56.0;
+    tableController.tableView.rowHeight = UITableViewAutomaticDimension;
     tableController.currentIndex = currentIndex;
     tableController.apply = ^(NSInteger pickedIndex) {
         if (apply) apply(pickedIndex);
@@ -843,8 +848,9 @@ void ApolloSettingsPresentPicker(UIViewController *presenter,
 
     // Size the embedded table to fit all options.
     CGFloat rowHeight = 56.0;
+    CGFloat tableHeight = (rowHeight * optionTitles.count) - 8.0;
     tableController.preferredContentSize =
-        CGSizeMake(0, rowHeight * optionTitles.count);
+        CGSizeMake(0, tableHeight);
 
     [sheet setValue:tableController forKey:@"contentViewController"];
 
@@ -858,5 +864,7 @@ void ApolloSettingsPresentPicker(UIViewController *presenter,
     sheet.popoverPresentationController.sourceRect = sourceView ? sourceView.bounds
         : CGRectMake(CGRectGetMidX(anchor.bounds), CGRectGetMidY(anchor.bounds), 1, 1);
 
-    [presenter presentViewController:sheet animated:YES completion:nil];
+    [presenter presentViewController:sheet animated:YES completion:^{
+    ApolloSettingsLogViewHierarchy(sheet.view, 0);
+}];
 }
