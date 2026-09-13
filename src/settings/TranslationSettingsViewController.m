@@ -139,19 +139,19 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ApolloTranslationLanguag
 
     // In Tap to Translate mode the markers/affordances ARE the controls, so
     // they're always shown — these two toggles have no effect and grey out.
-    ApolloSettingsRow *showDetails =
-        [ApolloSettingsRow switchRowWithID:@"showDetails"
-                                     title:@"Details on Comments & Posts"
-                                      isOn:^BOOL { return sTapToTranslate ? YES : (sShowTranslationTitleDetails && sEnableBulkTranslation); }
-                                  onToggle:^(UISwitch *sender) { [weakSelf showTranslationDetailsSwitchToggled:sender]; }];
-    showDetails.enabled = ^BOOL { return sEnableBulkTranslation && !sTapToTranslate; };
-
     ApolloSettingsRow *titleDetails =
         [ApolloSettingsRow switchRowWithID:@"titleDetails"
-                                     title:@"Details on Titles"
+                                     title:@"In Feeds"
                                       isOn:^BOOL { return sTapToTranslate ? YES : (sShowTranslationTitleDetails && sEnableBulkTranslation); }
                                   onToggle:^(UISwitch *sender) { [weakSelf showTranslationTitleDetailsSwitchToggled:sender]; }];
     titleDetails.enabled = ^BOOL { return sEnableBulkTranslation && !sTapToTranslate; };
+
+    ApolloSettingsRow *showDetails =
+        [ApolloSettingsRow switchRowWithID:@"showDetails"
+                                     title:@"In Post View"
+                                      isOn:^BOOL { return sTapToTranslate ? YES : (sShowTranslationTitleDetails && sEnableBulkTranslation); }
+                                  onToggle:^(UISwitch *sender) { [weakSelf showTranslationDetailsSwitchToggled:sender]; }];
+    showDetails.enabled = ^BOOL { return sEnableBulkTranslation && !sTapToTranslate; };
 
     ApolloSettingsRow *markerColor =
         [ApolloSettingsRow switchRowWithID:@"markerColor"
