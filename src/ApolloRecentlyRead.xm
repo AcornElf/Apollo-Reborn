@@ -1214,7 +1214,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
-        titleLabel.font = [RecentlyReadFontForTextStyle:UIFontTextStyleBody node:self];
+        titleLabel.font = RecentlyReadFontForTextStyle(UIFontTextStyleBody, self);
         titleLabel.textColor = [UIColor cyanColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
