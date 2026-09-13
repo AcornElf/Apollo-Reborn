@@ -422,6 +422,105 @@ static UIColor *RecentlyReadMetaColor(void) {
     }];
 }
 
+// Apollo's effective text size, matching the app's Appearance → Text Size
+// setting in both System and Apollo slider modes.
+static NSString *const kRecentlyReadUseSystemTextSizeKey = @"UseSystemTextSize";
+static NSString *const kRecentlyReadCustomTextSizeKey = @"ApolloCustomTextSize";
+
+static NSString *RecentlyReadCategoryForApplicationTextSize(NSInteger raw) {
+    static NSArray<NSString *> *categories = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        categories = @[
+            UIContentSizeCategoryExtraSmall,
+            UIContentSizeCategorySmall,
+            UIContentSizeCategoryMedium,
+            UIContentSizeCategoryLarge,
+            UIContentSizeCategoryExtraLarge,
+            UIContentSizeCategoryExtraExtraLarge,
+            UIContentSizeCategoryExtraExtraExtraLarge,
+            UIContentSizeCategoryAccessibilityMedium,
+            UIContentSizeCategoryAccessibilityLarge,
+            UIContentSizeCategoryAccessibilityExtraLarge,
+            UIContentSizeCategoryAccessibilityExtraExtraLarge,
+            UIContentSizeCategoryAccessibilityExtraExtraExtraLarge,
+        ];
+    });
+
+    if (raw < 0 || raw >= (NSInteger)categories.count) return nil;
+    return categories[(NSUInteger)raw];
+}
+
+static NSString *RecentlyReadSystemContentSizeCategory(id node) {
+    NSString *category = nil;
+
+    if (node) {
+        @try {
+            if ([node respondsToSelector:@selector(asyncTraitCollection)]) {
+                id traitCollection =
+                    ((id (*)(id, SEL))objc_msgSend)(node, @selector(asyncTraitCollection));
+
+                if (traitCollection &&
+                    [traitCollection respondsToSelector:@selector(preferredContentSizeCategory)]) {
+                    id value =
+                        ((id (*)(id, SEL))objc_msgSend)(
+                            traitCollection,
+                            @selector(preferredContentSizeCategory)
+                        );
+
+                    if ([value isKindOfClass:[NSString class]] &&
+                        [(NSString *)value length] > 0) {
+                        category = value;
+                    }
+                }
+            }
+        } @catch (__unused NSException *e) {}
+    }
+
+    if (![category isKindOfClass:[NSString class]] || category.length == 0) {
+        category = UIApplication.sharedApplication.preferredContentSizeCategory;
+    }
+
+    if (![category isKindOfClass:[NSString class]] || category.length == 0) {
+        category = UIContentSizeCategoryLarge;
+    }
+
+    return category;
+}
+
+static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    id useSystemObj = [defaults objectForKey:kRecentlyReadUseSystemTextSizeKey];
+    BOOL useSystem = (useSystemObj == nil)
+        ? YES
+        : [defaults boolForKey:kRecentlyReadUseSystemTextSizeKey];
+
+    if (!useSystem &&
+        [defaults objectForKey:kRecentlyReadCustomTextSizeKey] != nil) {
+
+        NSString *category = RecentlyReadCategoryForApplicationTextSize(
+            [defaults integerForKey:kRecentlyReadCustomTextSizeKey]
+        );
+
+        if ([category isKindOfClass:[NSString class]] && category.length > 0) {
+            return category;
+        }
+    }
+
+    return RecentlyReadSystemContentSizeCategory(node);
+}
+
+static UIFont *RecentlyReadFontForTextStyle(UIFontTextStyle textStyle, id node) {
+    NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
+
+    UITraitCollection *traits =
+        [UITraitCollection traitCollectionWithPreferredContentSizeCategory:category];
+
+    return [UIFont preferredFontForTextStyle:textStyle
+                    compatibleWithTraitCollection:traits];
+}
+
 static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     NSString *text = @"NSFW";
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightMedium];
@@ -940,7 +1039,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:iconSize weight:UIImageSymbolWeightMedium];
 
     // Upvote arrow
-    UIImage *upIcon = [[UIImage systemImageNamed:@"arrow.up" withConfiguration:config]
+    UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
@@ -963,11 +1062,10 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         [NSString stringWithFormat:@"\u00A0%@\u00A0\u00A0", commentsStr]
         attributes:textAttrs]];
 
-    // Clock (mirrored so hand points to 3:00)
-    UIImage *clockIconBase = [UIImage systemImageNamed:@"clock" withConfiguration:config];
-    UIImage *clockFlipped = [UIImage imageWithCGImage:clockIconBase.CGImage
-        scale:clockIconBase.scale orientation:UIImageOrientationUpMirrored];
-    UIImage *clockIcon = [clockFlipped imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+    // Clock
+    UIImage *clockIcon = [[UIImage imageNamed:@"posts-clock"]
+        imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
     clockAtt.bounds = CGRectMake(0, baselineOffset, iconSize, iconSize);
@@ -1116,7 +1214,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
-        titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
+        titleLabel.font = [RecentlyReadFontForTextStyle:UIFontTextStyleBody node:self];
         titleLabel.textColor = [UIColor cyanColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
@@ -1211,7 +1309,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-8],
             [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-kRecentlyReadCellVerticalInset],
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
-            [sep.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor],
+            [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
             [sep.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
             [sep.heightAnchor constraintEqualToConstant:1.0 / [UIScreen mainScreen].scale],
         ]];
