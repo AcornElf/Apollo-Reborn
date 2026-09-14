@@ -641,56 +641,6 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     }];
 }
 
-static UIFont *sRecentlyReadLastObservedFont = nil;
-
-static void RecentlyReadObserveApolloTextSize(NSAttributedString *attributedText) {
-    if (![attributedText isKindOfClass:[NSAttributedString class]] || attributedText.length < 2) {
-        return;
-    }
-
-    __block UIFont *candidate = nil;
-
-    [attributedText enumerateAttribute:NSFontAttributeName
-                               inRange:NSMakeRange(0, attributedText.length)
-                               options:0
-                            usingBlock:^(id value, __unused NSRange range, BOOL *stop) {
-        if (![value isKindOfClass:[UIFont class]]) return;
-
-        UIFont *font = (UIFont *)value;
-
-        if (font.pointSize < 8.0 || font.pointSize > 40.0) return;
-
-        if ((font.fontDescriptor.symbolicTraits &
-             (UIFontDescriptorTraitBold | UIFontDescriptorTraitItalic)) != 0) {
-            return;
-        }
-
-        candidate = font;
-        *stop = YES;
-    }];
-
-    if (![candidate isKindOfClass:[UIFont class]]) {
-        return;
-    }
-
-    if ([sRecentlyReadLastObservedFont isKindOfClass:[UIFont class]] &&
-        fabs(sRecentlyReadLastObservedFont.pointSize - candidate.pointSize) <= 0.5 &&
-        [sRecentlyReadLastObservedFont.fontName isEqualToString:candidate.fontName]) {
-        return;
-    }
-
-    sRecentlyReadLastObservedFont = candidate;
-}
-
-%hook ASTextNode
-
-- (void)setAttributedText:(NSAttributedString *)attributedText {
-    RecentlyReadObserveApolloTextSize(attributedText);
-    %orig;
-}
-
-%end
-
 @implementation RecentlyReadViewController
 
 - (void)viewDidLoad {
