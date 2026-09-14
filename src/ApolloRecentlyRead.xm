@@ -706,7 +706,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
-        NSForegroundColorAttributeName: [UIColor labelColor]
+        NSForegroundColorAttributeName:
+            ApolloThemeRuntimeColor(ApolloThemeTokenLabel)
     };
 
     CGSize textSize = [text sizeWithAttributes:attrs];
@@ -725,7 +726,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        [[UIColor tertiarySystemFillColor] setFill];
+        [ApolloThemeRuntimeColor(ApolloThemeTokenBackground) setFill];
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
