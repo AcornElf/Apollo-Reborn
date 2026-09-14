@@ -157,15 +157,7 @@ jobs:
             --repo "$REPOSITORY" \
             --limit 100 \
             --json tagName,createdAt \
-            --jq '
-              [.[] |
-                select(.tagName | startswith("build-"))
-              ]
-              | sort_by(.createdAt)
-              | reverse
-              | .[5:]
-              | .[].tagName
-            ')
+            --jq '[.[] | select(.tagName | startswith("build-"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
 
           if [ -z "$OLD_RELEASES" ]; then
             echo "No old releases to remove."
@@ -199,15 +191,7 @@ jobs:
             --repo "$REPOSITORY" \
             --limit 100 \
             --json tagName,createdAt \
-            --jq '
-              [.[] |
-                select(.tagName | startswith("build-"))
-              ]
-              | sort_by(.createdAt)
-              | reverse
-              | .[0:5]
-              | .[].tagName
-            ')
+            --jq '[.[] | select(.tagName | startswith("build-"))] | sort_by(.createdAt) | reverse | .[0:5] | .[].tagName')
 
           if [ -z "$RELEASE_TAGS" ]; then
             echo "No build releases found."
