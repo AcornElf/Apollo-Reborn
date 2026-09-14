@@ -427,6 +427,9 @@ static UIColor *RecentlyReadMetaColor(void) {
 static NSString *const kRecentlyReadUseSystemTextSizeKey = @"UseSystemTextSize";
 static NSString *const kRecentlyReadCustomTextSizeKey = @"ApolloCustomTextSize";
 
+//Debug
+static NSString *kRecentlyReadTextSizeDebug = nil;
+
 static NSString *RecentlyReadCategoryForApplicationTextSize(NSInteger raw) {
     static NSArray<NSString *> *categories = nil;
     static dispatch_once_t onceToken;
@@ -600,8 +603,20 @@ static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
     }
 
     CGFloat scale = kRecentlyReadTextSizeScale[index];
+    // Debug
+    UIFont *result = [font fontWithSize:font.pointSize * scale];
 
-    return [font fontWithSize:font.pointSize * scale];
+    kRecentlyReadTextSizeDebug = [NSString stringWithFormat:
+        @"[DEBUG system=%@ raw=%ld category=%@ index=%ld base=%.1f final=%.1f] ",
+        useSystem ? @"YES" : @"NO",
+        (long)[defaults integerForKey:kRecentlyReadCustomTextSizeKey],
+        category ?: @"(nil)",
+        (long)index,
+        font.pointSize,
+        result.pointSize
+    ];
+
+    return result;
 }
 
 // Scale vertical spacing proportionally with Apollo's seven-position Text Size scale.
@@ -1600,6 +1615,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
+    //Debug
+
+    if (kRecentlyReadTextSizeDebug.length > 0) {
+        titleText = [kRecentlyReadTextSizeDebug stringByAppendingString:titleText];
+    }
+    
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
     );
