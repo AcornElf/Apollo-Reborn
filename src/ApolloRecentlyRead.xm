@@ -511,7 +511,8 @@ static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
     return RecentlyReadSystemContentSizeCategory(node);
 }
 
-static UIFont *RecentlyReadFontForTextStyle(UIFontTextStyle textStyle, id node) {
+// Font scaled to Apollo's effective Appearance → Text Size setting.
+static UIFont *RRScaledFont(UIFontTextStyle textStyle, id node) {
     NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
 
     UITraitCollection *traits =
@@ -1036,21 +1037,20 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: [UIColor yellowColor]};
     CGFloat iconSize = 11.0;
     CGFloat baselineOffset = -1.5;
-    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:iconSize weight:UIImageSymbolWeightMedium];
 
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
-    CGFloat upIconHeight = 15.0;
-    CGFloat upIconWidth = upIconHeight * (upIcon.size.width / upIcon.size.height);
+    CGFloat upIconWidth =
+        iconSize * (upIcon.size.width / upIcon.size.height);
 
     upAtt.bounds = CGRectMake(
         0,
         baselineOffset,
         upIconWidth,
-        upIconHeight
+        iconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:upAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
@@ -1062,14 +1062,14 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *commentAtt = [[NSTextAttachment alloc] init];
     commentAtt.image = commentIcon;
-    CGFloat commentIconHeight = 11.0;
     CGFloat commentIconWidth =
-        commentIconHeight * (commentIcon.size.width / commentIcon.size.height);
+        iconSize * (commentIcon.size.width / commentIcon.size.height);
+
     commentAtt.bounds = CGRectMake(
         0,
         baselineOffset,
         commentIconWidth,
-        commentIconHeight
+        iconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:commentAtt]];
     NSString *commentsStr = [(id)link respondsToSelector:@selector(totalComments)]
@@ -1083,14 +1083,14 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
-    CGFloat clockIconHeight = 11.0;
     CGFloat clockIconWidth =
-        clockIconHeight * (clockIcon.size.width / clockIcon.size.height);
+        iconSize * (clockIcon.size.width / clockIcon.size.height);
+
     clockAtt.bounds = CGRectMake(
         0,
         baselineOffset,
         clockIconWidth,
-        clockIconHeight
+        iconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:clockAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
@@ -1237,7 +1237,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
-        titleLabel.font = RecentlyReadFontForTextStyle(UIFontTextStyleBody, self);
+        titleLabel.font = RRScaledFont(UIFontTextStyleBody, self);
         titleLabel.textColor = [UIColor labelColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
@@ -1252,7 +1252,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *byLabel = [[UILabel alloc] init];
         byLabel.tag = kSubFooterByTag;
         byLabel.text = @" by ";
-        byLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+        byLabel.font = [UIFont *byFont = RRScaledFont(UIFontTextStyleSubheadline, self); weight:UIFontWeightRegular];
         byLabel.textColor = metaColor;
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
