@@ -10,8 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  RELEASE_TAG: latest-build
-  PAGES_URL: https://acornelf.github.io/Apollo-Reborn/
+  PAGES_URL: https://acornelf.github.io/Apollo-Reborn
 
 permissions:
   actions: read
@@ -59,8 +58,13 @@ jobs:
             echo "Using completed Build IPA run: $RUN_ID"
           fi
 
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          RELEASE_TAG="build-$SHORT_SHA"
+
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Find IPA artifact
         id: artifact
@@ -108,128 +112,115 @@ jobs:
           echo "Found IPA: $IPA_FILE"
           cp "$IPA_FILE" com.christianselig.Apollo.ipa
 
-      - name: Create or update latest release
+      - name: Create or update build release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TAG: ${{ steps.run.outputs.release_tag }}
+          SHORT_SHA: ${{ steps.run.outputs.short_sha }}
           COMMIT_SHA: ${{ steps.run.outputs.commit_sha }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            echo "Latest build release already exists."
+            echo "Release $RELEASE_TAG already exists."
           else
-            echo "Creating latest build release."
+            echo "Creating release $RELEASE_TAG."
 
             gh release create "$RELEASE_TAG" \
               --repo "$REPOSITORY" \
               --target "$COMMIT_SHA" \
-              --title "Latest build" \
-              --notes "Automatically updated latest build of Apollo Reborn." \
+              --title "Apollo Reborn $SHORT_SHA" \
+              --notes "Apollo Reborn build for commit $COMMIT_SHA." \
               --latest=false
           fi
 
-          echo "Uploading latest IPA..."
+          echo "Removing existing IPA asset if present..."
+
+          gh release delete-asset "$RELEASE_TAG" \
+            "com.christianselig.Apollo.ipa" \
+            --repo "$REPOSITORY" \
+            --yes || true
+
+          echo "Uploading IPA..."
 
           gh release upload "$RELEASE_TAG" \
             com.christianselig.Apollo.ipa \
+            --repo "$REPOSITORY"
+
+      - name: Keep only the five newest builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          echo "Finding old build releases..."
+
+          OLD_RELEASES=$(gh release list \
             --repo "$REPOSITORY" \
-            --clobber
+            --limit 100 \
+            --json tagName,createdAt \
+            --jq '
+              [.[] |
+                select(.tagName | startswith("build-"))
+              ]
+              | sort_by(.createdAt)
+              | reverse
+              | .[5:]
+              | .[].tagName
+            ')
+
+          if [ -z "$OLD_RELEASES" ]; then
+            echo "No old releases to remove."
+          else
+            while IFS= read -r TAG; do
+              if [ -n "$TAG" ]; then
+                echo "Deleting old release: $TAG"
+
+                gh release delete "$TAG" \
+                  --repo "$REPOSITORY" \
+                  --yes \
+                  --cleanup-tag
+              fi
+            done <<< "$OLD_RELEASES"
+          fi
 
       - name: Configure GitHub Pages
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Create SideStore redirect page
+      - name: Create Pages for retained builds
         env:
-          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/com.christianselig.Apollo.ipa
-        run: |
-          ENCODED_RELEASE_URL=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_URL")
-
-          SIDESTORE_URL="sidestore://install?url=$ENCODED_RELEASE_URL"
-
-          mkdir -p pages
-
-          cat > pages/index.html <<EOF
-          <!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="refresh" content="0;url=$SIDESTORE_URL">
-            <title>Install Apollo Reborn</title>
-            <style>
-              body {
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                text-align: center;
-                padding: 3rem 1.5rem;
-              }
-
-              a {
-                display: inline-block;
-                padding: 0.8rem 1.2rem;
-                margin: 0.4rem;
-                border-radius: 0.7rem;
-                background: #007aff;
-                color: white;
-                text-decoration: none;
-              }
-            </style>
-          </head>
-          <body>
-            <h1>Apollo Reborn</h1>
-            <p>Opening SideStore…</p>
-
-            <p>
-              <a href="$SIDESTORE_URL">Install in SideStore</a>
-            </p>
-
-            <p>
-              <a href="$RELEASE_URL">Download IPA</a>
-            </p>
-
-            <script>
-              window.location.replace("$SIDESTORE_URL");
-            </script>
-          </body>
-          </html>
-          EOF
-
-          echo "Generated SideStore redirect page."
-          echo "IPA URL: $RELEASE_URL"
-          echo "SideStore URL: $SIDESTORE_URL"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: pages
-
-      - name: Deploy GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      - name: Send Telegram notification
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ steps.run.outputs.commit_sha }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
           PAGES_URL: ${{ env.PAGES_URL }}
         run: |
-          SHORT_SHA="${COMMIT_SHA:0:7}"
+          rm -rf pages
+          mkdir -p pages
 
-          RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/com.christianselig.Apollo.ipa"
+          RELEASE_TAGS=$(gh release list \
+            --repo "$REPOSITORY" \
+            --limit 100 \
+            --json tagName,createdAt \
+            --jq '
+              [.[] |
+                select(.tagName | startswith("build-"))
+              ]
+              | sort_by(.createdAt)
+              | reverse
+              | .[0:5]
+              | .[].tagName
+            ')
 
-          MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
+          if [ -z "$RELEASE_TAGS" ]; then
+            echo "No build releases found."
+            exit 1
+          fi
 
-          <b>Commit</b> <code>$SHORT_SHA</code>
+          LATEST_TAG=$(echo "$RELEASE_TAGS" | head -n 1)
 
-          <a href=\"$PAGES_URL\">Install in SideStore</a>
+          while IFS= read -r TAG; do
+            if [ -z "$TAG" ]; then
+              continue
+            fi
 
-          <a href=\"$RELEASE_URL\">Download IPA</a>"
+            SHORT_SHA="${TAG#build-}"
 
-          curl -sS -X POST \
-            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-            -d chat_id="$TELEGRAM_CHAT_ID" \
-            -d parse_mode="HTML" \
-            --data-urlencode text="$MESSAGE"
+            RELEASE_URL="https://github.com/$RE
