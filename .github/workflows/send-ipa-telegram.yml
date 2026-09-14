@@ -106,7 +106,7 @@ jobs:
           fi
 
           echo "Found IPA: $IPA_FILE"
-          cp "$IPA_FILE" com.christianselig.apollo.ipa
+          cp "$IPA_FILE" com.christianselig.Apollo.ipa
 
       - name: Create or update latest release
         env:
@@ -131,7 +131,7 @@ jobs:
           echo "Uploading latest IPA..."
 
           gh release upload "$RELEASE_TAG" \
-            com.christianselig.apollo.ipa \
+            com.christianselig.Apollo.ipa \
             --repo "$REPOSITORY" \
             --clobber
 
@@ -141,7 +141,7 @@ jobs:
 
       - name: Create SideStore redirect page
         env:
-          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/com.christianselig.apollo.ipa
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/com.christianselig.Apollo.ipa
         run: |
           ENCODED_RELEASE_URL=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_URL")
 
@@ -218,7 +218,7 @@ jobs:
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
 
-          RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/com.christianselig.apollo.ipa"
+          RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/com.christianselig.Apollo.ipa"
 
           MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
 
