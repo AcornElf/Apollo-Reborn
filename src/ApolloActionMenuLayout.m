@@ -137,15 +137,11 @@ static ApolloActionMenuItem *ApolloAMItemDelete(void)      { return ApolloAMNati
 static ApolloActionMenuItem *ApolloAMItemNSFW(void)        { return ApolloAMNative(@"nsfw", @"Mark NSFW", @"option-nsfw", K(@102, @103, @138, @139)); }
 static ApolloActionMenuItem *ApolloAMItemSpoiler(void)     { return ApolloAMNative(@"spoiler", @"Mark Spoiler", @"option-spoiler", K(@49, @50, @140, @141)); }
 static ApolloActionMenuItem *ApolloAMItemSelectText(void)  { return ApolloAMNative(@"select-text", @"Select Text", @"option-select-mode", K(@98, @147)); }
-static ApolloActionMenuItem *ApolloAMItemCopyText(void)    { return ApolloAMNative(@"copy-text", @"Copy Text", @"option-copy", K(@21, @157)); }
-static ApolloActionMenuItem *ApolloAMItemBlock(void)       { return ApolloAMNative(@"block", @"Block User", @"option-block", K(@173, @225, @226)); }
 static ApolloActionMenuItem *ApolloAMItemModerator(void)   { return ApolloAMNative(@"moderator", @"Moderator", @"option-moderator", K(@124)); }
 static ApolloActionMenuItem *ApolloAMItemFilterSub(void)   { return ApolloAMNative(@"filter-subreddit", @"Filter Subreddit", @"option-block", K(@227, @228)); }
-static ApolloActionMenuItem *ApolloAMItemCollapse(void)    { return ApolloAMNative(@"collapse", @"Collapse", @"option-collapse", K(@13)); }
 static ApolloActionMenuItem *ApolloAMItemCollapseTop(void) { return ApolloAMNative(@"collapse-top", @"Collapse to Top", @"option-collapse-to-top", K(@14)); }
 static ApolloActionMenuItem *ApolloAMItemViewReplies(void) { return ApolloAMNative(@"view-replies", @"View All Replies", @"option-view-all-replies", K(@43)); }
 static ApolloActionMenuItem *ApolloAMItemParent(void)      { return ApolloAMNative(@"parent-comment", @"Parent Comment", @"option-view-parent", K(@45)); }
-static ApolloActionMenuItem *ApolloAMItemViewPost(void)    { return ApolloAMNative(@"view-post", @"View Post", @"option-posts", K(@119, @204)); }
 static ApolloActionMenuItem *ApolloAMItemFind(void)        { return ApolloAMNative(@"find", @"Find in Comments", @"option-search", K(@57)); }
 static ApolloActionMenuItem *ApolloAMItemLive(void)        { return ApolloAMNative(@"live-activity", @"Live Activity", @"option-live-activity", K(@70, @71)); }
 static ApolloActionMenuItem *ApolloAMItemRemind(void)      { return ApolloAMNative(@"remind", @"Remind Me", @"option-remind-me-in", K(@2)); }
@@ -161,7 +157,8 @@ static ApolloActionMenuItem *ApolloAMItemPostSize(void)    { return ApolloAMNati
 static ApolloActionMenuItem *ApolloAMItemUserFlair(void)   { return ApolloAMNative(@"user-flair", @"Set User Flair", @"option-set-flair", K(@46, @144)); }
 static ApolloActionMenuItem *ApolloAMItemModerators(void)  { return ApolloAMNative(@"moderators", @"View Moderators", @"option-moderator", K(@37)); }
 static ApolloActionMenuItem *ApolloAMItemNotifications(void){ return ApolloAMNative(@"notifications", @"Subreddit Notifications", @"option-notifications", K(@106)); }
-static ApolloActionMenuItem *ApolloAMItemTrending(void)    { return ApolloAMNative(@"trending", @"Trending Posts", @"option-trending-notifications", K(@108, @109)); }
+static ApolloActionMenuItem *ApolloAMItemPostFlair(void) { return ApolloAMNative(@"post-flair", @"Set Post Flair", @"option-set-flair", K(@47)); }
+static ApolloActionMenuItem *ApolloAMItemExcludeSubscriptions(void) { return ApolloAMNative(@"exclude-subscriptions", @"Exclude Subscriptions", @"option-block", K(@222)); }
 static ApolloActionMenuItem *ApolloAMItemMuteNotifs(void)  { return ApolloAMNative(@"mute-notifications", @"Mute Notifications", @"option-mute-notifications", K(@251, @252)); }
 
 static ApolloActionMenuItem *ApolloAMItemFloatingTabs(void)    { return ApolloAMTweak(@"FloatingTabs", @"Keep in Floating Tab", @"pin.circle"); }
@@ -178,6 +175,9 @@ static NSArray<ApolloActionMenuItem *> *ApolloAMCatalogWithUsual(NSArray<ApolloA
     return [usual arrayByAddingObjectsFromArray:sometimes];
 }
 
+// Membership verified against each native builder’s addAction calls
+// (docs/context-menu-verification.md). Never copy a kind into a second
+// context just because its title sounds relevant there.
 // Each menu's catalogue, in Apollo's own default order as the sheets present
 // it (captured from the live menus in the simulator, signed in as a
 // moderator so the mod row shows too); rows Apollo only adds sometimes (your
@@ -192,7 +192,7 @@ static NSArray<ApolloActionMenuItem *> *ApolloActionMenuBuildCatalog(ApolloActio
                ApolloAMItemHideRead(), ApolloAMItemSidebar(), ApolloAMItemRules(), ApolloAMItemFilterSub(),
                ApolloAMItemMultireddit(), ApolloAMItemPostSize(), ApolloAMItemUserFlair(), ApolloAMItemModerators(),
                ApolloAMItemShare(), ApolloAMItemNotifications() ],
-            @[ ApolloAMItemTrending(), ApolloAMItemMuteNotifs(), ApolloAMItemModerator() ]);
+            @[ ApolloAMItemExcludeSubscriptions() ]);
     }
     if ([context isEqualToString:ApolloActionMenuContextPost]) {
         // Feed cell: (124,)4,5,7,12,42,44,239,241,15,17,1,122,123,2 (+ Keep in
@@ -203,8 +203,7 @@ static NSArray<ApolloActionMenuItem *> *ApolloActionMenuBuildCatalog(ApolloActio
                ApolloAMItemHideAbove(), ApolloAMItemShare(), ApolloAMItemShareImage(), ApolloAMItemCrosspost(),
                ApolloAMItemAward(), ApolloAMItemReport(), ApolloAMItemRemind(), ApolloAMItemFloatingTabs() ],
             @[ ApolloAMItemTranslate(), ApolloAMItemFilterSub(), ApolloAMItemEdit(), ApolloAMItemDelete(),
-               ApolloAMItemNSFW(), ApolloAMItemSpoiler(), ApolloAMItemSelectText(), ApolloAMItemCopyText(),
-               ApolloAMItemBlock() ]);
+               ApolloAMItemNSFW(), ApolloAMItemSpoiler(), ApolloAMItemPostFlair(), ApolloAMItemMuteNotifs() ]);
     }
     if ([context isEqualToString:ApolloActionMenuContextPostDetail]) {
         // Comments nav bar: 4,5,7,12,42,44,120,98,15,17,1,57,122,123,70,2 (+
@@ -215,8 +214,8 @@ static NSArray<ApolloActionMenuItem *> *ApolloActionMenuBuildCatalog(ApolloActio
                ApolloAMItemShare(), ApolloAMItemShareImage(), ApolloAMItemCrosspost(), ApolloAMItemFind(),
                ApolloAMItemAward(), ApolloAMItemReport(), ApolloAMItemLive(), ApolloAMItemRemind(),
                ApolloAMItemDeletedComments(), ApolloAMItemFloatingTabs() ],
-            @[ ApolloAMItemTranslate(), ApolloAMItemHide(), ApolloAMItemEdit(), ApolloAMItemDelete(),
-               ApolloAMItemNSFW(), ApolloAMItemSpoiler(), ApolloAMItemCopyText(), ApolloAMItemModerator() ]);
+            @[ ApolloAMItemTranslate(), ApolloAMItemEdit(), ApolloAMItemDelete(),
+               ApolloAMItemNSFW(), ApolloAMItemSpoiler(), ApolloAMItemPostFlair(), ApolloAMItemMuteNotifs() ]);
     }
     if ([context isEqualToString:ApolloActionMenuContextComment]) {
         // Comment: (124,)3,5,7,12,42,98,15,17,14,122,123,2.
@@ -225,9 +224,8 @@ static NSArray<ApolloActionMenuItem *> *ApolloActionMenuBuildCatalog(ApolloActio
                ApolloAMItemReply(), ApolloAMItemAuthor(), ApolloAMItemSelectText(), ApolloAMItemShare(),
                ApolloAMItemShareImage(), ApolloAMItemCollapseTop(), ApolloAMItemAward(), ApolloAMItemReport(),
                ApolloAMItemRemind() ],
-            @[ ApolloAMItemCopyText(), ApolloAMItemCollapse(), ApolloAMItemViewReplies(), ApolloAMItemParent(),
-               ApolloAMItemBlock(), ApolloAMItemTranslate(), ApolloAMItemEdit(), ApolloAMItemDelete(),
-               ApolloAMItemSubreddit(), ApolloAMItemViewPost() ]);
+            @[ ApolloAMItemViewReplies(), ApolloAMItemParent(), ApolloAMItemTranslate(),
+               ApolloAMItemEdit(), ApolloAMItemDelete(), ApolloAMItemMuteNotifs() ]);
     }
     return @[];
 }
@@ -304,7 +302,16 @@ static NSArray<NSString *> *ApolloActionMenuDefaultOrder(ApolloActionMenuContext
 NSArray<NSString *> *ApolloActionMenuResolvedOrder(ApolloActionMenuContext context) {
     NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
     NSArray<NSString *> *stored = ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]);
-    if (stored.count == 0) return catalogOrder;
+    if (stored.count == 0) {
+        NSMutableArray<NSString *> *nativeOrder = [NSMutableArray array];
+        for (NSString *itemID in ApolloActionMenuLastPresentedItemIDs(context)) {
+            if ([catalogOrder containsObject:itemID]) [nativeOrder addObject:itemID];
+        }
+        for (NSString *itemID in catalogOrder) {
+            if (![nativeOrder containsObject:itemID]) [nativeOrder addObject:itemID];
+        }
+        return nativeOrder;
+    }
 
     NSMutableArray<NSString *> *order = [NSMutableArray arrayWithCapacity:catalogOrder.count];
     for (NSString *itemID in stored) {
@@ -333,14 +340,16 @@ BOOL ApolloActionMenuIsItemHidden(ApolloActionMenuContext context, NSString *ite
 }
 
 NSUInteger ApolloActionMenuRankForItemID(ApolloActionMenuContext context, NSString *itemID) {
-    if (itemID.length == 0) return NSNotFound;
+    if (itemID.length == 0 || !ApolloActionMenuHasCustomOrder(context)) return NSNotFound;
     return [ApolloActionMenuResolvedOrder(context) indexOfObject:itemID];
 }
 
+BOOL ApolloActionMenuHasCustomOrder(ApolloActionMenuContext context) {
+    return ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]).count > 0;
+}
+
 BOOL ApolloActionMenuContextIsCustomized(ApolloActionMenuContext context) {
-    if (!ApolloActionMenuStoredLayout(context)) return NO;
-    if (ApolloActionMenuHiddenItemIDs(context).count > 0) return YES;
-    return ![ApolloActionMenuResolvedOrder(context) isEqualToArray:ApolloActionMenuDefaultOrder(context)];
+    return ApolloActionMenuHiddenItemIDs(context).count > 0 || ApolloActionMenuHasCustomOrder(context);
 }
 
 NSUInteger ApolloActionMenuCustomizedContextCount(void) {
@@ -388,7 +397,7 @@ void ApolloActionMenuSetItemHidden(ApolloActionMenuContext context, NSString *it
         if ([set containsObject:candidate]) [hiddenList addObject:candidate];
     }
     ApolloLog(@"[ActionMenuLayout] %@ %@ -> %@", context, itemID, hidden ? @"hidden" : @"shown");
-    ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: ApolloActionMenuResolvedOrder(context),
+    ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]),
                                             kApolloActionMenuLayoutHiddenKey: hiddenList });
 }
 
@@ -402,6 +411,7 @@ void ApolloActionMenuResetContext(ApolloActionMenuContext context) {
 void ApolloActionMenuRecordPresentedItemIDs(ApolloActionMenuContext context, NSArray<NSString *> *itemIDs) {
     if (!ApolloActionMenuContextIsValid(context)) return;
     NSArray<NSString *> *clean = ApolloActionMenuStringArray(itemIDs);
+    if (clean.count == 0) return; // A failed/empty read is not a new complete snapshot.
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     id stored = [defaults objectForKey:UDKeyActionMenuLastPresented];
     NSMutableDictionary *all = [stored isKindOfClass:[NSDictionary class]] ? [stored mutableCopy] : [NSMutableDictionary dictionary];
@@ -436,19 +446,25 @@ NSArray<ApolloActionMenuItem *> *ApolloActionMenuPreviewItems(ApolloActionMenuCo
 #pragma mark - Runtime context arming
 
 // Apollo builds and presents a ••• sheet synchronously from its tap handler,
-// so the window only has to outlive that call; it is generous so a surface
-// that fetches before presenting still resolves.
+// so the pending context is confined to that call and cleared in @finally.
+// The age check also rejects an unexpectedly slow synchronous handler.
 static const NSTimeInterval kApolloActionMenuArmWindow = 2.0;
 static ApolloActionMenuContext sApolloActionMenuArmedContext = nil;
 static CFAbsoluteTime sApolloActionMenuArmedAt = 0;
 
 void ApolloActionMenuArmContext(ApolloActionMenuContext context) {
-    if (!ApolloActionMenuContextIsValid(context)) return;
+    if (!NSThread.isMainThread || !ApolloActionMenuContextIsValid(context)) return;
     sApolloActionMenuArmedContext = context;
     sApolloActionMenuArmedAt = CFAbsoluteTimeGetCurrent();
 }
 
+void ApolloActionMenuDisarmContext(void) {
+    if (!NSThread.isMainThread) return;
+    sApolloActionMenuArmedContext = nil;
+}
+
 ApolloActionMenuContext ApolloActionMenuTakeArmedContext(void) {
+    if (!NSThread.isMainThread) return nil;
     ApolloActionMenuContext context = sApolloActionMenuArmedContext;
     if (!context) return nil;
     sApolloActionMenuArmedContext = nil;

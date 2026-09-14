@@ -1554,6 +1554,9 @@ static UIViewController *ApolloNativeActionMenuTopMostPresenter(UIViewController
 }
 
 static BOOL ApolloNativeActionMenuPresent(id presenter, id actionController, void (^completion)(void)) {
+    // Capture even on the legacy path: UIKit may defer its table/geometry
+    // callbacks until after the originating tap has returned.
+    ApolloActionMenuCaptureContextForController(actionController);
     if (!ApolloNativeActionMenusEnabled()) return NO;
     if (![actionController isKindOfClass:objc_getClass("_TtC6Apollo16ActionController")]) return NO;
     if (ApolloReadBoolIvar(actionController, "showKeyboardOnAppearanceForTextEntryView", NO)) return NO;

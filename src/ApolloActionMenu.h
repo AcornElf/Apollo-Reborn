@@ -130,6 +130,10 @@ void ApolloActionMenuRegister(ApolloActionMenuSpec *spec);
 // saved layout and filters/sorts the registered specs to it. The glass path
 // calls this before it reads the controller's actions; every legacy table hook
 // reaches it through the memoised slot state. Safe to call repeatedly.
+// Capture the current tap on this exact controller before UIKit defers a
+// legacy presentation. Called by the existing native-menu presentation owner.
+void ApolloActionMenuCaptureContextForController(id actionController);
+
 void ApolloActionMenuPrepareController(id actionController, NSString *_Nullable menuTitleHint);
 
 // Glass path: remember which Action kind a native UIMenuElement was built from,

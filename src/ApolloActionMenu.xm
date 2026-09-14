@@ -38,6 +38,7 @@
 // and DeletedComments' outer-frame-only growth was correct all along.
 
 #import "ApolloActionMenu.h"
+#import <dlfcn.h>
 #import "ApolloActionMenuLayout.h"
 #import "ApolloCommon.h"
 #import "ApolloSwiftRuntime.h"
@@ -186,6 +187,16 @@ UIImage *ApolloActionMenuSymbolIcon(NSString *symbolName) {
 // order after every catalogued item. A context with no saved layout is left
 // exactly as Apollo built it.
 
+static char kApolloActionMenuControllerContextKey;
+
+void ApolloActionMenuCaptureContextForController(id controller) {
+    if (![controller isKindOfClass:objc_getClass("_TtC6Apollo16ActionController")]) return;
+    if (objc_getAssociatedObject(controller, &kApolloActionMenuControllerContextKey)) return;
+    ApolloActionMenuContext context = ApolloActionMenuTakeArmedContext();
+    if (context) objc_setAssociatedObject(controller, &kApolloActionMenuControllerContextKey,
+                                         context, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
 static char kApolloActionMenuElementKindKey;
 static char kApolloActionMenuElementSpecKey;
 
@@ -272,7 +283,23 @@ static BOOL ApolloActionMenuApplyNativeLayout(id controller, ApolloActionMenuCon
     int64_t count = ApolloSwiftArrayCount(buffer);
     if (count <= 0 || count > 512) return NO;
 
-    NSArray<NSString *> *order = ApolloActionMenuResolvedOrder(context);
+    // Swift arrays may share storage. Never mutate another owner's copy.
+    // These runtime entry points also handle tagged/inline String words.
+    typedef bool (*UniqueFn)(void *);
+    typedef void (*ReleaseFn)(void *);
+    static UniqueFn isUnique;
+    static ReleaseFn releaseBridge;
+    static dispatch_once_t runtimeOnce;
+    dispatch_once(&runtimeOnce, ^{
+        isUnique = (UniqueFn)dlsym(RTLD_DEFAULT, "swift_isUniquelyReferenced_nonNull_native");
+        releaseBridge = (ReleaseFn)dlsym(RTLD_DEFAULT, "swift_bridgeObjectRelease");
+    });
+    if (!isUnique || !releaseBridge || !isUnique(buffer)) {
+        ApolloLog(@"[ActionMenu] %@ left unchanged: native actions storage is shared or Swift runtime is unavailable", context);
+        return NO;
+    }
+
+    NSArray<NSString *> *order = ApolloActionMenuHasCustomOrder(context) ? ApolloActionMenuResolvedOrder(context) : @[];
     NSSet<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context);
     uint8_t *elements = (uint8_t *)buffer + kApolloActionMenuNativeElementsOffset;
 
@@ -313,11 +340,9 @@ static BOOL ApolloActionMenuApplyNativeLayout(id controller, ApolloActionMenuCon
                                 *(uint16_t *)(elements + (NSUInteger)i * kApolloActionMenuNativeElementStride)]];
     }
 
-    // Rebuild through a scratch copy so a row moving up never overwrites one
-    // that hasn't been copied yet. Elements beyond the new count stay in the
-    // buffer untouched (Swift only ever destroys the first `count` elements);
-    // a dropped row's heap title, if any, is simply never released — the same
-    // small, accepted leak ApolloTranslation's row removal has always had.
+    // Transfer surviving elements through scratch storage without retaining
+    // them. Release both String bridge words of every removed Action before
+    // overwriting its slot; lowering count alone leaks heap-backed titles.
     uint8_t *scratch = (uint8_t *)malloc(kept * kApolloActionMenuNativeElementStride);
     if (!scratch) {
         free(entries);
@@ -328,7 +353,20 @@ static BOOL ApolloActionMenuApplyNativeLayout(id controller, ApolloActionMenuCon
                elements + (NSUInteger)entries[i].index * kApolloActionMenuNativeElementStride,
                kApolloActionMenuNativeElementStride);
     }
+    for (int64_t i = 0; i < count; i++) {
+        BOOL survives = NO;
+        for (NSUInteger j = 0; j < kept; j++) {
+            if (entries[j].index == i) { survives = YES; break; }
+        }
+        if (!survives) {
+            uint8_t *removed = elements + (NSUInteger)i * kApolloActionMenuNativeElementStride;
+            releaseBridge(*(void **)(removed + 0x10)); // title String's bridge word
+            releaseBridge(*(void **)(removed + 0x20)); // optional subtitle (nil is safe)
+        }
+    }
     memcpy(elements, scratch, kept * kApolloActionMenuNativeElementStride);
+    memset(elements + kept * kApolloActionMenuNativeElementStride, 0,
+           ((NSUInteger)count - kept) * kApolloActionMenuNativeElementStride);
     *(int64_t *)((uint8_t *)buffer + 0x10) = (int64_t)kept;
     free(scratch);
 
@@ -397,7 +435,8 @@ static ApolloActionMenuSlotState *ApolloActionMenuSlotsForController(id controll
     // file moments before Apollo built the sheet. Resolved here — the first
     // time anything asks about the controller — so the native permutation
     // below lands before either rendering path reads the actions.
-    ApolloActionMenuContext context = ApolloActionMenuTakeArmedContext();
+    ApolloActionMenuCaptureContextForController(controller);
+    ApolloActionMenuContext context = objc_getAssociatedObject(controller, &kApolloActionMenuControllerContextKey);
     BOOL customized = context && ApolloActionMenuContextIsCustomized(context);
     // What Apollo put in this sheet, for the settings preview — read before
     // the saved layout drops anything.
@@ -412,8 +451,6 @@ static ApolloActionMenuSlotState *ApolloActionMenuSlotsForController(id controll
             if (itemID && ![presentedItemIDs containsObject:itemID]) [presentedItemIDs addObject:itemID];
         }
     }
-    if (customized) ApolloActionMenuApplyNativeLayout(controller, context);
-
     NSMutableArray<ApolloActionMenuSpec *> *matched = [NSMutableArray array];
     for (ApolloActionMenuSpec *spec in sApolloActionMenuRegistry) {
         BOOL (^matches)(id, NSString *) = spec.matches;
@@ -426,7 +463,14 @@ static ApolloActionMenuSlotState *ApolloActionMenuSlotsForController(id controll
         }
         if (!specMatches) continue;
         NSString *specItemID = ApolloActionMenuItemIDForSpec(spec.identifier);
-        if (presentedItemIDs && ![presentedItemIDs containsObject:specItemID]) [presentedItemIDs addObject:specItemID];
+        if (presentedItemIDs && ![presentedItemIDs containsObject:specItemID]) {
+            NSUInteger index = presentedItemIDs.count;
+            if (IsLiquidGlass() && spec.placement == ApolloActionMenuPlacementAfterLeadingSubmitAffordance) {
+                NSUInteger submit = [presentedItemIDs indexOfObject:@"submit"];
+                index = submit == NSNotFound ? 0 : submit + 1;
+            }
+            [presentedItemIDs insertObject:specItemID atIndex:index];
+        }
         if (customized && ApolloActionMenuIsItemHidden(context, specItemID)) {
             ApolloLog(@"[ActionMenu] spec '%@' hidden by the %@ layout", spec.identifier, context);
             continue;
@@ -434,6 +478,9 @@ static ApolloActionMenuSlotState *ApolloActionMenuSlotsForController(id controll
         [matched addObject:spec];
     }
     if (context) ApolloActionMenuRecordPresentedItemIDs(context, presentedItemIDs);
+    // Match tweak rows against Apollo’s original actions; hiding a native
+    // affordance must not change whether an independent feature belongs here.
+    if (customized) ApolloActionMenuApplyNativeLayout(controller, context);
     [matched sortUsingComparator:^NSComparisonResult(ApolloActionMenuSpec *a, ApolloActionMenuSpec *b) {
         // Saved layout first (ranked rows before unranked), then the specs'
         // own order/identifier tiebreak.
@@ -851,10 +898,9 @@ static void ApolloActionMenuInstallWillSelect(void) {
 %hook _TtC6Apollo16ActionController
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    ApolloActionMenuSlotState *state = section == 0 ? ApolloActionMenuSlotsForController(self, nil) : nil;
     NSInteger nativeCount = %orig;
     if (section != 0) return nativeCount;
-
-    ApolloActionMenuSlotState *state = ApolloActionMenuSlotsForController(self, nil);
     state.nativeRowCount = nativeCount;
     if (state.specs.count == 0) return nativeCount;
     return nativeCount + (NSInteger)state.specs.count;
@@ -940,11 +986,11 @@ static void ApolloActionMenuInstallWillSelect(void) {
 %hook _TtC6Apollo38ActionControllerPresentationController
 
 - (CGRect)frameOfPresentedViewInContainerView {
-    CGRect frame = %orig;
     UIViewController *presented = [(UIPresentationController *)self presentedViewController];
+    ApolloActionMenuSlotState *state = ApolloActionMenuSlotsForController(presented, nil);
+    CGRect frame = %orig;
     if (frame.size.height <= 0.0 || !presented) return frame;
 
-    ApolloActionMenuSlotState *state = ApolloActionMenuSlotsForController(presented, nil);
     if (state.specs.count == 0) return frame;
 
     CGFloat rowHeight = ApolloActionMenuNativeRowHeight(presented);
@@ -979,42 +1025,66 @@ static void ApolloActionMenuInstallWillSelect(void) {
 %hook _TtC6Apollo17LargePostCellNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
 %hook _TtC6Apollo19CompactPostCellNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
 %hook _TtC6Apollo13RichMediaNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
 %hook _TtC6Apollo22CommentsViewController
 - (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextPostDetail);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
 %hook _TtC6Apollo19PostsViewController
 - (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextFeed);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
 %hook _TtC6Apollo15CommentCellNode
 - (void)moreOptionsTappedWithSender:(id)sender {
     ApolloActionMenuArmContext(ApolloActionMenuContextComment);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 
@@ -1027,7 +1097,11 @@ static void ApolloActionMenuInstallWillSelect(void) {
 %hook _TtC6Apollo16ActionController
 - (void)viewWillAppear:(BOOL)animated {
     ApolloActionMenuPrepareController(self, nil);
-    %orig;
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+    }
 }
 %end
 

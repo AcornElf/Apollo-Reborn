@@ -71,7 +71,7 @@ BOOL ApolloActionMenuContextIsValid(NSString *_Nullable context);
 - (nullable UIImage *)icon;
 @end
 
-// Every item the context can show, in Apollo's default order.
+// Every supported item for this context; usual rows followed by conditional rows.
 NSArray<ApolloActionMenuItem *> *ApolloActionMenuCatalog(ApolloActionMenuContext context);
 ApolloActionMenuItem *_Nullable ApolloActionMenuCatalogItem(ApolloActionMenuContext context, NSString *itemID);
 // The item a native row of `kind` belongs to in this context, or nil when the
@@ -91,7 +91,9 @@ NSSet<NSString *> *ApolloActionMenuHiddenItemIDs(ApolloActionMenuContext context
 BOOL ApolloActionMenuIsItemHidden(ApolloActionMenuContext context, NSString *itemID);
 // Position of an item in the resolved order, NSNotFound when it isn't one.
 NSUInteger ApolloActionMenuRankForItemID(ApolloActionMenuContext context, NSString *itemID);
-// YES once the context has a saved entry that differs from the default.
+// YES while any item is hidden or an explicit drag order has been saved.
+// Visibility changes never opt a menu into sorting. Only an explicit drag does.
+BOOL ApolloActionMenuHasCustomOrder(ApolloActionMenuContext context);
 BOOL ApolloActionMenuContextIsCustomized(ApolloActionMenuContext context);
 NSUInteger ApolloActionMenuCustomizedContextCount(void);
 
@@ -115,11 +117,12 @@ NSArray<ApolloActionMenuItem *> *ApolloActionMenuPreviewItems(ApolloActionMenuCo
 
 #pragma mark - Runtime: which context a sheet belongs to
 
-// Called by the ••• tap entry points (hooks in ApolloActionMenu.xm) right
-// before Apollo builds and presents the sheet. The owner claims it for the
-// next ActionController it sees within a short window (Apollo presents the
-// sheet synchronously from the tap, but a few surfaces fetch first).
+// Called by the ••• tap entry points before Apollo builds/presents a sheet.
+// The presentation owner attaches it to that exact ActionController before
+// UIKit defers legacy layout. Tap hooks clear any unclaimed context in @finally.
 void ApolloActionMenuArmContext(ApolloActionMenuContext context);
+// Clear an unclaimed tap when its handler returns (including exceptions).
+void ApolloActionMenuDisarmContext(void);
 // The armed context if it is still fresh, consuming it; nil otherwise.
 ApolloActionMenuContext _Nullable ApolloActionMenuTakeArmedContext(void);
 
