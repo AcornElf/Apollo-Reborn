@@ -706,10 +706,14 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
+    UIColor *flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenLabel);
+    if (!flairTextColor) {
+        flairTextColor = [UIColor labelColor];
+    }
+
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
-        NSForegroundColorAttributeName:
-            ApolloThemeRuntimeColor(ApolloThemeTokenLabel)
+        NSForegroundColorAttributeName: flairTextColor
     };
 
     CGSize textSize = [text sizeWithAttributes:attrs];
