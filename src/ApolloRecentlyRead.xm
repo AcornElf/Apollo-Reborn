@@ -429,9 +429,6 @@ static UIColor *RecentlyReadMetaColor(void) {
 static NSString *const kRecentlyReadUseSystemTextSizeKey = @"UseSystemTextSize";
 static NSString *const kRecentlyReadCustomTextSizeKey = @"ApolloCustomTextSize";
 
-//Debug
-static NSString *kRecentlyReadTextSizeDebug = nil;
-
 static NSString *RecentlyReadCategoryForApplicationTextSize(NSInteger raw) {
     static NSArray<NSString *> *categories = nil;
     static dispatch_once_t onceToken;
@@ -605,18 +602,7 @@ static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
     }
 
     CGFloat scale = kRecentlyReadTextSizeScale[index];
-    // Debug
     UIFont *result = [font fontWithSize:font.pointSize * scale];
-
-    kRecentlyReadTextSizeDebug = [NSString stringWithFormat:
-        @"[DEBUG system=%@ raw=%ld category=%@ index=%ld base=%.1f final=%.1f] ",
-        useSystem ? @"YES" : @"NO",
-        (long)[defaults integerForKey:kRecentlyReadCustomTextSizeKey],
-        category ?: @"(nil)",
-        (long)index,
-        font.pointSize,
-        result.pointSize
-    ];
 
     return result;
 }
@@ -706,9 +692,9 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    UIColor *flairTextColor = [UIColor labelColor];
+    UIColor *flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
     if (!flairTextColor) {
-        flairTextColor = [UIColor labelColor];
+        flairTextColor = [UIColor secondaryLabelColor];
     }
 
     NSDictionary *attrs = @{
@@ -732,7 +718,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        [ApolloThemePageBackgroundColor() setFill];
+        [ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground) setFill];
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
@@ -1499,10 +1485,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         stack.alignment = UIStackViewAlignmentLeading;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:RRScaledSpacing(kRecentlyReadDefaultTopGap, self)
-              afterView:titleLabel];
-        [stack setCustomSpacing:0 afterView:footerStack];
-        [stack setCustomSpacing:0 afterView:authorTopBtn];
+        [stack setCustomSpacing:RRScaledSpacing(3, self)
+                    afterView:titleLabel];
+        [stack setCustomSpacing:RRScaledSpacing(3, self)
+                    afterView:footerStack];
+        [stack setCustomSpacing:RRScaledSpacing(3, self)
+                afterView:authorTopBtn];
         [cell.contentView addSubview:stack];
 
         UIView *sep = [[UIView alloc] init];
@@ -1601,8 +1589,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         }
     } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:RRScaledSpacing(kRecentlyReadDefaultTopGap, self)
-              afterView:titleLabel];
+        [stack setCustomSpacing:RRScaledSpacing(3, self)
+                    afterView:titleLabel];
         // Subreddit below title with optional author
         subHeaderBtn.hidden = YES;
         authorTopBtn.hidden = YES;
@@ -1624,12 +1612,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
-    //Debug
-
-    if (kRecentlyReadTextSizeDebug.length > 0) {
-        titleText = [kRecentlyReadTextSizeDebug stringByAppendingString:titleText];
-    }
-    
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
     );
