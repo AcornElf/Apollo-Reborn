@@ -511,17 +511,61 @@ static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
     return RecentlyReadSystemContentSizeCategory(node);
 }
 
-// Font scaled to Apollo's effective Appearance → Text Size setting.
+// Apollo's seven-position Text Size scale, measured from Compact post titles.
+// Step 4 is the default and therefore the reference point.
+static const CGFloat kRecentlyReadTextSizeScale[] = {
+    14.3 / 18.0,  // 1
+    15.6 / 18.0,  // 2
+    17.0 / 18.0,  // 3
+    18.0 / 18.0,  // 4
+    20.3 / 18.0,  // 5
+    23.0 / 18.0,  // 6
+    25.3 / 18.0   // 7
+};
+
 static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    id useSystemObj = [defaults objectForKey:kRecentlyReadUseSystemTextSizeKey];
+    BOOL useSystem = (useSystemObj == nil)
+        ? YES
+        : [defaults boolForKey:kRecentlyReadUseSystemTextSizeKey];
+
+    if (useSystem) {
+        NSString *category = RecentlyReadSystemContentSizeCategory(node);
+
+        UITraitCollection *traits =
+            [UITraitCollection traitCollectionWithPreferredContentSizeCategory:category];
+
+        UIFontMetrics *metrics = [UIFontMetrics metricsForTextStyle:textStyle];
+
+        return [metrics scaledFontForFont:font
+                     compatibleWithTraitCollection:traits];
+    }
+
     NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
 
-    UITraitCollection *traits =
-        [UITraitCollection traitCollectionWithPreferredContentSizeCategory:category];
+    NSInteger index = 3; // Step 4 is the default.
 
-    UIFontMetrics *metrics = [UIFontMetrics metricsForTextStyle:textStyle];
+    if ([category isEqualToString:UIContentSizeCategoryExtraSmall]) {
+        index = 0;
+    } else if ([category isEqualToString:UIContentSizeCategorySmall]) {
+        index = 1;
+    } else if ([category isEqualToString:UIContentSizeCategoryMedium]) {
+        index = 2;
+    } else if ([category isEqualToString:UIContentSizeCategoryLarge]) {
+        index = 3;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraLarge]) {
+        index = 4;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraLarge]) {
+        index = 5;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraExtraLarge]) {
+        index = 6;
+    }
 
-    return [metrics scaledFontForFont:font
-             compatibleWithTraitCollection:traits];
+    CGFloat scale = kRecentlyReadTextSizeScale[index];
+
+    return [font fontWithSize:font.pointSize * scale];
 }
 
 #pragma mark - Recently Read Fonts
