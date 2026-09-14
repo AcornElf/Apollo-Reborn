@@ -1087,8 +1087,8 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
-    CGFloat iconSize = 11.0;
-    CGFloat baselineOffset = -1.5;
+    CGFloat iconSize = metaFont.pointSize * (11.0 / 12.0);
+    CGFloat baselineOffset = metaFont.pointSize * (-1.5 / 12.0);
 
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
