@@ -1043,7 +1043,15 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
-    upAtt.bounds = CGRectMake(0, baselineOffset, iconSize, iconSize);
+    CGFloat upIconHeight = 15.0;
+    CGFloat upIconWidth = upIconHeight * (upIcon.size.width / upIcon.size.height);
+
+    upAtt.bounds = CGRectMake(
+        0,
+        baselineOffset,
+        upIconWidth,
+        upIconHeight
+    );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:upAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
         [NSString stringWithFormat:@"\u00A0%@\u00A0\u00A0", [self compactScoreString:link.score]]
