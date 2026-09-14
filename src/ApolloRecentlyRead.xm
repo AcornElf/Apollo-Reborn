@@ -959,7 +959,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     // posts.count > 0 here means everything is hidden by search/NSFW filter.
     emptyLabel.text = self.posts.count > 0 ? @"No matching posts" : @"No recently read posts";
     emptyLabel.textAlignment = NSTextAlignmentCenter;
-    emptyLabel.textColor = [UIColor orangeColor];
+    emptyLabel.textColor = [UIColor secondaryLabelColor];
     emptyLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
     self.tableView.backgroundView = emptyLabel;
 }
@@ -1211,7 +1211,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UIButton *subHeaderBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         subHeaderBtn.tag = kSubHeaderTag;
         subHeaderBtn.titleLabel.font = mediumFont;
-        [subHeaderBtn setTitleColor:[UIColor greenColor] forState:UIControlStateNormal];
+        [subHeaderBtn setTitleColor:metaColor forState:UIControlStateNormal];
         [subHeaderBtn setTitleColor:metaHighlight forState:UIControlStateHighlighted];
         subHeaderBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
         subHeaderBtn.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -1223,14 +1223,13 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
         titleLabel.font = RecentlyReadFontForTextStyle(UIFontTextStyleBody, self);
-        titleLabel.textColor = [UIColor cyanColor];
+        titleLabel.textColor = [UIColor labelColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
         UIButton *subredditFooterBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         subredditFooterBtn.tag = kSubFooterSubredditTag;
         subredditFooterBtn.titleLabel.font = mediumFont;
         [subredditFooterBtn setTitleColor:metaColor forState:UIControlStateNormal];
-        [subredditFooterBtn setTitleColor:[UIColor greenColor] forState:UIControlStateNormal];
         subredditFooterBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
         [subredditFooterBtn.heightAnchor constraintEqualToConstant:metaLineHeight].active = YES;
         [subredditFooterBtn addTarget:self action:@selector(_navigateToAssociatedPath:) forControlEvents:UIControlEventTouchUpInside];
@@ -1239,7 +1238,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.tag = kSubFooterByTag;
         byLabel.text = @" by ";
         byLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
-        byLabel.textColor = [UIColor blueColor];
+        byLabel.textColor = metaColor;
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
         UIButton *authorFooterBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1377,7 +1376,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         // Subreddit above title
         subHeaderBtn.hidden = NO;
         subHeaderBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-        [subHeaderBtn setTitleColor:[UIColor magentaColor] forState:UIControlStateNormal];
+        [subHeaderBtn setTitle:link.subreddit ?: @"" forState:UIControlStateNormal];
         objc_setAssociatedObject(subHeaderBtn, &kNavPathKey, subPath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         footerStack.hidden = YES;
