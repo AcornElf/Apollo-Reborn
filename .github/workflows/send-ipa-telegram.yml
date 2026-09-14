@@ -50,7 +50,7 @@ jobs:
               "/repos/$REPOSITORY/actions/runs/$RUN_ID" \
               --jq '.head_sha')
 
-            echo "Using latest successful Build IPA run: $RUN_ID"
+            echo "Using latest successful Build IPA workflow run: $RUN_ID"
           else
             RUN_ID="${{ github.event.workflow_run.id }}"
             COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
@@ -223,4 +223,168 @@ jobs:
 
             SHORT_SHA="${TAG#build-}"
 
-            RELEASE_URL="https://github.com/$RE
+            RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG/com.christianselig.Apollo.ipa"
+
+            ENCODED_RELEASE_URL=$(python3 -c \
+              'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+              "$RELEASE_URL")
+
+            SIDESTORE_URL="sidestore://install?url=$ENCODED_RELEASE_URL"
+
+            mkdir -p "pages/$TAG"
+
+            cat > "pages/$TAG/index.html" <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=$SIDESTORE_URL">
+  <title>Install Apollo Reborn $SHORT_SHA</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      text-align: center;
+      padding: 3rem 1.5rem;
+    }
+
+    a.install {
+      display: inline-block;
+      padding: 0.8rem 1.2rem;
+      margin: 0.4rem;
+      border-radius: 0.7rem;
+      background: #007aff;
+      color: white;
+      text-decoration: none;
+    }
+
+    a.download {
+      color: #000;
+      text-decoration: underline;
+      display: inline-block;
+      margin-top: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Apollo Reborn</h1>
+  <p>Build <code>$SHORT_SHA</code></p>
+  <p>Opening SideStore…</p>
+
+  <p>
+    <a class="install" href="$SIDESTORE_URL">Install in SideStore</a>
+  </p>
+
+  <p>
+    <a class="download" href="$RELEASE_URL">Download IPA</a>
+  </p>
+
+  <script>
+    window.location.replace("$SIDESTORE_URL");
+  </script>
+</body>
+</html>
+EOF
+
+            echo "Created Pages entry for $TAG"
+          done <<< "$RELEASE_TAGS"
+
+          LATEST_RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$LATEST_TAG/com.christianselig.Apollo.ipa"
+
+          ENCODED_LATEST_RELEASE_URL=$(python3 -c \
+            'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+            "$LATEST_RELEASE_URL")
+
+          LATEST_SIDESTORE_URL="sidestore://install?url=$ENCODED_LATEST_RELEASE_URL"
+          LATEST_SHORT_SHA="${LATEST_TAG#build-}"
+
+          cat > pages/index.html <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=$LATEST_SIDESTORE_URL">
+  <title>Install Apollo Reborn</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      text-align: center;
+      padding: 3rem 1.5rem;
+    }
+
+    a.install {
+      display: inline-block;
+      padding: 0.8rem 1.2rem;
+      margin: 0.4rem;
+      border-radius: 0.7rem;
+      background: #007aff;
+      color: white;
+      text-decoration: none;
+    }
+
+    a.download {
+      color: #000;
+      text-decoration: underline;
+      display: inline-block;
+      margin-top: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Apollo Reborn</h1>
+  <p>Build <code>$LATEST_SHORT_SHA</code></p>
+  <p>Opening SideStore…</p>
+
+  <p>
+    <a class="install" href="$LATEST_SIDESTORE_URL">Install in SideStore</a>
+  </p>
+
+  <p>
+    <a class="download" href="$LATEST_RELEASE_URL">Download IPA</a>
+  </p>
+
+  <script>
+    window.location.replace("$LATEST_SIDESTORE_URL");
+  </script>
+</body>
+</html>
+EOF
+
+          echo "Created root Pages entry for $LATEST_TAG."
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ steps.run.outputs.commit_sha }}
+          SHORT_SHA: ${{ steps.run.outputs.short_sha }}
+          RELEASE_TAG: ${{ steps.run.outputs.release_tag }}
+          PAGES_URL: ${{ env.PAGES_URL }}
+        run: |
+          RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/com.christianselig.Apollo.ipa"
+          INSTALL_URL="$PAGES_URL/$RELEASE_TAG/"
+
+          MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
+
+          <b>Commit</b> <code>$SHORT_SHA</code>
+
+          <a href=\"$INSTALL_URL\">Install in SideStore</a>
+
+          <a href=\"$RELEASE_URL\">Download IPA</a>"
+
+          curl -sS -X POST \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$TELEGRAM_CHAT_ID" \
+            -d parse_mode="HTML" \
+            --data-urlencode text="$MESSAGE"
