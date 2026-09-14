@@ -643,6 +643,11 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 
 @implementation RecentlyReadViewController
 
+- (void)_refreshTypography {
+    [self.tableView reloadRowsAtIndexPaths:self.tableView.indexPathsForVisibleRows
+                          withRowAnimation:UITableViewRowAnimationNone];
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Recently Read";
@@ -690,6 +695,14 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     [self.refreshControl addTarget:self
                             action:@selector(_pullToRefreshTriggered)
                   forControlEvents:UIControlEventValueChanged];
+}
+
+- (void)_recentlyReadSettingsChanged:(NSNotification *)notification {
+    [self _refreshTypography];
+}
+
+- (void)_recentlyReadSystemTextSizeChanged:(NSNotification *)notification {
+    [self _refreshTypography];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
