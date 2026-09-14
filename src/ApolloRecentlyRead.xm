@@ -706,7 +706,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    UIColor *flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenLabel);
+    UIColor *flairTextColor = [UIColor labelColor];
     if (!flairTextColor) {
         flairTextColor = [UIColor labelColor];
     }
@@ -732,7 +732,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        [ApolloThemeRuntimeColor(ApolloThemeTokenBackground) setFill];
+        [ApolloThemePageBackgroundColor() setFill];
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
