@@ -1222,8 +1222,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
-    CGFloat iconSize = metaFont.pointSize * (11.0 / 12.0);
-    CGFloat baselineOffset = metaFont.pointSize * (-1.5 / 12.0);
+    CGFloat iconSize = metaFont.pointSize * 0.9;
+    CGFloat baselineOffset = (metaFont.pointSize - iconSize) / 2.0;
 
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
