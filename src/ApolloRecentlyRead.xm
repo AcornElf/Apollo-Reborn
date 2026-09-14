@@ -1575,7 +1575,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     if (subAtTop) {
         [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:titleLabel];
+        [stack setCustomSpacing:RRScaledSpacing(kRecentlyReadExpandedTopGap, self)
+              afterView:titleLabel];
         // Subreddit above title
         subHeaderBtn.hidden = NO;
         subHeaderBtn.titleLabel.font = RRCalloutFont(self);
@@ -1593,7 +1594,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         }
     } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:titleLabel];
+        [stack setCustomSpacing:RRScaledSpacing(kRecentlyReadDefaultTopGap, self)
+              afterView:titleLabel];
         // Subreddit below title with optional author
         subHeaderBtn.hidden = YES;
         authorTopBtn.hidden = YES;
