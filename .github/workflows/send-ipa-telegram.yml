@@ -234,57 +234,57 @@ jobs:
             mkdir -p "pages/$TAG"
 
             cat > "pages/$TAG/index.html" <<EOF
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0;url=$SIDESTORE_URL">
-  <title>Install Apollo Reborn $SHORT_SHA</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      text-align: center;
-      padding: 3rem 1.5rem;
-    }
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <meta http-equiv="refresh" content="0;url=$SIDESTORE_URL">
+              <title>Install Apollo Reborn $SHORT_SHA</title>
+              <style>
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                  text-align: center;
+                  padding: 3rem 1.5rem;
+                }
 
-    a.install {
-      display: inline-block;
-      padding: 0.8rem 1.2rem;
-      margin: 0.4rem;
-      border-radius: 0.7rem;
-      background: #007aff;
-      color: white;
-      text-decoration: none;
-    }
+                a.install {
+                  display: inline-block;
+                  padding: 0.8rem 1.2rem;
+                  margin: 0.4rem;
+                  border-radius: 0.7rem;
+                  background: #007aff;
+                  color: white;
+                  text-decoration: none;
+                }
 
-    a.download {
-      color: #000;
-      text-decoration: underline;
-      display: inline-block;
-      margin-top: 0.8rem;
-    }
-  </style>
-</head>
-<body>
-  <h1>Apollo Reborn</h1>
-  <p>Build <code>$SHORT_SHA</code></p>
-  <p>Opening SideStore…</p>
+                a.download {
+                  color: #000;
+                  text-decoration: underline;
+                  display: inline-block;
+                  margin-top: 0.8rem;
+                }
+              </style>
+            </head>
+            <body>
+              <h1>Apollo Reborn</h1>
+              <p>Build <code>$SHORT_SHA</code></p>
+              <p>Opening SideStore…</p>
 
-  <p>
-    <a class="install" href="$SIDESTORE_URL">Install in SideStore</a>
-  </p>
+              <p>
+                <a class="install" href="$SIDESTORE_URL">Install in SideStore</a>
+              </p>
 
-  <p>
-    <a class="download" href="$RELEASE_URL">Download IPA</a>
-  </p>
+              <p>
+                <a class="download" href="$RELEASE_URL">Download IPA</a>
+              </p>
 
-  <script>
-    window.location.replace("$SIDESTORE_URL");
-  </script>
-</body>
-</html>
-EOF
+              <script>
+                window.location.replace("$SIDESTORE_URL");
+              </script>
+            </body>
+            </html>
+            EOF
 
             echo "Created Pages entry for $TAG"
           done <<< "$RELEASE_TAGS"
@@ -299,57 +299,57 @@ EOF
           LATEST_SHORT_SHA="${LATEST_TAG#build-}"
 
           cat > pages/index.html <<EOF
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0;url=$LATEST_SIDESTORE_URL">
-  <title>Install Apollo Reborn</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      text-align: center;
-      padding: 3rem 1.5rem;
-    }
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="0;url=$LATEST_SIDESTORE_URL">
+            <title>Install Apollo Reborn</title>
+            <style>
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                text-align: center;
+                padding: 3rem 1.5rem;
+              }
 
-    a.install {
-      display: inline-block;
-      padding: 0.8rem 1.2rem;
-      margin: 0.4rem;
-      border-radius: 0.7rem;
-      background: #007aff;
-      color: white;
-      text-decoration: none;
-    }
+              a.install {
+                display: inline-block;
+                padding: 0.8rem 1.2rem;
+                margin: 0.4rem;
+                border-radius: 0.7rem;
+                background: #007aff;
+                color: white;
+                text-decoration: none;
+              }
 
-    a.download {
-      color: #000;
-      text-decoration: underline;
-      display: inline-block;
-      margin-top: 0.8rem;
-    }
-  </style>
-</head>
-<body>
-  <h1>Apollo Reborn</h1>
-  <p>Build <code>$LATEST_SHORT_SHA</code></p>
-  <p>Opening SideStore…</p>
+              a.download {
+                color: #000;
+                text-decoration: underline;
+                display: inline-block;
+                margin-top: 0.8rem;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>Apollo Reborn</h1>
+            <p>Build <code>$LATEST_SHORT_SHA</code></p>
+            <p>Opening SideStore…</p>
 
-  <p>
-    <a class="install" href="$LATEST_SIDESTORE_URL">Install in SideStore</a>
-  </p>
+            <p>
+              <a class="install" href="$LATEST_SIDESTORE_URL">Install in SideStore</a>
+            </p>
 
-  <p>
-    <a class="download" href="$LATEST_RELEASE_URL">Download IPA</a>
-  </p>
+            <p>
+              <a class="download" href="$LATEST_RELEASE_URL">Download IPA</a>
+            </p>
 
-  <script>
-    window.location.replace("$LATEST_SIDESTORE_URL");
-  </script>
-</body>
-</html>
-EOF
+            <script>
+              window.location.replace("$LATEST_SIDESTORE_URL");
+            </script>
+          </body>
+          </html>
+          EOF
 
           echo "Created root Pages entry for $LATEST_TAG."
 
