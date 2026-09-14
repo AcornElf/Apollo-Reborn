@@ -524,6 +524,56 @@ static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
              compatibleWithTraitCollection:traits];
 }
 
+#pragma mark - Recently Read Fonts
+
+static UIFont *RRTitle3Font(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:17 weight:UIFontWeightRegular],
+        UIFontTextStyleTitle3,
+        node
+    );
+}
+
+static UIFont *RRBodyFont(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:15 weight:UIFontWeightRegular],
+        UIFontTextStyleBody,
+        node
+    );
+}
+
+static UIFont *RRCalloutFont(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:14 weight:UIFontWeightMedium],
+        UIFontTextStyleCallout,
+        node
+    );
+}
+
+static UIFont *RRMediumSubheadlineFont(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:13 weight:UIFontWeightMedium],
+        UIFontTextStyleSubheadline,
+        node
+    );
+}
+
+static UIFont *RRSubheadlineFont(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:13 weight:UIFontWeightRegular],
+        UIFontTextStyleSubheadline,
+        node
+    );
+}
+
+static UIFont *RRFootnoteFont(id node) {
+    return RRScaledFont(
+        [UIFont systemFontOfSize:12 weight:UIFontWeightRegular],
+        UIFontTextStyleFootnote,
+        node
+    );
+}
+
 static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     NSString *text = @"NSFW";
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightMedium];
@@ -963,9 +1013,9 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     emptyLabel.text = self.posts.count > 0 ? @"No matching posts" : @"No recently read posts";
     emptyLabel.textAlignment = NSTextAlignmentCenter;
     emptyLabel.textColor = [UIColor secondaryLabelColor];
-    emptyLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
+    emptyLabel.font = RRTitle3Font(self);
     self.tableView.backgroundView = emptyLabel;
-}
+    }
 
 - (BOOL)isSearchActive {
     return self.searchController.isActive && self.searchController.searchBar.text.length > 0;
@@ -1035,8 +1085,8 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 - (NSAttributedString *)statsAttributedStringForLink:(RDKLink *)link {
     NSMutableAttributedString *result = [[NSMutableAttributedString alloc] init];
     UIColor *metaColor = RecentlyReadMetaColor();
-    UIFont *metaFont = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
-    NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: [UIColor yellowColor]};
+    UIFont *metaFont = RRFootnoteFont(self);
+    NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
     CGFloat iconSize = 11.0;
     CGFloat baselineOffset = -1.5;
 
@@ -1221,11 +1271,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIColor *metaColor = RecentlyReadMetaColor();
         UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
-        UIFont *mediumFont = RRScaledFont(
-            [UIFont systemFontOfSize:13 weight:UIFontWeightMedium],
-            UIFontTextStyleSubheadline,
-            self
-        );
+        UIFont *mediumFont = RRMediumSubheadlineFont(self);
         CGFloat metaLineHeight = ceil(mediumFont.lineHeight);
 
         // Subreddit header button (shown above title when SubredditAtTop)
@@ -1243,11 +1289,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
-        titleLabel.font = RRScaledFont(
-            [UIFont systemFontOfSize:15 weight:UIFontWeightRegular],
-            UIFontTextStyleBody,
-            self
-        );
+        titleLabel.font = RRBodyFont(self);
         titleLabel.textColor = [UIColor labelColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
@@ -1262,11 +1304,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *byLabel = [[UILabel alloc] init];
         byLabel.tag = kSubFooterByTag;
         byLabel.text = @" by ";
-        byLabel.font = RRScaledFont(
-            [UIFont systemFontOfSize:13 weight:UIFontWeightRegular],
-            UIFontTextStyleSubheadline,
-            self
-        );
+        byLabel.font = RRSubheadlineFont(self);
         byLabel.textColor = metaColor;
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
@@ -1404,7 +1442,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:titleLabel];
         // Subreddit above title
         subHeaderBtn.hidden = NO;
-        subHeaderBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        subHeaderBtn.titleLabel.font = RRCalloutFont(self);
         [subHeaderBtn setTitle:link.subreddit ?: @"" forState:UIControlStateNormal];
         objc_setAssociatedObject(subHeaderBtn, &kNavPathKey, subPath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
