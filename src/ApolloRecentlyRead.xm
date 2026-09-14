@@ -1058,11 +1058,19 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         attributes:textAttrs]];
 
     // Comment bubble
-    UIImage *commentIcon = [[UIImage systemImageNamed:@"bubble.right" withConfiguration:config]
+    UIImage *commentIcon = [[UIImage imageNamed:@"posts-comments"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *commentAtt = [[NSTextAttachment alloc] init];
     commentAtt.image = commentIcon;
-    commentAtt.bounds = CGRectMake(0, baselineOffset, iconSize + 1, iconSize);
+    CGFloat commentIconHeight = 11.0;
+    CGFloat commentIconWidth =
+        commentIconHeight * (commentIcon.size.width / commentIcon.size.height);
+    commentAtt.bounds = CGRectMake(
+        0,
+        baselineOffset,
+        commentIconWidth,
+        commentIconHeight
+    );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:commentAtt]];
     NSString *commentsStr = [(id)link respondsToSelector:@selector(totalComments)]
         ? [self compactScoreString:link.totalComments] : @"0";
@@ -1073,10 +1081,17 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     // Clock
     UIImage *clockIcon = [[UIImage imageNamed:@"posts-clock"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
-
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
-    clockAtt.bounds = CGRectMake(0, baselineOffset, iconSize, iconSize);
+    CGFloat clockIconHeight = 11.0;
+    CGFloat clockIconWidth =
+        clockIconHeight * (clockIcon.size.width / clockIcon.size.height);
+    clockAtt.bounds = CGRectMake(
+        0,
+        baselineOffset,
+        clockIconWidth,
+        clockIconHeight
+    );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:clockAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
         [NSString stringWithFormat:@"\u00A0%@", [self timeAgoStringFromDate:link.createdUTC]]
