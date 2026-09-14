@@ -665,7 +665,7 @@ static UIFont *RRFootnoteFont(id node) {
 
 static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     NSString *text = @"NSFW";
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightMedium];
+    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: [UIColor redColor]};
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
@@ -688,7 +688,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightMedium];
+    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
         NSForegroundColorAttributeName: [UIColor labelColor]
