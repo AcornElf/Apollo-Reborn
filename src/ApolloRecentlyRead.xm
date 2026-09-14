@@ -503,7 +503,7 @@ static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
         [defaults objectForKey:kRecentlyReadCustomTextSizeKey] != nil) {
 
         NSString *category = RecentlyReadCategoryForApplicationTextSize(
-            [defaults integerForKey:kRecentlyReadCustomTextSizeKey]
+            [defaults integerForKey:kRecentlyReadCustomTextSizeKey] - 1
         );
 
         if ([category isKindOfClass:[NSString class]] && category.length > 0) {
