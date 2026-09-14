@@ -544,7 +544,7 @@ static UIFont *RRBodyFont(id node) {
 
 static UIFont *RRCalloutFont(id node) {
     return RRScaledFont(
-        [UIFont systemFontOfSize:14 weight:UIFontWeightMedium],
+        [UIFont systemFontOfSize:15 weight:UIFontWeightMedium],
         UIFontTextStyleCallout,
         node
     );
