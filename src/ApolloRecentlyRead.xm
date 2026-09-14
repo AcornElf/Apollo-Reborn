@@ -512,14 +512,16 @@ static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
 }
 
 // Font scaled to Apollo's effective Appearance → Text Size setting.
-static UIFont *RRScaledFont(UIFontTextStyle textStyle, id node) {
+static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
     NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
 
     UITraitCollection *traits =
         [UITraitCollection traitCollectionWithPreferredContentSizeCategory:category];
 
-    return [UIFont preferredFontForTextStyle:textStyle
-                    compatibleWithTraitCollection:traits];
+    UIFontMetrics *metrics = [UIFontMetrics metricsForTextStyle:textStyle];
+
+    return [metrics scaledFontForFont:font
+             compatibleWithTraitCollection:traits];
 }
 
 static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
@@ -1219,7 +1221,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIColor *metaColor = RecentlyReadMetaColor();
         UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
-        UIFont *mediumFont = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        UIFont *mediumFont = RRScaledFont(
+            [UIFont systemFontOfSize:13 weight:UIFontWeightMedium],
+            UIFontTextStyleSubheadline,
+            self
+        );
         CGFloat metaLineHeight = ceil(mediumFont.lineHeight);
 
         // Subreddit header button (shown above title when SubredditAtTop)
@@ -1237,7 +1243,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
         titleLabel.numberOfLines = 3;
-        titleLabel.font = RRScaledFont(UIFontTextStyleBody, self);
+        titleLabel.font = RRScaledFont(
+            [UIFont systemFontOfSize:15 weight:UIFontWeightRegular],
+            UIFontTextStyleBody,
+            self
+        );
         titleLabel.textColor = [UIColor labelColor];
 
         // Footer stack (subreddit + by + author, shown below title when !SubredditAtTop)
@@ -1252,7 +1262,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UILabel *byLabel = [[UILabel alloc] init];
         byLabel.tag = kSubFooterByTag;
         byLabel.text = @" by ";
-        byLabel.font = [UIFont *byFont = RRScaledFont(UIFontTextStyleSubheadline, self); weight:UIFontWeightRegular];
+        byLabel.font = RRScaledFont(
+            [UIFont systemFontOfSize:13 weight:UIFontWeightRegular],
+            UIFontTextStyleSubheadline,
+            self
+        );
         byLabel.textColor = metaColor;
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
