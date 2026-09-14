@@ -1557,7 +1557,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     NSString *subPath = link.subreddit.length > 0 ? [NSString stringWithFormat:@"/r/%@", link.subreddit] : nil;
     NSString *authorPath = link.author.length > 0 ? [NSString stringWithFormat:@"/u/%@", link.author] : nil;
-    NSString *flairText = RecentlyReadDisplayFlair(link.linkFlairText);
 
     if (subAtTop) {
         [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:subHeaderBtn];
@@ -1601,7 +1600,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
-    NSString *flairText = RecentlyReadDisplayFlair(link.linkFlairText);
+    NSString *flairText = RecentlyReadDisplayFlair(
+        ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
+    );
     UIFont *titleFont = titleLabel.font;
     NSMutableParagraphStyle *titlePara = [[NSMutableParagraphStyle alloc] init];
     titlePara.lineSpacing = 1.5;
