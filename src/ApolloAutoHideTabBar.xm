@@ -107,6 +107,7 @@ static ApolloTabBarMinimizeBehavior ApolloDesiredTabBarMinimizeBehavior(BOOL ena
 @property (nonatomic, assign) NSTimeInterval idleRevealTimerScheduledAt;
 @property (nonatomic, assign) NSInteger idleRevealGeneration;
 @property (nonatomic, strong) ApolloTabBarRevealAnimator *revealAnimator;
+@property (nonatomic, weak) UIViewController *scrollToTopOwner;
 @property (nonatomic, assign) BOOL twoGestureRevealActive;
 @property (nonatomic, assign) BOOL twoGestureRearmAfterGesture;
 @property (nonatomic, assign) NSUInteger twoGestureRevealGestureToken;
@@ -138,6 +139,8 @@ static ApolloTabBarRuntimeState *ApolloRuntimeState(UITabBarController *tbc,
 @interface ApolloTabBarScrollRuntimeState : NSObject
 @property (nonatomic, assign) NSUInteger gestureToken;
 @property (nonatomic, assign) CGFloat upwardRevealDistance;
+@property (nonatomic, assign) CGFloat lastIntentPanTranslationY;
+@property (nonatomic, assign) BOOL hasIntentPanTranslation;
 @property (nonatomic, assign) NSInteger presentationDirection;
 @property (nonatomic, assign) CGFloat presentationDirectionalDistance;
 @property (nonatomic, assign) BOOL presentationDirectionTriggered;
@@ -256,8 +259,10 @@ static void ApolloApplyMinimizeBehavior(UITabBarController *tbc,
 
 static void ApolloHoldCompletedTwoGestureReveal(UITabBarController *tbc) {
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, NO);
-    if (!state.twoGestureRevealActive || state.revealAnimator ||
-        sClassicTabBarScrollBehavior || !ApolloTabBarManualNativeMorphEnabled()) return;
+    BOOL topTapHold = state.scrollToTopOwner &&
+        state.scrollToTopOwner.navigationController.topViewController == state.scrollToTopOwner;
+    if ((!topTapHold && (!state.twoGestureRevealActive || sClassicTabBarScrollBehavior)) ||
+        state.revealAnimator || !ApolloTabBarManualNativeMorphEnabled()) return;
 
     // Left/Right need .never to consume the next gesture, but changing that
     // policy also makes UIKit expand the bar immediately. Only install the
@@ -380,6 +385,8 @@ static void ApolloSetTabBarPresentationHidden(UITabBarController *tbc,
     if (!tabBar) return;
 
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
+    if (hidden && state.scrollToTopOwner &&
+        state.scrollToTopOwner.navigationController.topViewController == state.scrollToTopOwner) return;
     ApolloTabBarHideStyle style = sTabBarHideStyle;
     if (style == ApolloTabBarHideStyleDown) {
         ApolloNormalizeDownTabBarGeometry(tbc);
@@ -1080,6 +1087,7 @@ static BOOL ApolloTwoGestureRevealIsActive(UITabBarController *tbc) {
 static void ApolloClearTwoGestureRevealState(UITabBarController *tbc) {
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, NO);
     if (!state) return;
+    state.scrollToTopOwner = nil;
     state.twoGestureRevealActive = NO;
     state.twoGestureRearmAfterGesture = NO;
     state.twoGestureRevealGestureToken = 0;
@@ -1735,19 +1743,41 @@ static BOOL ApolloBarSwipeGestureActive(UINavigationController *nav) {
     return state == UIGestureRecognizerStateBegan || state == UIGestureRecognizerStateChanged;
 }
 
+%hook _TtC6Apollo24RedditListViewController
+
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+    %orig(editing, animated);
+    UIViewController *controller = (UIViewController *)self;
+    UINavigationController *nav = controller.navigationController;
+    if (nav.topViewController != controller) return;
+
+    // Reordering and the alphabet index can return to the top without the
+    // reverse pan UIKit expects to reveal its bars. Keep Done reachable for
+    // the whole edit session, and re-read the preference when it ends.
+    nav.hidesBarsOnSwipe = !controller.isEditing && ApolloNativeHideBarsOnScrollPreferenceEnabled();
+    if (controller.isEditing) {
+        ApolloTopBarRestoreNavigationController(nav);
+        [nav setNavigationBarHidden:NO animated:animated];
+    }
+}
+
+%end
+
 %hook UINavigationController
 
 - (void)setNavigationBarHidden:(BOOL)hidden {
+    if (ApolloSubredditListIsEditing(self)) hidden = NO;
     if (hidden) ApolloTopBarRestoreNavigationController(self);
-    %orig;
+    %orig(hidden);
     if (ApolloSupportsNativeTabBarScrollBehavior()) return;
     if (ApolloBarSwipeGestureActive(self)) return;
     ApolloMirrorNavBarStateToTabBar(self, hidden, NO);
 }
 
 - (void)setNavigationBarHidden:(BOOL)hidden animated:(BOOL)animated {
+    if (ApolloSubredditListIsEditing(self)) hidden = NO;
     if (hidden) ApolloTopBarRestoreNavigationController(self);
-    %orig;
+    %orig(hidden, animated);
     if (ApolloSupportsNativeTabBarScrollBehavior()) return;
     if (ApolloBarSwipeGestureActive(self)) return;
     ApolloMirrorNavBarStateToTabBar(self, hidden, animated);
@@ -1907,8 +1937,9 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
         return;
     }
 
-    %orig;
-    if (!value) return;
+    BOOL effectiveValue = value && !ApolloSubredditListIsEditing(self);
+    %orig(effectiveValue);
+    if (!effectiveValue) return;
     UIPanGestureRecognizer *gr = self.barHideOnSwipeGestureRecognizer;
     if (!gr) return;
     static char kAttachedKey;
@@ -1934,6 +1965,29 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
 
 %end
 
+static void ApolloRevealBarsForScrollToTop(UIViewController *owner);
+
+// Apollo's navigation tap and section index can move the real table directly,
+// bypassing UIScrollViewDelegate's status-bar callbacks. Observe that movement
+// at the table itself, including the animated setter's destination.
+static BOOL ApolloScrollReturnsToTop(UIScrollView *scroll, CGPoint target) {
+    if (!sApolloNativeHideBarsOnScrollPreferenceEnabled ||
+        !ApolloSupportsNativeTabBarScrollBehavior() || !scroll.window ||
+        !ApolloTabBarScrollViewParticipates(scroll)) return NO;
+    CGFloat top = -scroll.adjustedContentInset.top;
+    return scroll.contentOffset.y > top + 1.0 && target.y <= top + 1.0;
+}
+
+static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
+    UITabBarController *tbc = ApolloResolveTabBarControllerForScrollView(scroll);
+    UIViewController *selected = tbc.selectedViewController;
+    UINavigationController *nav = [selected isKindOfClass:UINavigationController.class]
+        ? (UINavigationController *)selected : selected.navigationController;
+    UIView *content = nav.topViewController.viewIfLoaded;
+    if (content && [scroll isDescendantOfView:content])
+        ApolloRevealBarsForScrollToTop(nav.topViewController);
+}
+
 %hook UIScrollView
 
 - (void)didMoveToWindow {
@@ -1958,6 +2012,8 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
     }
     if (pan.state == UIGestureRecognizerStateBegan || gestureEnded) {
         ApolloResetPresentationScrollIntent(scrollState);
+        scrollState.lastIntentPanTranslationY = [pan translationInView:self.window].y;
+        scrollState.hasIntentPanTranslation = !gestureEnded;
     }
     if (sClassicTabBarScrollBehavior) return;
 
@@ -1971,7 +2027,29 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
     }
 }
 
+// Verified on the running UIKit: BOOL return, one BOOL argument. Both
+// status-bar window dispatch and direct native scroll-to-top requests enter
+// here before the scroll animation begins, including Apollo's proxy view.
+- (BOOL)_scrollToTopIfPossible:(BOOL)animated {
+    if (self.window && self.scrollsToTop) {
+        ApolloRevealBarsForTopScrollView(self);
+    }
+    return %orig(animated);
+}
+
+- (void)setContentOffset:(CGPoint)contentOffset animated:(BOOL)animated {
+    BOOL returnsToTop = ApolloScrollReturnsToTop(self, contentOffset);
+    %orig(contentOffset, animated);
+    if (returnsToTop) ApolloRevealBarsForTopScrollView(self);
+}
+
 - (void)setContentOffset:(CGPoint)contentOffset {
+    if (ApolloScrollReturnsToTop(self, contentOffset)) {
+        %orig(contentOffset);
+        ApolloRevealBarsForTopScrollView(self);
+        return;
+    }
+
     BOOL customPresentationMode = ApolloTabBarCustomPresentationEnabled();
     BOOL mainList = ApolloTabBarScrollViewParticipates(self);
     if (!sApolloNativeHideBarsOnScrollPreferenceEnabled ||
@@ -1982,6 +2060,16 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
     }
 
     BOOL userDriven = self.tracking || self.dragging;
+    if (mainList && userDriven && contentOffset.y > self.contentOffset.y + 0.5 &&
+        contentOffset.y > -self.adjustedContentInset.top + 1.0) {
+        UITabBarController *owner = ApolloResolveTabBarControllerForScrollView(self);
+        ApolloTabBarRuntimeState *runtime = ApolloRuntimeState(owner, NO);
+        if (runtime.scrollToTopOwner) {
+            runtime.scrollToTopOwner = nil;
+            ApolloApplyMinimizeBehavior(owner,
+                ApolloDesiredTabBarMinimizeBehavior(ApolloTabBarControllerWantsNativeMinimize(owner)));
+        }
+    }
     // Attach against the live recognizer as well as didMoveToWindow;
     // AsyncDisplayKit can replace its table view recognizer after mounting.
     ApolloEnsureAutoHidePanObserver(self);
@@ -1999,6 +2087,29 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
     CGFloat clampedNewOffsetY = MIN(maximumOffsetY,
         MAX(minimumOffsetY, contentOffset.y));
     CGFloat deltaY = clampedNewOffsetY - clampedOldOffsetY;
+    if (userDriven && mainList) {
+        // A changing search palette adjusts the safe area and re-parks the
+        // table while isDragging is still YES. Those offset writes are not
+        // new finger movement. Treating them as intent made Hide Header on
+        // Scroll alternate hidden/revealed every frame during a quick reversal
+        // at the top of comments, repeatedly pulling the content back up.
+        // Consume each pan translation once, BEFORE changing bar presentation,
+        // so synchronous inset corrections cannot reuse the same movement.
+        // Use window coordinates: the table's own geometry is changing here.
+        ApolloTabBarScrollRuntimeState *intentState = ApolloScrollRuntimeState(self, YES);
+        UIPanGestureRecognizer *pan = self.panGestureRecognizer;
+        BOOL livePan = pan.state == UIGestureRecognizerStateBegan ||
+                       pan.state == UIGestureRecognizerStateChanged;
+        CGFloat translationY = [pan translationInView:self.window].y;
+        CGFloat panDeltaY = intentState.hasIntentPanTranslation && livePan
+            ? intentState.lastIntentPanTranslationY - translationY : 0.0;
+        intentState.lastIntentPanTranslationY = translationY;
+        intentState.hasIntentPanTranslation = livePan;
+        // Retain the rubber-band exclusion, but bound the intent distance to
+        // actual gesture travel and reject geometry moving against the finger.
+        deltaY = deltaY * panDeltaY > 0.0
+            ? copysign(MIN(fabs(deltaY), fabs(panDeltaY)), panDeltaY) : 0.0;
+    }
     UITabBarController *tbc = nil;
     BOOL shouldScheduleIdleReveal = NO;
 
@@ -2108,6 +2219,36 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
 }
 
 %end
+
+// A status/navigation-bar tap is a reveal request even when Apollo's proxy
+// returns NO and scrolls its real table itself. Do not depend on reverse pans
+// or on a particular content offset reaching the tab-bar scroll observer.
+static void ApolloRevealBarsForScrollToTop(UIViewController *owner) {
+    UINavigationController *nav = [owner isKindOfClass:UINavigationController.class]
+        ? (UINavigationController *)owner : owner.navigationController;
+    if (!nav.viewIfLoaded.window ||
+        (owner != nav && nav.topViewController != owner)) return;
+    UITabBarController *tbc = ApolloLocateTabBarController(nav);
+    if (!ApolloSupportsNativeTabBarScrollBehavior()) {
+        if (nav.hidesBarsOnSwipe) [nav setNavigationBarHidden:NO animated:YES];
+        return;
+    }
+    if (!ApolloTabBarControllerWantsNativeMinimize(tbc)) return;
+    ApolloCancelIdleRevealTimer(tbc);
+    ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
+    state.scrollToTopOwner = nav.topViewController;
+    // Start both existing presentation animations in the same run-loop turn.
+    // Repeated taps reuse their targets instead of restarting the animations.
+    ApolloTopBarSetScrollHidden(tbc, NO, YES, @"scroll to top");
+    if (!sClassicTabBarScrollBehavior) {
+        ApolloStartTwoGestureReveal(tbc, @"scroll to top", 0);
+    } else if (ApolloTabBarCustomPresentationEnabled()) {
+        ApolloSetTabBarPresentationHidden(tbc, NO, YES, @"scroll to top");
+    } else {
+        ApolloStartAnimatedTabBarReveal(tbc, @"scroll to top");
+    }
+    ApolloHoldCompletedTwoGestureReveal(tbc);
+}
 
 %ctor {
     sApolloNativeHideBarsOnScrollPreferenceEnabled =
