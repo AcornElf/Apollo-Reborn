@@ -10,6 +10,7 @@
 #import "settings/ApolloSettingsTableViewController.h"
 #import "ApolloState.h"
 #import "ApolloThemeTokens.h"
+#import "ApolloThemeRuntime.h"
 #import "Tweak.h"
 #import "UserDefaultConstants.h"
 #import "fishhook.h"
