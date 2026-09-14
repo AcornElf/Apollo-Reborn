@@ -511,6 +511,42 @@ static NSString *RecentlyReadEffectiveContentSizeCategory(id node) {
     return RecentlyReadSystemContentSizeCategory(node);
 }
 
+// Prepare Reddit link flair for display without changing its original casing.
+static NSString *RecentlyReadDisplayFlair(NSString *raw) {
+    if (![raw isKindOfClass:[NSString class]] || raw.length == 0) return @"";
+
+    static NSRegularExpression *emojiRegex = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        emojiRegex = [NSRegularExpression
+            regularExpressionWithPattern:@":[^:\\s]+:"
+            options:0
+            error:NULL];
+    });
+
+    NSString *out = emojiRegex
+        ? [emojiRegex stringByReplacingMatchesInString:raw
+                                               options:0
+                                                 range:NSMakeRange(0, raw.length)
+                                          withTemplate:@""]
+        : raw;
+
+    NSArray<NSString *> *parts =
+        [out componentsSeparatedByCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+    NSMutableArray<NSString *> *kept = [NSMutableArray array];
+    for (NSString *part in parts) {
+        if (part.length > 0) {
+            [kept addObject:part];
+        }
+    }
+
+    return [kept componentsJoinedByString:@" "];
+}
+
+
+
 // Apollo's seven-position Text Size scale, measured from Compact post titles.
 // Step 4 is the default and therefore the reference point.
 static const CGFloat kRecentlyReadTextSizeScale[] = {
@@ -566,6 +602,15 @@ static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
     CGFloat scale = kRecentlyReadTextSizeScale[index];
 
     return [font fontWithSize:font.pointSize * scale];
+}
+
+// Scale vertical spacing proportionally with Apollo's seven-position Text Size scale.
+// Step 4 (18 pt) is the reference point.
+static CGFloat RRScaledSpacing(CGFloat spacing, id node) {
+    UIFont *referenceFont = [UIFont systemFontOfSize:18.0];
+    UIFont *scaledFont = RRScaledFont(referenceFont, UIFontTextStyleBody, node);
+
+    return spacing * (scaledFont.pointSize / 18.0);
 }
 
 #pragma mark - Recently Read Fonts
@@ -637,6 +682,37 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
         // Apollo's native NSFW badge red (#E60000)
         [[UIColor colorWithRed:(0xE6 / 255.0) green:0.0 blue:0.0 alpha:1.0] setFill];
         [path fill];
+        [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+    }];
+}
+
+//Flair badge creation
+static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
+    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightMedium];
+    NSDictionary *attrs = @{
+        NSFontAttributeName: badgeFont,
+        NSForegroundColorAttributeName: [UIColor labelColor]
+    };
+
+    CGSize textSize = [text sizeWithAttributes:attrs];
+    CGFloat hPad = 4.25;
+    CGFloat vPad = 1.5;
+    CGFloat badgeHeight = textSize.height + vPad * 2;
+    CGFloat badgeWidth = textSize.width + hPad * 2;
+    CGFloat cornerRadius = badgeHeight * 0.325;
+    CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
+
+    UIGraphicsImageRenderer *renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
+
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+        UIBezierPath *path =
+            [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
+                                      cornerRadius:cornerRadius];
+
+        [[UIColor tertiarySystemFillColor] setFill];
+        [path fill];
+
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
     }];
 }
@@ -1332,7 +1408,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         // Title
         UILabel *titleLabel = [[UILabel alloc] init];
         titleLabel.tag = kTitleTag;
-        titleLabel.numberOfLines = 3;
+        titleLabel.numberOfLines = 0;
         titleLabel.font = RRBodyFont(self);
         titleLabel.textColor = [UIColor labelColor];
 
@@ -1401,7 +1477,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         stack.alignment = UIStackViewAlignmentLeading;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:titleLabel];
+        [stack setCustomSpacing:RRScaledSpacing(kRecentlyReadDefaultTopGap, self)
+              afterView:titleLabel];
         [stack setCustomSpacing:0 afterView:footerStack];
         [stack setCustomSpacing:0 afterView:authorTopBtn];
         [cell.contentView addSubview:stack];
@@ -1429,7 +1506,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
             [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
             [sep.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
-            [sep.heightAnchor constraintEqualToConstant:1.0 / [UIScreen mainScreen].scale],
+            [sep.heightAnchor constraintEqualToConstant:1.0],
         ]];
 
         objc_setAssociatedObject(cell, &kThumbWidthConstraintKey, thumbWidth, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1480,6 +1557,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     NSString *subPath = link.subreddit.length > 0 ? [NSString stringWithFormat:@"/r/%@", link.subreddit] : nil;
     NSString *authorPath = link.author.length > 0 ? [NSString stringWithFormat:@"/u/%@", link.author] : nil;
+    NSString *flairText = RecentlyReadDisplayFlair(link.linkFlairText);
 
     if (subAtTop) {
         [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:subHeaderBtn];
@@ -1523,6 +1601,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
+    NSString *flairText = RecentlyReadDisplayFlair(link.linkFlairText);
     UIFont *titleFont = titleLabel.font;
     NSMutableParagraphStyle *titlePara = [[NSMutableParagraphStyle alloc] init];
     titlePara.lineSpacing = 1.5;
@@ -1532,6 +1611,20 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     if (link.isNSFW) {
         NSMutableAttributedString *titleAttr = [[NSMutableAttributedString alloc] initWithString:titleText
             attributes:titleAttrs];
+        if (flairText.length > 0) {
+            UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
+
+            NSTextAttachment *flairAtt = [[NSTextAttachment alloc] init];
+            flairAtt.image = flairBadge;
+
+            CGFloat fontMid = (titleFont.ascender + titleFont.descender) / 2.0;
+            CGFloat yOffset = fontMid - flairBadge.size.height / 2.0;
+            flairAtt.bounds = CGRectMake(0, yOffset, flairBadge.size.width, flairBadge.size.height);
+
+            [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
+            [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:flairAtt]];
+        }
+
         [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
         UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize);
         NSTextAttachment *att = [[NSTextAttachment alloc] init];
@@ -1542,7 +1635,25 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
         titleLabel.attributedText = titleAttr;
     } else {
-        titleLabel.attributedText = [[NSAttributedString alloc] initWithString:titleText attributes:titleAttrs];
+        NSMutableAttributedString *titleAttr =
+            [[NSMutableAttributedString alloc] initWithString:titleText
+                                                    attributes:titleAttrs];
+
+        if (flairText.length > 0) {
+            UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
+
+            NSTextAttachment *flairAtt = [[NSTextAttachment alloc] init];
+            flairAtt.image = flairBadge;
+
+            CGFloat fontMid = (titleFont.ascender + titleFont.descender) / 2.0;
+            CGFloat yOffset = fontMid - flairBadge.size.height / 2.0;
+            flairAtt.bounds = CGRectMake(0, yOffset, flairBadge.size.width, flairBadge.size.height);
+
+            [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
+            [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:flairAtt]];
+        }
+
+        titleLabel.attributedText = titleAttr;
     }
 
     statsLabel.attributedText = [self statsAttributedStringForLink:link];
