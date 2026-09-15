@@ -1336,20 +1336,6 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     }
 }
 
-- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
-    [super apollo_applyThemeToCell:cell];
-
-    BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
-    ApolloThemeToken cellBackgroundToken = darkMode
-        ? ApolloThemeTokenSecondaryBackground
-        : ApolloThemeTokenBackground;
-
-    UIColor *cellBackgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
-    if (cellBackgroundColor) {
-        cell.backgroundColor = cellBackgroundColor;
-    }
-}
-
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
     NSString *path = objc_getAssociatedObject(sender, &kNavPathKey);
     if (!path.length) return;
