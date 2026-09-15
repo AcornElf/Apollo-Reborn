@@ -710,7 +710,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 if (ApolloThemeRuntimeIsActive()) {
     flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
 } else {
-    flairTextColor = [UIColor secondaryLabelColor];
+    flairTextColor = [UIColor tertiaryLabelColor];
 }
 
     NSDictionary *attrs = @{
@@ -1247,17 +1247,12 @@ if (ApolloThemeRuntimeIsActive()) {
     CGFloat upIconSize = 12.0;
     CGFloat iconOffset = kRecentlyReadIconOffset[textSizeIndex];
 
-    CGFloat upIconWidth =
-        upIconSize * (upIcon.size.width / upIcon.size.height);
-    CGFloat commentIconWidth =
-        iconBoxSize * (commentIcon.size.width / commentIcon.size.height);
-    CGFloat clockIconWidth =
-        iconBoxSize * (clockIcon.size.width / clockIcon.size.height);
-
     CGFloat upIconInnerOffset = (iconBoxSize - upIconSize) / 2.0;
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+    CGFloat upIconWidth =
+        upIconSize * (upIcon.size.width / upIcon.size.height);
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
 
@@ -1275,6 +1270,8 @@ if (ApolloThemeRuntimeIsActive()) {
     // Comment bubble
     UIImage *commentIcon = [[UIImage imageNamed:@"posts-comments"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+    CGFloat commentIconWidth =
+        iconBoxSize * (commentIcon.size.width / commentIcon.size.height);
     NSTextAttachment *commentAtt = [[NSTextAttachment alloc] init];
     commentAtt.image = commentIcon;
 
@@ -1294,6 +1291,8 @@ if (ApolloThemeRuntimeIsActive()) {
     // Clock
     UIImage *clockIcon = [[UIImage imageNamed:@"posts-clock"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+    CGFloat clockIconWidth =
+        iconBoxSize * (clockIcon.size.width / clockIcon.size.height);
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
 
