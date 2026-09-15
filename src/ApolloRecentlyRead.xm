@@ -1312,6 +1312,22 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     return [super apollo_themeCellBackgroundColor];
 }
 
+- (void)apollo_applyTheme {
+    [super apollo_applyTheme];
+
+    BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    ApolloThemeToken cellBackgroundToken = darkMode
+        ? ApolloThemeTokenSecondaryBackground
+        : ApolloThemeTokenBackground;
+
+    UIColor *cellBackgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+    if (!cellBackgroundColor) return;
+
+    for (UITableViewCell *cell in self.tableView.visibleCells) {
+        cell.backgroundColor = cellBackgroundColor;
+    }
+}
+
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
     NSString *path = objc_getAssociatedObject(sender, &kNavPathKey);
     if (!path.length) return;
