@@ -694,7 +694,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     UIColor *flairTextColor = ApolloThemeRuntimeIsActive()
         ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel)
-        : [UIColor secondaryLabelColor];
+        : [UIColor tertiaryLabelColor];
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
@@ -1238,7 +1238,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
     upAtt.bounds = CGRectMake(
         0,
-        baselineOffset,
+        0,
+        //baselineOffset,
         upIconWidth,
         iconSize
     );
@@ -1257,7 +1258,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
     commentAtt.bounds = CGRectMake(
         0,
-        baselineOffset,
+        0,
+        //baselineOffset,
         commentIconWidth,
         iconSize
     );
@@ -1278,7 +1280,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
     clockAtt.bounds = CGRectMake(
         0,
-        baselineOffset,
+        0,
+        //baselineOffset,
         clockIconWidth,
         iconSize
     );
