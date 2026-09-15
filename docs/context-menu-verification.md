@@ -89,6 +89,15 @@ UIKit icon renderer was stubbed for the host build.
   is no longer part of a row's signature either, so a row that stops being
   last doesn't cross-fade with itself. Sim recording after the fix: rows
   move vertically only, the toggled row fades/scales in place.
+- Item rows have EXACT heights (`itemRowHeightWithSubtitle:` — one template
+  cell per variant, cached per cell width and content size category) and
+  `animatePreviewStateChange` runs its batch update only when the card's
+  height actually changed. UIKit self-sized the rows from a 52 pt estimate;
+  subtitled rows are taller, so any batch update re-resolved the estimates of
+  rows above the viewport and scrolled the list several rows on every switch
+  flip while scrolled down (sim recording, 2026-09-15 02:11). After the
+  change a flip deep in the list moves nothing but the switch and its row's
+  dimming (frame-diff of the list region: ~3 vs 8–26 before).
 - Drag auto-scroll under the stuck card: UIKit only auto-scrolls a drag near
   the table's own edges, which the pinned card covers, so a row dragged
   upward stalled at the card's bottom edge (device recording, 2026-09-15).

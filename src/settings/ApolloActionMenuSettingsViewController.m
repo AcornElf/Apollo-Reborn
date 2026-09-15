@@ -576,6 +576,9 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 // Drag auto-scroll under the stuck card (see trackDragAutoScrollForSession:).
 @property (nonatomic, strong) CADisplayLink *dragAutoScrollLink;
 @property (nonatomic) CGFloat dragFingerY; // the lifted row's finger, in the table's visible bounds
+// Exact item-row heights (see itemRowHeightWithSubtitle:).
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *itemRowHeights;
+@property (nonatomic, strong) ApolloAMItemCell *measuringItemCell;
 @end
 
 static NSString *const kApolloAMRowMenu = @"menu";
@@ -768,6 +771,13 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
                                      inTable:tableView];
         }
                                       onSelect:nil];
+        // An exact height, never UIKit's estimate (see itemRowHeightWithSubtitle:).
+        row.height = ^CGFloat {
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return UITableViewAutomaticDimension;
+            BOOL subtitle = strongSelf.editingAllMenus || !ApolloActionMenuItemWasOffered(strongSelf.context, itemID);
+            return [strongSelf itemRowHeightWithSubtitle:subtitle];
+        };
         [itemRows addObject:row];
     }
 
@@ -817,6 +827,50 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     cell.toggle.on = !hidden;
     [self styleItemCell:cell forItem:item hidden:hidden];
     return cell;
+}
+
+// UIKit sizes the item cells itself (rowHeight automatic, estimated 52 pt),
+// and a subtitled row is taller than the estimate. Rows above the viewport
+// keep the estimate until they are displayed, and any batch update — the
+// card's height changing, the reset row appearing, the section rebuild after
+// a drag — re-resolves them, which jumped the list several rows whenever it
+// was scrolled down (sim recording, 2026-09-15). So hand UIKit exact heights:
+// one template cell measured per variant (subtitle or not), cached per cell
+// width and content size category.
+- (CGFloat)itemRowHeightWithSubtitle:(BOOL)subtitle {
+    UITableView *table = self.tableView;
+    CGFloat width = self.previewCardWidth;
+    if (width <= 0.0) {
+        UIEdgeInsets inset = ApolloPinnedPreviewSectionContentInset(table);
+        width = CGRectGetWidth(table.bounds) - inset.left - inset.right;
+    }
+    if (width <= 0.0) return UITableViewAutomaticDimension;
+    NSString *key = [NSString stringWithFormat:@"%d|%.0f|%@", subtitle, width,
+                     table.traitCollection.preferredContentSizeCategory ?: @""];
+    NSNumber *cached = self.itemRowHeights[key];
+    if (cached) return cached.doubleValue;
+
+    if (!self.measuringItemCell) {
+        self.measuringItemCell = [[ApolloAMItemCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    }
+    ApolloAMItemCell *cell = self.measuringItemCell;
+    cell.textLabel.text = @"Measure";
+    cell.detailTextLabel.text = subtitle ? @"Shown when available" : nil;
+    // Representative icon: the catalogue's are 24 pt boxes / 19 pt symbols,
+    // which never exceed the label stack, so any such glyph will do.
+    cell.imageView.image = [UIImage systemImageNamed:@"square"
+                                   withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19.0
+                                                                                                   weight:UIImageSymbolWeightRegular]];
+    cell.bounds = CGRectMake(0.0, 0.0, width, 100.0);
+    [cell setNeedsLayout];
+    [cell layoutIfNeeded];
+    CGFloat height = ceil([cell systemLayoutSizeFittingSize:CGSizeMake(width, UILayoutFittingCompressedSize.height)
+                                  withHorizontalFittingPriority:UILayoutPriorityRequired
+                                        verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+    if (height <= 0.0) return UITableViewAutomaticDimension;
+    if (!self.itemRowHeights) self.itemRowHeights = [NSMutableDictionary dictionary];
+    self.itemRowHeights[key] = @(height);
+    return height;
 }
 
 // The look that follows the hidden state: dimmed icon and title, the All
@@ -1149,6 +1203,14 @@ static const CGFloat kApolloAMDragAutoScrollMaxStep = 12.0; // pt per frame at t
     CGFloat width = [self previewCardWidthForTable:self.tableView];
     [self.previewContentView apollo_refreshForContext:self.context width:width animated:YES];
     UITableView *table = self.tableView;
+    // Touch the table only when the card's height actually changed (visible
+    // rows crossing the eight-row cap, the "+N more" line coming or going).
+    // A batch update for its own sake re-lays out every row and header, and
+    // scrolled the list on each switch flip.
+    NSIndexPath *spacer = [self indexPathForRowID:kApolloAMRowPreview];
+    CGFloat newHeight = [ApolloAMPreviewContentView heightForState:ApolloAMCurrentPreviewState(self.context)];
+    CGFloat currentHeight = spacer ? CGRectGetHeight([table rectForRowAtIndexPath:spacer]) : newHeight;
+    if (fabs(newHeight - currentHeight) < 0.5) return;
     if (UIAccessibilityIsReduceMotionEnabled()) {
         [table performBatchUpdates:nil completion:nil]; // re-reads the spacer's height block
         return;
