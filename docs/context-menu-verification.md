@@ -98,6 +98,27 @@ UIKit icon renderer was stubbed for the host build.
   flip while scrolled down (sim recording, 2026-09-15 02:11). After the
   change a flip deep in the list moves nothing but the switch and its row's
   dimming (frame-diff of the list region: ~3 vs 8–26 before).
+- Pinned card vs. batch updates (`ApolloSettingsPinnedPreview.m`, shared
+  host). The stuck card's screen position was derived from its spacer row's
+  live content y; a batch update applies section header/footer heights UIKit
+  had only estimated, and the row moves by the difference — on this screen
+  the Preview header goes 55.3 → 17.7pt, so the first update while scrolled
+  (the form base's footer re-measure, log "footer 2 is 110.0pt tall but its
+  view fits 90.3pt"; the reset row appearing) pushed the card ~20–38pt up
+  under the nav bar with "Preview" cut off (device recording, 2026-09-15
+  14:17; reproduced in the sim). Now: while stuck the table holds the row y
+  the card locked at (`lockedRowMinY`, dropped once the list is home or the
+  width changes) and logs "[PinnedPreview] spacer row moved N pt while
+  stuck … holding the card" when it drifts; the pinned pass also re-runs
+  after `endUpdates`, `performBatchUpdates:`, `reloadSections:` and
+  `reloadRowsAtIndexPaths:`. Sim: flipping a switch and tapping Reset at the
+  bottom of the list logged the −37.7pt drift and left the nav bar, title
+  and card strip pixel-identical (screenshot diff 0.0).
+- The reset row coming or going is applied WITHOUT animation while the card
+  is stuck (`applyVisibilityChange`): animated, the model offset moves at
+  once while UIKit animates the rows, and the card — placed at the final
+  offset — sat ~85pt above rows still on their way for a beat (sim recording,
+  2026-09-15). At the top of the list it still animates.
 - Drag auto-scroll under the stuck card: UIKit only auto-scrolls a drag near
   the table's own edges, which the pinned card covers, so a row dragged
   upward stalled at the card's bottom edge (device recording, 2026-09-15).

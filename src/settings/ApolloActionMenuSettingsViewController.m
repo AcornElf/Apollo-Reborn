@@ -971,8 +971,23 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     // Only if the model refused the change (it never does for a listed item)
     // does the switch need putting back; otherwise it keeps its own motion.
     if (cell.toggle.on == nowHidden) [cell.toggle setOn:!nowHidden animated:YES];
-    [self visibilityDidChange]; // the reset row
+    [self applyVisibilityChange]; // the reset row
     [self animatePreviewStateChange];
+}
+
+// The reset row coming or going is a table batch update. Animated while the
+// card is stuck it shows a beat where the card — placed from the model
+// offset the update moved at once — sits above rows still animating to it
+// (a deletion at the bottom of the list shrinks the content, so the offset
+// clamps; sim recording, 2026-09-15). So no animation while stuck; the row
+// simply appears or disappears, and the pinned pass after the update keeps
+// the card where it is.
+- (void)applyVisibilityChange {
+    if (self.previewHost.stuck) {
+        [UIView performWithoutAnimation:^{ [self visibilityDidChange]; }];
+    } else {
+        [self visibilityDidChange];
+    }
 }
 
 - (void)resetCurrentMenu {
@@ -981,7 +996,7 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     }
     // Visibility first (this very row disappears), then the items section —
     // same ordering rule as the drag completion above.
-    [self visibilityDidChange];
+    [self applyVisibilityChange];
     NSString *firstItemRowID = [self firstItemRowID];
     if (firstItemRowID) {
         [self rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationFade];
@@ -1029,7 +1044,7 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
-        [strongSelf visibilityDidChange];
+        [strongSelf applyVisibilityChange];
         NSString *firstItemRowID = [strongSelf firstItemRowID];
         if (firstItemRowID) {
             [strongSelf rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationNone];
