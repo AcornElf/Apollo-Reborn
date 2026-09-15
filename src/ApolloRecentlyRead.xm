@@ -710,7 +710,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 if (ApolloThemeRuntimeIsActive()) {
     flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
 } else {
-    flairTextColor = [UIColor tertiaryLabelColor];
+    flairTextColor = [UIColor secondaryLabelColor];
 }
 
     NSDictionary *attrs = @{
@@ -1258,7 +1258,7 @@ if (ApolloThemeRuntimeIsActive()) {
 
     upAtt.bounds = CGRectMake(
         0,
-        iconOffset + upIconInnerOffset,
+        -iconOffset + upIconInnerOffset,
         upIconWidth,
         upIconSize
     );
@@ -1277,7 +1277,7 @@ if (ApolloThemeRuntimeIsActive()) {
 
     commentAtt.bounds = CGRectMake(
         0,
-        iconOffset,
+        -iconOffset,
         commentIconWidth,
         iconBoxSize
     );
@@ -1298,7 +1298,7 @@ if (ApolloThemeRuntimeIsActive()) {
 
     clockAtt.bounds = CGRectMake(
         0,
-        iconOffset,
+        -iconOffset,
         clockIconWidth,
         iconBoxSize
     );
@@ -1315,7 +1315,7 @@ if (ApolloThemeRuntimeIsActive()) {
         return ApolloThemePageBackgroundColor();
     }
 
-    return ApolloThemeCardBackgroundColor();
+    return [UIColor systemBackgroundColor];
 }
 
 - (void)apollo_applyTheme {
