@@ -720,10 +720,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
         UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
         //[ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
-        // Debug
-        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
         [badgeBackgroundColor setFill];
-        // End debug
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
