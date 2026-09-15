@@ -692,10 +692,9 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    UIColor *flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
-    if (!flairTextColor) {
-        flairTextColor = [UIColor secondaryLabelColor];
-    }
+    UIColor *flairTextColor = ApolloThemeRuntimeIsActive()
+        ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel)
+        : [UIColor tertiaryLabelColor];
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
@@ -718,9 +717,16 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        UIColor *badgeBackgroundColor = ApolloThemeRuntimeIsActive()
-            ? ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground)
-            : [UIColor secondarySystemBackgroundColor];
+        UIColor *badgeBackgroundColor;
+
+        if (ApolloThemeRuntimeIsActive()) {
+            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
+        } else {
+            BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+            badgeBackgroundColor = darkMode
+                ? [UIColor secondarySystemBackgroundColor]
+                : [UIColor systemGroupedBackgroundColor];
+        }
         [badgeBackgroundColor setFill];
         [path fill];
 
@@ -1303,7 +1309,11 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
 }
 
 - (UIColor *)apollo_themeCellBackgroundColor {
-    return ApolloThemePageBackgroundColor();
+    if (ApolloThemeRuntimeIsActive()) {
+        return ApolloThemePageBackgroundColor();
+    }
+
+    return ApolloThemeCardBackgroundColor();
 }
 
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
@@ -1543,9 +1553,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
-        sep.backgroundColor = ApolloThemeRuntimeIsActive()
-            ? ApolloThemeRuntimeColor(ApolloThemeTokenSeparator)
-            : [UIColor separatorColor];
+        sep.backgroundColor = ApolloThemeSeparatorColor() ?: [UIColor separatorColor];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
 
