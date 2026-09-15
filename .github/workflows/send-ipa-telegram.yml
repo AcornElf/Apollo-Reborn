@@ -64,6 +64,7 @@ jobs:
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/runs/$RUN_ID" --jq '.head_branch')" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Find IPA artifact
@@ -293,6 +294,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ steps.run.outputs.commit_sha }}
           SHORT_SHA: ${{ steps.run.outputs.short_sha }}
+          BRANCH: ${{ steps.run.outputs.branch }}
           RELEASE_TAG: ${{ steps.run.outputs.release_tag }}
           PAGES_URL: ${{ env.PAGES_URL }}
         run: |
@@ -302,6 +304,7 @@ jobs:
           MESSAGE="📦 <b>Apollo Reborn IPA ready</b>
 
           <b>Commit</b> <code>$SHORT_SHA</code>
+          <b>Branch</b> <code>$BRANCH</code>
 
           <a href=\"$INSTALL_URL\">Install in SideStore</a>
 
