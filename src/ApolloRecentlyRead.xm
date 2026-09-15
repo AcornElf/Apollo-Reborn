@@ -734,25 +734,6 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     }];
 }
 
-// Debug
-static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
-    if (!color) return @"nil";
-
-    UIColor *resolved =
-        [color resolvedColorWithTraitCollection:[UITraitCollection currentTraitCollection]];
-
-    CGFloat r = 0, g = 0, b = 0, a = 0;
-    if (![resolved getRed:&r green:&g blue:&b alpha:&a]) {
-        return @"unresolved";
-    }
-
-    return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
-            lroundf(r * 255.0f),
-            lroundf(g * 255.0f),
-            lroundf(b * 255.0f)];
-}
-// End debug
-
 @implementation RecentlyReadViewController
 
 - (void)viewDidLoad {
@@ -1171,7 +1152,7 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     emptyLabel.textColor = [UIColor secondaryLabelColor];
     emptyLabel.font = RRTitle3Font(self);
     self.tableView.backgroundView = emptyLabel;
-    }
+}
 
 - (BOOL)isSearchActive {
     return self.searchController.isActive && self.searchController.searchBar.text.length > 0;
@@ -1316,10 +1297,6 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     return ApolloThemeCardBackgroundColor();
 }
 
-- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
-    [super apollo_applyThemeToCell:cell];
-}
-
 - (void)apollo_applyTheme {
     [super apollo_applyTheme];
 
@@ -1442,11 +1419,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         : ApolloThemeTokenBackground;
 
         cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
-        //Debug
-        cell.accessibilityLabel = [NSString stringWithFormat:@"%@ [CELL %@]",
-                           cell.accessibilityLabel ?: @"",
-                           RecentlyReadDebugHexForColor(cell.backgroundColor)];
-        //End debug
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         UIView *selectedBg = [[UIView alloc] init];
@@ -1670,12 +1642,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
-    //Debug
-    titleText = [NSString stringWithFormat:@"%@ [CELL %@] [FLAIR %@]",
-         titleText,
-         RecentlyReadDebugHexForColor(cell.backgroundColor),
-         RecentlyReadDebugHexForColor(ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground))];
-    // End debug
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
     );
