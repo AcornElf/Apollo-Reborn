@@ -74,6 +74,21 @@ UIKit icon renderer was stubbed for the host build.
   morph short and briefly composited two switches (device recording,
   2026-09-14 23:07). After the change the glass sim's recording shows the
   full knob-to-track morph on both flips (60 fps frame crops).
+- The preview draws EVERY non-hidden item in the saved order and fades the
+  ones the menu didn't offer the last time it opened
+  (`ApolloActionMenuItemWasOffered`, 0.4 alpha on icon and title). Before,
+  those rows were dropped from the mock, so a row dragged to the top — Keep
+  in Floating Tab on a device whose last Post sheet hadn't carried it —
+  simply vanished from the preview (device report, 2026-09-15). The items
+  footer says the preview fades such rows.
+- Drag auto-scroll under the stuck card: UIKit only auto-scrolls a drag near
+  the table's own edges, which the pinned card covers, so a row dragged
+  upward stalled at the card's bottom edge (device recording, 2026-09-15).
+  `trackDragAutoScrollForSession:` (from `dropSessionDidUpdate:`) keeps the
+  finger's visible-bounds y; while it sits within 56 pt below the stuck
+  card's bottom edge a display link scrolls the list up 2–12 pt per frame
+  (deeper = faster) until the list is home, the finger leaves the band, the
+  session exits/ends, or the screen disappears. The bottom edge is UIKit's.
 - Glass specs with a custom `buildElement` (Gallery View's combined section,
   the profile Hidden & Deleted row, Sticky as Subreddit) place their own
   element. `ApolloActionMenuInjectMenuElements` now diffs the children before

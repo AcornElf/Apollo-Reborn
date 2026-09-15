@@ -118,10 +118,13 @@ void ApolloActionMenuResetContext(ApolloActionMenuContext context);
 // of every row the catalogue knows.
 void ApolloActionMenuRecordPresentedItemIDs(ApolloActionMenuContext context, NSArray<NSString *> *itemIDs);
 NSArray<NSString *> *_Nullable ApolloActionMenuLastPresentedItemIDs(ApolloActionMenuContext context);
-// The rows the preview should draw: the saved order, restricted to what the
-// menu last offered (or, before it was ever opened, to the usually-shown
-// items), with hidden items removed.
+// The rows the preview should draw: the saved order with hidden items removed
+// — every remaining catalogue item, so a row the user just moved or switched
+// on is always where they put it. Whether the menu actually offered a row
+// the last time it opened (or usually does, before it was ever opened) is
+// ApolloActionMenuItemWasOffered; the preview fades the rows it doesn't.
 NSArray<ApolloActionMenuItem *> *ApolloActionMenuPreviewItems(ApolloActionMenuContext context);
+BOOL ApolloActionMenuItemWasOffered(ApolloActionMenuContext context, NSString *itemID);
 
 #pragma mark - Runtime: which context a sheet belongs to
 

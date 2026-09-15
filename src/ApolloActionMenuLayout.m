@@ -456,16 +456,23 @@ NSArray<NSString *> *ApolloActionMenuLastPresentedItemIDs(ApolloActionMenuContex
     return clean.count > 0 ? clean : nil;
 }
 
-NSArray<ApolloActionMenuItem *> *ApolloActionMenuPreviewItems(ApolloActionMenuContext context) {
+BOOL ApolloActionMenuItemWasOffered(ApolloActionMenuContext context, NSString *itemID) {
     NSArray<NSString *> *seen = ApolloActionMenuLastPresentedItemIDs(context);
+    if (seen) return [seen containsObject:itemID];
+    return ApolloActionMenuCatalogItem(context, itemID).usuallyShown;
+}
+
+// Every non-hidden item, in order. Rows the menu didn't offer last time are
+// kept (the preview fades them) rather than dropped: dropping them meant a
+// row dragged to the top of the list vanished from the mock — a feature row
+// like Keep in Floating Tab, say, when the last sheet happened not to carry it.
+NSArray<ApolloActionMenuItem *> *ApolloActionMenuPreviewItems(ApolloActionMenuContext context) {
     NSSet<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context);
     NSMutableArray<ApolloActionMenuItem *> *items = [NSMutableArray array];
     for (NSString *itemID in ApolloActionMenuResolvedOrder(context)) {
         if ([hidden containsObject:itemID]) continue;
         ApolloActionMenuItem *item = ApolloActionMenuCatalogItem(context, itemID);
-        if (!item) continue;
-        BOOL offered = seen ? [seen containsObject:itemID] : item.usuallyShown;
-        if (offered) [items addObject:item];
+        if (item) [items addObject:item];
     }
     return items;
 }

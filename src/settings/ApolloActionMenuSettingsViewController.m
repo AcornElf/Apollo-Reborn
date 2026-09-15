@@ -44,10 +44,14 @@ static const CGFloat kApolloAMPreviewRowHeight = 30.0;
 static const CGFloat kApolloAMPreviewPanelMaxWidth = 250.0;
 static const CGFloat kApolloAMPreviewMoreHeight = 18.0;
 static const NSUInteger kApolloAMPreviewMaxRows = 8;
+// Rows the menu didn't offer the last time it opened stay in place but fade,
+// so a row the user just moved is always visible where they put it.
+static const CGFloat kApolloAMPreviewUnavailableAlpha = 0.4;
 
 @interface ApolloAMPreviewState : NSObject
 @property (nonatomic, copy) ApolloActionMenuContext context;
 @property (nonatomic, copy) NSArray<ApolloActionMenuItem *> *visibleItems;   // saved order, hidden removed
+@property (nonatomic, copy) NSSet<NSString *> *unavailableItemIDs;           // drawn faded
 @property (nonatomic) BOOL glass;
 @property (nonatomic) CGFloat previewHeight;
 @end
@@ -59,6 +63,11 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
     ApolloAMPreviewState *state = [ApolloAMPreviewState new];
     state.context = context;
     state.visibleItems = ApolloActionMenuPreviewItems(context);
+    NSMutableSet<NSString *> *unavailable = [NSMutableSet set];
+    for (ApolloActionMenuItem *item in state.visibleItems) {
+        if (!ApolloActionMenuItemWasOffered(context, item.itemID)) [unavailable addObject:item.itemID];
+    }
+    state.unavailableItemIDs = unavailable;
     state.glass = IsLiquidGlass();
     return state;
 }
@@ -126,15 +135,20 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 // One menu row: icon + title, drawn like this device's menu draws it — label
 // ink on the glass UIMenu, the accent on Apollo's classic sheet — with a
 // hairline under every row but the last.
-- (UIView *)apollo_rowViewForItem:(ApolloActionMenuItem *)item last:(BOOL)last {
+// `available`: the menu offered this row last time (faded otherwise). The
+// fade sits on the icon and title, not the row, because the keyed refresh
+// animates the row's own alpha.
+- (UIView *)apollo_rowViewForItem:(ApolloActionMenuItem *)item last:(BOOL)last available:(BOOL)available {
     BOOL glass = self.previewState.glass;
-    if (ApolloAMItemDrawsAsPalette(item, glass)) return [self apollo_paletteRowViewLast:last];
+    if (ApolloAMItemDrawsAsPalette(item, glass)) return [self apollo_paletteRowViewLast:last available:available];
     UIView *row = [UIView new];
     row.backgroundColor = UIColor.clearColor;
+    CGFloat inkAlpha = available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
 
     UIImageView *icon = [[UIImageView alloc] initWithImage:[item icon]];
     icon.contentMode = UIViewContentModeScaleAspectFit;
     icon.tintColor = glass ? UIColor.labelColor : [self apollo_accent];
+    icon.alpha = inkAlpha;
     icon.tag = 1;
     [row addSubview:icon];
 
@@ -143,6 +157,7 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
     title.font = [UIFont systemFontOfSize:13.0];
     title.textColor = glass ? UIColor.labelColor : [self apollo_accent];
     title.lineBreakMode = NSLineBreakByTruncatingTail;
+    title.alpha = inkAlpha;
     title.tag = 2;
     [row addSubview:title];
 
@@ -158,9 +173,10 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 // The quick new-post buttons: the four glyphs the glass menu's small-element
 // section shows (the bundled custom symbols, with the same stock fallbacks),
 // spread evenly across the row, under the full-width hairline that section has.
-- (UIView *)apollo_paletteRowViewLast:(BOOL)last {
+- (UIView *)apollo_paletteRowViewLast:(BOOL)last available:(BOOL)available {
     UIView *row = [UIView new];
     row.backgroundColor = UIColor.clearColor;
+    CGFloat inkAlpha = available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
     UIImageSymbolConfiguration *configuration =
         [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightRegular];
     NSArray<NSArray<NSString *> *> *glyphs = @[ @[ @"custom.photo.badge.plus", @"photo" ],
@@ -173,6 +189,7 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
         UIImageView *icon = [[UIImageView alloc] initWithImage:image];
         icon.contentMode = UIViewContentModeScaleAspectFit;
         icon.tintColor = UIColor.labelColor;
+        icon.alpha = inkAlpha;
         icon.tag = 4;
         [row addSubview:icon];
     }
@@ -225,14 +242,15 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
     for (NSUInteger i = 0; i < shown; i++) {
         ApolloActionMenuItem *item = state.visibleItems[i];
         BOOL last = (i + 1 == shown);
-        UIView *row = [self apollo_rowViewForItem:item last:last];
+        BOOL available = ![state.unavailableItemIDs containsObject:item.itemID];
+        UIView *row = [self apollo_rowViewForItem:item last:last available:available];
         [self addSubview:row];
         [rows addObject:row];
         NSString *key = [kApolloAMPreviewRowKeyPrefix stringByAppendingString:item.itemID];
         viewsByKey[key] = row;
-        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%@",
+        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%d|%@",
                                 ApolloAMItemDrawsAsPalette(item, state.glass) ? @"palette" : @"row",
-                                item.title, state.glass, last, accentKey];
+                                item.title, state.glass, last, available, accentKey];
     }
     _rowViews = rows;
 
@@ -545,6 +563,9 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 // layout pass, which then asks for a one-row re-measure.
 @property (nonatomic) CGFloat previewCardWidth;
 @property (nonatomic, strong) UISelectionFeedbackGenerator *selectionFeedback;
+// Drag auto-scroll under the stuck card (see trackDragAutoScrollForSession:).
+@property (nonatomic, strong) CADisplayLink *dragAutoScrollLink;
+@property (nonatomic) CGFloat dragFingerY; // the lifted row's finger, in the table's visible bounds
 @end
 
 static NSString *const kApolloAMRowMenu = @"menu";
@@ -605,6 +626,7 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
+    [self stopDragAutoScroll];
     self.previewContentView.previewRefreshPending = NO;
     self.previewContentView.pendingContext = nil;
     [self.previewContentView apollo_finishPreviewTransition];
@@ -751,7 +773,7 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     if (self.editingAllMenus) {
         itemsFooter = @"Switch an action on or off across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
     } else {
-        itemsFooter = @"Only actions supported by this menu are listed. Some appear only for your own content or when a feature is enabled. Touch and hold to reorder. Switching visibility preserves Apollo’s order. The preview reflects the last time you opened this menu.";
+        itemsFooter = @"Only actions supported by this menu are listed. Some appear only for your own content or when a feature is enabled; the preview fades those. Touch and hold to reorder. Switching visibility preserves Apollo’s order. The preview reflects the last time you opened this menu.";
         NSString *lockedNote = [self lockedItemsNote];
         if (lockedNote) itemsFooter = [itemsFooter stringByAppendingFormat:@" %@", lockedNote];
     }
@@ -796,9 +818,9 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 // either freshly configured by the caller or animating under the user's thumb.
 - (void)styleItemCell:(ApolloAMItemCell *)cell forItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden {
     // A row Apollo only offers sometimes says so — unless this user's menu
-    // offered it last time (a moderator's Moderator row, say).
-    NSArray<NSString *> *seen = ApolloActionMenuLastPresentedItemIDs(self.context);
-    BOOL offered = seen ? [seen containsObject:item.itemID] : item.usuallyShown;
+    // offered it last time (a moderator's Moderator row, say). Same rule the
+    // preview fades by.
+    BOOL offered = self.editingAllMenus || ApolloActionMenuItemWasOffered(self.context, item.itemID);
     cell.detailTextLabel.text = offered ? nil : @"Shown when available";
     if (self.editingAllMenus) {
         NSArray *contexts = [self contextsForItem:item.itemID];
@@ -971,7 +993,13 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 }
 
 - (UITableViewDropProposal *)tableView:(UITableView *)tableView dropSessionDidUpdate:(id<UIDropSession>)session withDestinationIndexPath:(NSIndexPath *)destinationIndexPath {
-    if (session.localDragSession && [self indexPathIsItemRow:destinationIndexPath]) {
+    if (session.localDragSession) {
+        [self trackDragAutoScrollForSession:session];
+        // Keep the move alive wherever the finger is: once the list has
+        // auto-scrolled home under a lifted row, the finger sits over the
+        // preview or Menu rows, and targetIndexPathForMove… clamps such a
+        // destination into the items section. (Only item rows ever lift, so a
+        // local session is always one of ours.)
         return [[UITableViewDropProposal alloc] initWithDropOperation:UIDropOperationMove
                                                                intent:UITableViewDropIntentInsertAtDestinationIndexPath];
     }
@@ -982,6 +1010,69 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     // Local same-table reorders with a .move/insertAtDestination proposal are
     // committed by UIKit through tableView:moveRowAtIndexPath:toIndexPath:
     // before this is called; nothing else can be dropped here.
+    [self stopDragAutoScroll];
+}
+
+- (void)tableView:(UITableView *)tableView dropSessionDidExit:(id<UIDropSession>)session {
+    [self stopDragAutoScroll];
+}
+
+- (void)tableView:(UITableView *)tableView dropSessionDidEnd:(id<UIDropSession>)session {
+    [self stopDragAutoScroll];
+}
+
+#pragma mark Auto-scroll under the pinned card
+
+// UIKit auto-scrolls a drag only near the table's own edges, and the stuck
+// card covers the top of the list — so a row dragged upward stalled at the
+// card's bottom edge and had to be dropped, scrolled and lifted again (device
+// recording, 2026-09-15). While a lifted row hovers in a band just under the
+// stuck card, scroll the list up ourselves, faster the deeper the finger sits
+// in the band, until the list is home or the finger leaves. The drop target
+// keeps following the rows as they move beneath the finger.
+static const CGFloat kApolloAMDragAutoScrollBand = 56.0;    // pt below the card's bottom edge
+static const CGFloat kApolloAMDragAutoScrollMinStep = 2.0;  // pt per frame at the band's lower edge
+static const CGFloat kApolloAMDragAutoScrollMaxStep = 12.0; // pt per frame at the card's edge
+
+- (void)trackDragAutoScrollForSession:(id<UIDropSession>)session {
+    UITableView *table = self.tableView;
+    // locationInView: on a scroll view is in content coordinates; the band is
+    // a screen-relative thing, so keep the finger relative to the visible bounds.
+    self.dragFingerY = [session locationInView:table].y - table.contentOffset.y;
+    if ([self dragAutoScrollStepForFingerY:self.dragFingerY] <= 0.0 || self.dragAutoScrollLink) return;
+    self.dragAutoScrollLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(dragAutoScrollTick:)];
+    [self.dragAutoScrollLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+// Scroll step for a finger at `fingerY` (visible-bounds coordinates): 0 when
+// the card isn't stuck or the finger is below the band.
+- (CGFloat)dragAutoScrollStepForFingerY:(CGFloat)fingerY {
+    ApolloPinnedPreviewHost *host = self.previewHost;
+    UITableView *table = self.tableView;
+    if (!host.stuck || host.hidden) return 0.0;
+    CGFloat cardBottom = CGRectGetMaxY(host.frame) - table.contentOffset.y; // host.frame is content-relative
+    CGFloat depth = cardBottom + kApolloAMDragAutoScrollBand - fingerY;      // > 0 inside the band
+    if (depth <= 0.0) return 0.0;
+    CGFloat t = MIN(1.0, depth / kApolloAMDragAutoScrollBand);
+    return kApolloAMDragAutoScrollMinStep + (kApolloAMDragAutoScrollMaxStep - kApolloAMDragAutoScrollMinStep) * t;
+}
+
+- (void)dragAutoScrollTick:(__unused CADisplayLink *)link {
+    UITableView *table = self.tableView;
+    CGFloat step = [self dragAutoScrollStepForFingerY:self.dragFingerY];
+    CGFloat top = -table.adjustedContentInset.top;
+    CGPoint offset = table.contentOffset;
+    if (step <= 0.0 || offset.y <= top + 0.5) {
+        [self stopDragAutoScroll];
+        return;
+    }
+    offset.y = MAX(top, offset.y - step);
+    [table setContentOffset:offset animated:NO];
+}
+
+- (void)stopDragAutoScroll {
+    [self.dragAutoScrollLink invalidate];
+    self.dragAutoScrollLink = nil;
 }
 
 #pragma mark - Pinned preview plumbing
