@@ -21,6 +21,8 @@
 // and the owner (ApolloActionMenu.xm) never mutates that sheet at all. Items
 // added to the catalogue in later releases append after the saved order in
 // their catalogue position, visible, so an old layout never drops a new row.
+// A locked item (ApolloActionMenuItem.locked) always heads the order and is
+// never hidden, whatever a stored layout says.
 //
 // Foundation/UIKit only (no Logos) so the settings screen can compile it.
 
@@ -67,6 +69,12 @@ BOOL ApolloActionMenuContextIsValid(NSString *_Nullable context);
 // tweak row whose feature is off by default). The preview leans on this until
 // the menu has been opened once (see ApolloActionMenuPreviewItems).
 @property (nonatomic, readonly) BOOL usuallyShown;
+// YES for a row that always keeps Apollo's place at the head of the menu and
+// can be neither moved nor hidden: the feed's Submit Post row, which Liquid
+// Glass draws as the quick new-post buttons (Photo/Link/Text/Poll) while the
+// Polls feature is on. Never listed for editing; a saved order always starts
+// with the locked rows and the hidden set never contains one.
+@property (nonatomic, readonly) BOOL locked;
 // 24pt template icon for settings/preview use (nil if the asset is missing).
 - (nullable UIImage *)icon;
 @end

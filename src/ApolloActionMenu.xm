@@ -737,6 +737,19 @@ static NSUInteger ApolloActionMenuLeadingSubmitAffordanceIndex(NSArray<UIMenuEle
     return index;
 }
 
+// Under a saved layout: the slot right after the last element that ranks
+// before `rank` (untagged elements — text actions, report sections — don't
+// take part and stay where they are).
+static NSUInteger ApolloActionMenuRankedInsertionIndex(NSArray<UIMenuElement *> *children, NSUInteger rank,
+                                                       ApolloActionMenuContext context) {
+    NSUInteger index = 0;
+    for (NSUInteger i = 0; i < children.count; i++) {
+        NSUInteger childRank = ApolloActionMenuRankForElement(children[i], context);
+        if (childRank != NSNotFound && childRank < rank) index = i + 1;
+    }
+    return index;
+}
+
 void ApolloActionMenuInjectMenuElements(NSMutableArray<UIMenuElement *> *children,
                                         NSString *menuTitle,
                                         id actionController) {
@@ -747,8 +760,32 @@ void ApolloActionMenuInjectMenuElements(NSMutableArray<UIMenuElement *> *childre
 
     for (ApolloActionMenuSpec *spec in state.specs) {
         @try {
+            NSUInteger rank = ApolloActionMenuRankForSpec(spec, state.context);
             if (spec.buildElement) {
+                // A custom builder places its own element(s) — Gallery View's
+                // combined section lands after the leading Submit affordance.
+                // Under a saved layout, re-home whatever it inserted at the
+                // spec's rank, tagged, so it reorders like a declarative row
+                // and later specs' rank scans see it. Without a rank the
+                // builder's own placement stands.
+                NSArray<UIMenuElement *> *before = [children copy];
                 spec.buildElement(actionController, children);
+                NSMutableArray<UIMenuElement *> *inserted = [NSMutableArray array];
+                for (UIMenuElement *element in children) {
+                    if ([before indexOfObjectIdenticalTo:element] == NSNotFound) [inserted addObject:element];
+                }
+                for (UIMenuElement *element in inserted) ApolloActionMenuTagElementWithSpec(element, spec.identifier);
+                if (rank != NSNotFound && inserted.count > 0) {
+                    for (UIMenuElement *element in inserted) {
+                        NSUInteger at = [children indexOfObjectIdenticalTo:element];
+                        if (at != NSNotFound) [children removeObjectAtIndex:at];
+                    }
+                    NSUInteger index = ApolloActionMenuRankedInsertionIndex(children, rank, state.context);
+                    [children insertObjects:inserted
+                                  atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(index, inserted.count)]];
+                    ApolloLog(@"[ActionMenu] spec '%@' re-homed by the %@ layout: rank %lu -> index %lu",
+                              spec.identifier, state.context, (unsigned long)rank, (unsigned long)index);
+                }
                 continue;
             }
 
@@ -772,16 +809,8 @@ void ApolloActionMenuInjectMenuElements(NSMutableArray<UIMenuElement *> *childre
             ApolloActionMenuTagElementWithSpec(element, spec.identifier);
 
             NSUInteger index;
-            NSUInteger rank = ApolloActionMenuRankForSpec(spec, state.context);
             if (rank != NSNotFound) {
-                // Saved layout: right after the last element that ranks before
-                // this row (untagged elements — text actions, report sections
-                // — don't take part and stay where they are).
-                index = 0;
-                for (NSUInteger i = 0; i < children.count; i++) {
-                    NSUInteger childRank = ApolloActionMenuRankForElement(children[i], state.context);
-                    if (childRank != NSNotFound && childRank < rank) index = i + 1;
-                }
+                index = ApolloActionMenuRankedInsertionIndex(children, rank, state.context);
             } else {
                 index = (spec.placement == ApolloActionMenuPlacementAfterLeadingSubmitAffordance)
                     ? ApolloActionMenuLeadingSubmitAffordanceIndex(children)
@@ -1009,101 +1038,25 @@ static void ApolloActionMenuInstallWillSelect(void) {
 // The customisable menus are identified by where they are opened FROM, not by
 // what they contain (a moderator, the post's author and a logged-out user all
 // see different rows from the same button). Each entry point arms its context
-// just before Apollo builds the sheet; the slot state claims it (see
-// ApolloActionMenuSlotsForController). Entry points confirmed in Hopper: the
-// feed cells and the comments header's media node all route through
-// PostCellActionTaker's post-options builder (sub_100325e84), the comments
-// nav-bar ••• through CommentsViewController's own (sub_100727984), the feed
-// nav-bar ••• through PostsViewController's (sub_1005c06d4), and a comment's
-// ••• through CommentSectionController's (sub_1005ee890).
-
-// These six selectors are also hooked by ApolloNativeActionMenus.xm (source-
-// view capture for the glass morph). Both hooks are pure pre-%orig side
-// effects with no return value or argument rewriting, so they chain in either
-// %ctor order.
-
-%hook _TtC6Apollo17LargePostCellNode
-- (void)moreOptionsButtonTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-%hook _TtC6Apollo19CompactPostCellNode
-- (void)moreOptionsButtonTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-%hook _TtC6Apollo13RichMediaNode
-- (void)moreOptionsButtonTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-%hook _TtC6Apollo22CommentsViewController
-- (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextPostDetail);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-%hook _TtC6Apollo19PostsViewController
-- (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextFeed);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-%hook _TtC6Apollo15CommentCellNode
-- (void)moreOptionsTappedWithSender:(id)sender {
-    ApolloActionMenuArmContext(ApolloActionMenuContextComment);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
-
-// Legacy sheet: resolve the context and permute the native actions before
-// Apollo's own appearance work reads them (its viewWillAppear: sizes the
-// table from actions.count, and the presentation controller's frame reads
-// the live count on every pass). On the glass path this controller is never
-// presented — ApolloNativeActionMenuBuildMenu calls the same memoised
-// prepare first — so this is a no-op there.
-%hook _TtC6Apollo16ActionController
-- (void)viewWillAppear:(BOOL)animated {
-    ApolloActionMenuPrepareController(self, nil);
-    @try {
-        %orig;
-    } @finally {
-        ApolloActionMenuDisarmContext();
-    }
-}
-%end
+// (ApolloActionMenuArmContext) just before Apollo builds the sheet and disarms
+// it in @finally; the slot state claims it (ApolloActionMenuSlotsForController).
+// Entry points confirmed in Hopper: the feed cells and the comments header's
+// media node all route through PostCellActionTaker's post-options builder
+// (sub_100325e84), the comments nav-bar ••• through CommentsViewController's
+// own (sub_100727984), the feed nav-bar ••• through PostsViewController's
+// (sub_1005c06d4), and a comment's ••• through CommentSectionController's
+// (sub_1005ee890).
+//
+// The arm/disarm calls live in ApolloNativeActionMenus.xm, inside the hooks it
+// already has on those six tap selectors (source-view capture for the glass
+// morph) — one hook per selector, no second module wrapping the same method.
+// Likewise the legacy sheet's prepare: that module's existing
+// -[ActionController viewWillAppear:] hook calls ApolloActionMenuPrepareController
+// first thing, so the native actions are permuted before Apollo's own
+// appearance work sizes the table from actions.count (the presentation
+// controller's frame reads the live count on every pass). On the glass path the
+// controller is never presented — ApolloNativeActionMenuBuildMenu calls the same
+// memoised prepare — so that hook is a no-op there.
 
 %ctor {
     %init;

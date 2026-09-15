@@ -63,6 +63,14 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
     return state;
 }
 
+// The feed's locked Submit Post row is drawn as the quick new-post buttons
+// (Photo/Link/Text/Poll) on Liquid Glass while the Polls feature is on —
+// ApolloSubmitPostTypesMenu swaps the plain row for them — and the mock
+// follows suit, so the preview matches what that menu actually shows.
+static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
+    return glass && item.locked && [item.kinds containsObject:@51] && ApolloPollsFeatureEnabled();
+}
+
 #pragma mark - Preview view
 
 @interface ApolloAMPreviewView : UIView
@@ -120,6 +128,7 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
 // hairline under every row but the last.
 - (UIView *)apollo_rowViewForItem:(ApolloActionMenuItem *)item last:(BOOL)last {
     BOOL glass = self.previewState.glass;
+    if (ApolloAMItemDrawsAsPalette(item, glass)) return [self apollo_paletteRowViewLast:last];
     UIView *row = [UIView new];
     row.backgroundColor = UIColor.clearColor;
 
@@ -137,6 +146,36 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
     title.tag = 2;
     [row addSubview:title];
 
+    if (!last) {
+        UIView *separator = [UIView new];
+        separator.backgroundColor = [(ApolloThemeSeparatorColor() ?: UIColor.separatorColor) colorWithAlphaComponent:0.6];
+        separator.tag = 3;
+        [row addSubview:separator];
+    }
+    return row;
+}
+
+// The quick new-post buttons: the four glyphs the glass menu's small-element
+// section shows (the bundled custom symbols, with the same stock fallbacks),
+// spread evenly across the row, under the full-width hairline that section has.
+- (UIView *)apollo_paletteRowViewLast:(BOOL)last {
+    UIView *row = [UIView new];
+    row.backgroundColor = UIColor.clearColor;
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightRegular];
+    NSArray<NSArray<NSString *> *> *glyphs = @[ @[ @"custom.photo.badge.plus", @"photo" ],
+                                               @[ @"custom.link.badge.plus", @"link" ],
+                                               @[ @"custom.text.page.badge.plus", @"text.alignleft" ],
+                                               @[ @"custom.chart.bar.horizontal.page.fill.badge.plus", @"chart.bar" ] ];
+    for (NSArray<NSString *> *glyph in glyphs) {
+        UIImage *image = ApolloPollComposeSymbol(glyph[0]) ?: [UIImage systemImageNamed:glyph[1]];
+        image = [[image imageByApplyingSymbolConfiguration:configuration] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        UIImageView *icon = [[UIImageView alloc] initWithImage:image];
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        icon.tintColor = UIColor.labelColor;
+        icon.tag = 4;
+        [row addSubview:icon];
+    }
     if (!last) {
         UIView *separator = [UIView new];
         separator.backgroundColor = [(ApolloThemeSeparatorColor() ?: UIColor.separatorColor) colorWithAlphaComponent:0.6];
@@ -191,7 +230,9 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
         [rows addObject:row];
         NSString *key = [kApolloAMPreviewRowKeyPrefix stringByAppendingString:item.itemID];
         viewsByKey[key] = row;
-        signaturesByKey[key] = [NSString stringWithFormat:@"row|%@|%d|%d|%@", item.title, state.glass, last, accentKey];
+        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%@",
+                                ApolloAMItemDrawsAsPalette(item, state.glass) ? @"palette" : @"row",
+                                item.title, state.glass, last, accentKey];
     }
     _rowViews = rows;
 
@@ -239,11 +280,23 @@ static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext
         UIView *title = [row viewWithTag:2];
         UIView *separator = [row viewWithTag:3];
         CGFloat iconSide = 18.0;
-        icon.frame = CGRectMake(14.0, round((kApolloAMPreviewRowHeight - iconSide) / 2.0), iconSide, iconSide);
+        CGFloat iconY = round((kApolloAMPreviewRowHeight - iconSide) / 2.0);
+        icon.frame = CGRectMake(14.0, iconY, iconSide, iconSide);
         CGFloat titleX = 14.0 + iconSide + 10.0;
         title.frame = CGRectMake(titleX, 0.0, MAX(0.0, panelWidth - titleX - 12.0), kApolloAMPreviewRowHeight);
+        // A new-post buttons row (no icon/title, tag-4 glyphs instead): spread
+        // the glyphs evenly and run its hairline the full width, as the menu does.
+        NSMutableArray<UIView *> *glyphs = [NSMutableArray array];
+        for (UIView *subview in row.subviews) {
+            if (subview.tag == 4) [glyphs addObject:subview];
+        }
+        CGFloat slot = glyphs.count > 0 ? panelWidth / (CGFloat)glyphs.count : 0.0;
+        for (NSUInteger g = 0; g < glyphs.count; g++) {
+            glyphs[g].frame = CGRectMake(round(slot * (CGFloat)g + (slot - iconSide) / 2.0), iconY, iconSide, iconSide);
+        }
         CGFloat hairline = 1.0 / UIScreen.mainScreen.scale;
-        separator.frame = CGRectMake(titleX, kApolloAMPreviewRowHeight - hairline, MAX(0.0, panelWidth - titleX), hairline);
+        CGFloat separatorX = glyphs.count > 0 ? 0.0 : titleX;
+        separator.frame = CGRectMake(separatorX, kApolloAMPreviewRowHeight - hairline, MAX(0.0, panelWidth - separatorX), hairline);
         rowY += kApolloAMPreviewRowHeight;
     }
     y += panelHeight;
@@ -588,7 +641,8 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     for (ApolloActionMenuContext context in contexts) {
         for (NSString *itemID in ApolloActionMenuResolvedOrder(context)) {
             ApolloActionMenuItem *item = ApolloActionMenuCatalogItem(context, itemID);
-            if (!item || [ids containsObject:itemID]) continue;
+            // A locked row (the feed's Submit Post) is not the user's to move or hide.
+            if (!item || item.locked || [ids containsObject:itemID]) continue;
             [ids addObject:itemID];
             [items addObject:item];
         }
@@ -615,6 +669,20 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
         if (!ApolloActionMenuIsItemHidden(context, itemID)) return NO;
     }
     return YES;
+}
+
+// The selected menu's locked rows are absent from the list; the footer says
+// where they are instead (nil when the menu has none).
+- (NSString *)lockedItemsNote {
+    if (self.editingAllMenus) return nil;
+    NSMutableArray<NSString *> *notes = [NSMutableArray array];
+    for (ApolloActionMenuItem *item in ApolloActionMenuCatalog(self.context)) {
+        if (!item.locked) continue;
+        [notes addObject:ApolloAMItemDrawsAsPalette(item, IsLiquidGlass())
+            ? [NSString stringWithFormat:@"The new-post buttons (%@) always stay at the top of this menu and can’t be hidden.", item.title]
+            : [NSString stringWithFormat:@"%@ always stays at the top of this menu and can’t be hidden.", item.title]];
+    }
+    return notes.count > 0 ? [notes componentsJoinedByString:@" "] : nil;
 }
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
@@ -684,6 +752,8 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
         itemsFooter = @"Switch an action on or off across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
     } else {
         itemsFooter = @"Only actions supported by this menu are listed. Some appear only for your own content or when a feature is enabled. Touch and hold to reorder. Switching visibility preserves Apollo’s order. The preview reflects the last time you opened this menu.";
+        NSString *lockedNote = [self lockedItemsNote];
+        if (lockedNote) itemsFooter = [itemsFooter stringByAppendingFormat:@" %@", lockedNote];
     }
     if (!self.editingAllMenus && !IsLiquidGlass()) {
         itemsFooter = [itemsFooter stringByAppendingString:@"\n\nOn this version of iOS, Apollo Reborn's own items always sit below Apollo's."];
@@ -801,11 +871,13 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     for (NSString *context in (self.editingAllMenus ? ApolloActionMenuAllContexts() : @[ self.context ])) {
         ApolloActionMenuResetContext(context);
     }
+    // Visibility first (this very row disappears), then the items section —
+    // same ordering rule as the drag completion above.
+    [self visibilityDidChange];
     NSString *firstItemRowID = [self firstItemRowID];
     if (firstItemRowID) {
         [self rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationFade];
     }
-    [self visibilityDidChange];
     [self animatePreviewStateChange];
 }
 
@@ -839,16 +911,21 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     // Re-sync the form model with the moved rows (UIKit already animated the
     // move; rebuilding on the next runloop turn keeps the drop animation
     // intact), show the reset row, and slide the preview's rows into the new
-    // order.
+    // order. The reset row comes FIRST: an untouched menu's first drag makes
+    // it appear, and rebuildSectionContainingRowID re-snapshots every
+    // section's visibility while reloading only the items section — with the
+    // reset row not yet inserted, UIKit's batch-update check trips on that
+    // section's count (1 in the snapshot vs 0 in the table). Diffing the
+    // visibility in first inserts the row, so the rebuild's snapshot matches.
     __weak __typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
+        [strongSelf visibilityDidChange];
         NSString *firstItemRowID = [strongSelf firstItemRowID];
         if (firstItemRowID) {
             [strongSelf rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationNone];
         }
-        [strongSelf visibilityDidChange];
         [strongSelf animatePreviewStateChange];
     });
 }

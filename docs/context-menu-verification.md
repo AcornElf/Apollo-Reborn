@@ -52,6 +52,32 @@ UIKit icon renderer was stubbed for the host build.
 
 - Opening settings, switching menus, and changing visibility do not create a
   saved order. Native rows and tweak rows receive ranks only after a drag.
+- The feed's Submit Post row (kind 51 — on Liquid Glass with the Polls feature
+  on, the Photo/Link/Text/Poll button row that `ApolloSubmitPostTypesMenu`
+  swaps in) is LOCKED (`ApolloActionMenuItem.locked`): never listed for
+  editing, always first in a resolved or saved order, never in the hidden
+  set. A stored layout that predates the lock is normalised on read
+  (`ApolloActionMenuLockedFirst`). The settings preview draws the button row
+  when that is what the menu shows, and the footer says the row stays put.
+- In the settings screen, the drag completion and Reset apply the visibility
+  diff (`visibilityDidChange`: the Reset row appearing or disappearing)
+  BEFORE rebuilding the items section: `rebuildSectionContainingRowID:`
+  re-snapshots every section's visibility while reloading only one, so the
+  other order tripped UITableView's batch-update assertion on an untouched
+  menu's first drag (section 3 went 0 → 1 rows). Found in the glass sim on
+  2026-09-14 (KSCrash report, `_Bug_Detected_In_Client_Of_UITableView_Invalid_
+  Number_Of_Rows_In_Section`) and fixed; the switch path was never affected
+  (`reloadRowWithID:` does not re-snapshot).
+- Glass specs with a custom `buildElement` (Gallery View's combined section,
+  the profile Hidden & Deleted row, Sticky as Subreddit) place their own
+  element. `ApolloActionMenuInjectMenuElements` now diffs the children before
+  and after the builder runs, tags what it inserted with the spec, and — only
+  under a saved order — re-homes those elements at the spec's rank
+  (`ApolloActionMenuRankedInsertionIndex`, shared with the declarative path).
+  Before this, Gallery View ignored the saved order on glass: with
+  `submit, subscribe, spec.GalleryView, …` stored, the sheet still showed
+  Gallery View above Unsubscribe (sim, 2026-09-14). Unranked builders keep
+  their own placement.
 - The settings list includes only that builder's supported actions; conditional
   entries say “Shown when available.” The preview uses the last offered rows.
 - All switches affect every supporting context; mixed visibility is labelled.
@@ -103,9 +129,13 @@ Full branch reviewed against freshly fetched upstream main `4683371` (3.7.1).
     no network waits or synchronous dispatch. Catalog cached; unchanged snapshot
     avoids defaults writes. No decoded-image cache introduced.
 11. Hook scoping: existing ActionMenu table owner performs remapping. Presentation
-    capture routes through NativeActionMenus' existing presentation owner. Six
-    tap hooks chain pre-call side effects and finally cleanup without rewriting
-    arguments. Selector/ivar checks are detailed above.
+    capture routes through NativeActionMenus' existing presentation owner. The
+    six ••• tap selectors and `-[ActionController viewWillAppear:]` are hooked
+    ONCE: `ApolloNativeActionMenus.xm`'s existing hooks (source-view capture,
+    lifecycle fallback) arm/disarm the menu context in `@try/@finally` and call
+    the memoised prepare first thing — `ApolloActionMenu.xm` no longer adds a
+    second hook on any of those selectors. Selector/ivar checks are detailed
+    above.
 12. Description: updated around supported catalogues, visibility-only defaults,
     All overview and legacy injected-row limitation; removed old claims about
     last-visible-row protection and unrun mode tests.
@@ -174,8 +204,16 @@ Full branch reviewed against freshly fetched upstream main `4683371` (3.7.1).
   the Post customization. Pinned preview remained visible while scrolling.
 - Host model and Swift ownership harnesses passed (described above).
 
-Not verified: a completed drag gesture on this final UI build (runtime reorder
-was tested using launch preferences); Reset All by tapping its UI; authenticated
+Later on 2026-09-14 (glass sim, Apollo-Sim2, signed in as a moderator): a
+completed drag gesture on an UNTOUCHED menu (Comment: Upvote above Moderator)
+crashed the first build with the batch-update assertion above; after the fix
+the same drag saved `upvote, moderator, downvote, …`, the Reset row appeared,
+and tapping Reset This Menu removed the layout with the app alive. Dragging
+Subscribe above Gallery View in the Feed menu saved `submit, subscribe,
+spec.GalleryView, …` — the locked row normalised to the head. The Feed preview
+drew the four new-post buttons above Gallery View, matching the device menu.
+
+Not verified: Reset All by tapping its UI; authenticated
 web-JSON menu browsing; two-account A→B→A; iPad simultaneous feed/detail menus;
 physical-device memory/gesture testing. The short back gesture above is a smoke
 test, not instrumented proof of every interactive cancellation callback. Desktop

@@ -1,4 +1,5 @@
 #import "ApolloActionMenu.h"
+#import "ApolloActionMenuLayout.h"
 #import "ApolloCommon.h"
 #import "ApolloNativeActionMenus.h"
 #import "ApolloNavigationActions.h"
@@ -1608,11 +1609,21 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
     return sourceView.window != nil;
 }
 
+// The six ••• tap hooks below also arm the menu CONTEXT for the customised
+// layouts (ApolloActionMenuLayout.h — which of the four customisable menus is
+// opening, keyed by entry point, see ApolloActionMenu.xm) and disarm it in
+// @finally, so an unclaimed tap can never leak into an unrelated sheet.
+
 %hook _TtC6Apollo17LargePostCellNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)moderatorOptionsButtonTappedWithSender:(id)sender {
@@ -1631,8 +1642,13 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 %hook _TtC6Apollo19CompactPostCellNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)moderatorOptionsButtonTappedWithSender:(id)sender {
@@ -1651,8 +1667,13 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 %hook _TtC6Apollo15CommentCellNode
 - (void)moreOptionsTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    ApolloActionMenuArmContext(ApolloActionMenuContextComment);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)moderatorBannerNodeTappedWithSender:(id)sender {
@@ -1673,8 +1694,15 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 %hook _TtC6Apollo13RichMediaNode
 - (void)moreOptionsButtonTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    // The comments header's media ••• builds the same post-options sheet as a
+    // feed cell's (PostCellActionTaker), so it is the Post menu too.
+    ApolloActionMenuArmContext(ApolloActionMenuContextPost);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)moderatorBannerNodeTappedWithSender:(id)sender {
@@ -1711,8 +1739,13 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 %hook _TtC6Apollo19PostsViewController
 - (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    ApolloActionMenuArmContext(ApolloActionMenuContextFeed);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)sortBarButtonItemTappedWithSender:(id)sender {
@@ -1731,8 +1764,13 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 %hook _TtC6Apollo22CommentsViewController
 - (void)moreOptionsBarButtonItemTappedWithSender:(id)sender {
     ApolloNativeActionMenuBeginCapture(sender, self);
-    %orig;
-    ApolloNativeActionMenuEndCapture();
+    ApolloActionMenuArmContext(ApolloActionMenuContextPostDetail);
+    @try {
+        %orig;
+    } @finally {
+        ApolloActionMenuDisarmContext();
+        ApolloNativeActionMenuEndCapture();
+    }
 }
 
 - (void)sortBarButtonItemTappedWithSender:(id)sender {
@@ -2037,6 +2075,12 @@ static BOOL ApolloNativeActionMenuCanFallbackPresent(id presenter, id actionCont
 
 %hook _TtC6Apollo16ActionController
 - (void)viewWillAppear:(BOOL)animated {
+    // Legacy sheet: a customised ••• layout (ApolloActionMenu.xm) permutes the
+    // native actions here, before Apollo's own appearance work sizes the
+    // table from actions.count. Memoised per controller; a no-op for an
+    // untouched menu and on the glass path (this controller is never
+    // presented there — the UIMenu builder calls the same prepare).
+    ApolloActionMenuPrepareController(self, nil);
     UIViewController *actionController = (UIViewController *)self;
     if (!objc_getAssociatedObject(self, &kApolloNativeActionMenuLifecycleFallbackKey)
         && ApolloNativeActionMenuCanFallbackPresent(actionController.presentingViewController, self)) {

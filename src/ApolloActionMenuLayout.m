@@ -47,6 +47,7 @@ NSString *ApolloActionMenuContextDescription(ApolloActionMenuContext context) {
 @property (nonatomic, copy, readwrite) NSArray<NSNumber *> *kinds;
 @property (nonatomic, copy, readwrite, nullable) NSString *specIdentifier;
 @property (nonatomic, readwrite) BOOL usuallyShown;
+@property (nonatomic, readwrite) BOOL locked;
 @end
 
 @implementation ApolloActionMenuItem
@@ -105,6 +106,12 @@ static ApolloActionMenuItem *ApolloAMTweak(NSString *specIdentifier, NSString *t
     item.symbolName = symbolName;
     item.kinds = @[];
     item.specIdentifier = specIdentifier;
+    return item;
+}
+
+// A row the user can neither move nor hide (ApolloActionMenuItem.locked).
+static ApolloActionMenuItem *ApolloAMLocked(ApolloActionMenuItem *item) {
+    item.locked = YES;
     return item;
 }
 
@@ -187,8 +194,11 @@ static NSArray<ApolloActionMenuItem *> *ApolloActionMenuBuildCatalog(ApolloActio
     if ([context isEqualToString:ApolloActionMenuContextFeed]) {
         // Subreddit: 51,39,41,243,36,48,227,55,235,46,37,15,106 (+ Gallery
         // View after Submit Post). Home/Popular/All show the subset 243,235,15.
+        // Submit Post is locked: Apollo keeps it at the head of the sheet (on
+        // Liquid Glass with Polls on it is the four new-post buttons), so it
+        // is neither movable nor hideable — everything after it is.
         return ApolloAMCatalogWithUsual(
-            @[ ApolloAMItemSubmit(), ApolloAMItemGalleryView(), ApolloAMItemSubscribe(), ApolloAMItemFavorite(),
+            @[ ApolloAMLocked(ApolloAMItemSubmit()), ApolloAMItemGalleryView(), ApolloAMItemSubscribe(), ApolloAMItemFavorite(),
                ApolloAMItemHideRead(), ApolloAMItemSidebar(), ApolloAMItemRules(), ApolloAMItemFilterSub(),
                ApolloAMItemMultireddit(), ApolloAMItemPostSize(), ApolloAMItemUserFlair(), ApolloAMItemModerators(),
                ApolloAMItemShare(), ApolloAMItemNotifications() ],
@@ -299,6 +309,21 @@ static NSArray<NSString *> *ApolloActionMenuDefaultOrder(ApolloActionMenuContext
     return [ApolloActionMenuCatalog(context) valueForKey:@"itemID"];
 }
 
+// The shape every stored or derived order takes: the context's locked items
+// first, in catalogue order, then `order` without them. A locked row is never
+// offered for dragging, so nothing the user does can move it off the head of
+// the menu — and a stored order that predates the lock is straightened here.
+static NSArray<NSString *> *ApolloActionMenuLockedFirst(ApolloActionMenuContext context, NSArray<NSString *> *order) {
+    NSMutableArray<NSString *> *result = [NSMutableArray arrayWithCapacity:order.count];
+    for (ApolloActionMenuItem *item in ApolloActionMenuCatalog(context)) {
+        if (item.locked) [result addObject:item.itemID];
+    }
+    for (NSString *itemID in order) {
+        if (![result containsObject:itemID]) [result addObject:itemID];
+    }
+    return result;
+}
+
 NSArray<NSString *> *ApolloActionMenuResolvedOrder(ApolloActionMenuContext context) {
     NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
     NSArray<NSString *> *stored = ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]);
@@ -310,7 +335,7 @@ NSArray<NSString *> *ApolloActionMenuResolvedOrder(ApolloActionMenuContext conte
         for (NSString *itemID in catalogOrder) {
             if (![nativeOrder containsObject:itemID]) [nativeOrder addObject:itemID];
         }
-        return nativeOrder;
+        return ApolloActionMenuLockedFirst(context, nativeOrder);
     }
 
     NSMutableArray<NSString *> *order = [NSMutableArray arrayWithCapacity:catalogOrder.count];
@@ -322,15 +347,15 @@ NSArray<NSString *> *ApolloActionMenuResolvedOrder(ApolloActionMenuContext conte
     for (NSString *itemID in catalogOrder) {
         if (![order containsObject:itemID]) [order addObject:itemID];
     }
-    return order;
+    return ApolloActionMenuLockedFirst(context, order);
 }
 
 NSSet<NSString *> *ApolloActionMenuHiddenItemIDs(ApolloActionMenuContext context) {
     NSArray<NSString *> *hidden = ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutHiddenKey]);
     NSMutableSet<NSString *> *set = [NSMutableSet set];
-    NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
     for (NSString *itemID in hidden) {
-        if ([catalogOrder containsObject:itemID]) [set addObject:itemID];
+        ApolloActionMenuItem *item = ApolloActionMenuCatalogItem(context, itemID);
+        if (item && !item.locked) [set addObject:itemID]; // a locked row is never hidden
     }
     return set;
 }
@@ -380,14 +405,16 @@ void ApolloActionMenuSetOrder(ApolloActionMenuContext context, NSArray<NSString 
     for (NSString *itemID in catalogOrder) {
         if (![clean containsObject:itemID]) [clean addObject:itemID];
     }
+    NSArray<NSString *> *normalized = ApolloActionMenuLockedFirst(context, clean);
     NSArray<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context).allObjects;
-    ApolloLog(@"[ActionMenuLayout] %@ order -> %@", context, [clean componentsJoinedByString:@", "]);
-    ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: clean,
+    ApolloLog(@"[ActionMenuLayout] %@ order -> %@", context, [normalized componentsJoinedByString:@", "]);
+    ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: normalized,
                                             kApolloActionMenuLayoutHiddenKey: hidden });
 }
 
 void ApolloActionMenuSetItemHidden(ApolloActionMenuContext context, NSString *itemID, BOOL hidden) {
-    if (!ApolloActionMenuCatalogItem(context, itemID)) return;
+    ApolloActionMenuItem *item = ApolloActionMenuCatalogItem(context, itemID);
+    if (!item || item.locked) return;
     NSMutableSet<NSString *> *set = [ApolloActionMenuHiddenItemIDs(context) mutableCopy];
     if (hidden) [set addObject:itemID];
     else [set removeObject:itemID];
