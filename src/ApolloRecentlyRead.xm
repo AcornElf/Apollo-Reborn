@@ -723,12 +723,35 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             ? ApolloThemeTokenBackground
             : ApolloThemeTokenTertiaryBackground;
 
-        [ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
+        //[ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
+        // Debug
+        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(badgeBackgroundToken);
+        [badgeBackgroundColor setFill];
+        // End debug
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
     }];
 }
+
+// Debug
+static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
+    if (!color) return @"nil";
+
+    UIColor *resolved =
+        [color resolvedColorWithTraitCollection:[UITraitCollection currentTraitCollection]];
+
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (![resolved getRed:&r green:&g blue:&b alpha:&a]) {
+        return @"unresolved";
+    }
+
+    return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
+            lroundf(r * 255.0f),
+            lroundf(g * 255.0f),
+            lroundf(b * 255.0f)];
+}
+// End debug
 
 @implementation RecentlyReadViewController
 
@@ -1401,6 +1424,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             : ApolloThemeTokenBackground;
 
         cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+        //Debug
+        cell.accessibilityLabel = [NSString stringWithFormat:@"%@ [CELL %@]",
+                           cell.accessibilityLabel ?: @"",
+                           RecentlyReadDebugHexForColor(cell.backgroundColor)];
+        //End debug
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         UIView *selectedBg = [[UIView alloc] init];
@@ -1622,6 +1650,16 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
+    //Debug
+    BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+    ApolloThemeToken debugFlairBackgroundToken = darkMode
+        ? ApolloThemeTokenBackground
+        : ApolloThemeTokenTertiaryBackground;
+    titleText = [NSString stringWithFormat:@"%@ [CELL %@] [FLAIR %@]",
+             titleText,
+             RecentlyReadDebugHexForColor(cell.backgroundColor),
+             RecentlyReadDebugHexForColor(ApolloThemeRuntimeColor(debugFlairBackgroundToken))];
+    // End debug
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
     );
