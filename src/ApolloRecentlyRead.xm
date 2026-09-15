@@ -718,13 +718,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
-        ApolloThemeToken badgeBackgroundToken = darkMode
-        ? ApolloThemeTokenBackground
-        : ApolloThemeTokenTertiaryBackground;
+        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
         //[ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
         // Debug
-        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(badgeBackgroundToken);
+        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
         [badgeBackgroundColor setFill];
         // End debug
         [path fill];
@@ -1308,7 +1305,7 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
 }
 
 - (UIColor *)apollo_themeCellBackgroundColor {
-    return [super apollo_themeCellBackgroundColor];
+    return ApolloThemePageBackgroundColor();
 }
 
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
@@ -1317,7 +1314,7 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     UIColor *cellBackgroundColor = ApolloThemeCardBackgroundColor();
     if (cellBackgroundColor) {
         cell.backgroundColor = cellBackgroundColor;
-    }
+}
 }
 
 - (void)apollo_applyTheme {
@@ -1669,14 +1666,10 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     // Title with optional NSFW badge
     NSString *titleText = link.title ?: @"(untitled)";
     //Debug
-    BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
-    ApolloThemeToken debugFlairBackgroundToken = darkMode
-        ? ApolloThemeTokenBackground
-        : ApolloThemeTokenTertiaryBackground;
     titleText = [NSString stringWithFormat:@"%@ [CELL %@] [FLAIR %@]",
-             titleText,
-             RecentlyReadDebugHexForColor(cell.backgroundColor),
-             RecentlyReadDebugHexForColor(ApolloThemeRuntimeColor(debugFlairBackgroundToken))];
+         titleText,
+         RecentlyReadDebugHexForColor(cell.backgroundColor),
+         RecentlyReadDebugHexForColor(ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground))];
     // End debug
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
