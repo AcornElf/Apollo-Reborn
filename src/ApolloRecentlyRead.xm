@@ -1247,14 +1247,19 @@ if (ApolloThemeRuntimeIsActive()) {
     CGFloat upIconSize = 12.0;
     CGFloat iconOffset = kRecentlyReadIconOffset[textSizeIndex];
 
+    CGFloat upIconWidth =
+        upIconSize * (upIcon.size.width / upIcon.size.height);
+    CGFloat commentIconWidth =
+        iconBoxSize * (commentIcon.size.width / commentIcon.size.height);
+    CGFloat clockIconWidth =
+        iconBoxSize * (clockIcon.size.width / clockIcon.size.height);
+
     CGFloat upIconInnerOffset = (iconBoxSize - upIconSize) / 2.0;
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
-    CGFloat upIconWidth =
-        upIconSize * (upIcon.size.width / upIcon.size.height);
 
     upAtt.bounds = CGRectMake(
         0,
