@@ -756,6 +756,12 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [[NSNotificationCenter defaultCenter] addObserverForName:@"com.christianselig.ApolloSpecificThemeChanged"
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(__unused NSNotification *note) {
+        [self apollo_applyTheme];
+    }];
     self.title = @"Recently Read";
     self.posts = [NSMutableArray array];
     self.filteredPosts = [NSMutableArray array];
