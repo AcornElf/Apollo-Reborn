@@ -81,6 +81,14 @@ UIKit icon renderer was stubbed for the host build.
   in Floating Tab on a device whose last Post sheet hadn't carried it —
   simply vanished from the preview (device report, 2026-09-15). The items
   footer says the preview fades such rows.
+- Preview refresh animation: the incoming rendering is measured only after a
+  layout pass on the content view resolves its constraints. Before, it was
+  zero-sized when its rows were converted, so every survivor's old-to-new
+  slide started at the card's top-left corner — rows "slid in from the
+  side" on a switch flip (device report, 2026-09-15). The hairline (`last`)
+  is no longer part of a row's signature either, so a row that stops being
+  last doesn't cross-fade with itself. Sim recording after the fix: rows
+  move vertically only, the toggled row fades/scales in place.
 - Drag auto-scroll under the stuck card: UIKit only auto-scrolls a drag near
   the table's own edges, which the pinned card covers, so a row dragged
   upward stalled at the card's bottom edge (device recording, 2026-09-15).

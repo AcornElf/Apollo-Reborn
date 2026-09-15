@@ -248,9 +248,12 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
         [rows addObject:row];
         NSString *key = [kApolloAMPreviewRowKeyPrefix stringByAppendingString:item.itemID];
         viewsByKey[key] = row;
-        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%d|%@",
+        // `last` (the hairline) is deliberately NOT part of the look: a row
+        // that stops being last would otherwise cross-fade with its twin and
+        // read as doubled text for a couple of frames; the hairline just pops.
+        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%@",
                                 ApolloAMItemDrawsAsPalette(item, state.glass) ? @"palette" : @"row",
-                                item.title, state.glass, last, available, accentKey];
+                                item.title, state.glass, available, accentKey];
     }
     _rowViews = rows;
 
@@ -419,6 +422,13 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 
     [self layoutIfNeeded];
     [self apollo_addPreviewView:incoming height:state.previewHeight];
+    // Lay out THIS view again, not just the incoming one: the incoming
+    // rendering's frame comes from its constraints on this view, and until a
+    // pass here resolves them it is zero-sized — its rows then measure as
+    // zero rects at the top-left, and every survivor's old-to-new slide
+    // started from the card's corner instead of the row's old spot (the rows
+    // "sliding in from the side" on a switch flip).
+    [self layoutIfNeeded];
     [incoming layoutIfNeeded];
     self.currentPreviewView = incoming;
 
