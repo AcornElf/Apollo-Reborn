@@ -1220,7 +1220,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
-    CGFloat iconSize = metaFont.pointSize * 0.9;
+    CGFloat iconSize = 0.8 * metaFont.pointSize + 1.8;
     CGFloat baselineOffset = (metaFont.pointSize - iconSize) / 2.0;
 
     // Upvote arrow
@@ -1395,7 +1395,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellID];
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        cell.backgroundColor = [self apollo_themeCellBackgroundColor];
+        cell.backgroundColor = ApolloThemePageBackgroundColor();
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         UIView *selectedBg = [[UIView alloc] init];
