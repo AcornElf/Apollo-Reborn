@@ -1442,6 +1442,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellID];
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+        BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
         ApolloThemeToken cellBackgroundToken = darkMode
             ? ApolloThemeTokenTertiaryBackground
             : ApolloThemeTokenSecondaryBackground;
