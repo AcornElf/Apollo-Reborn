@@ -718,7 +718,12 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        [ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground) setFill];
+        BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+        ApolloThemeToken badgeBackgroundToken = darkMode
+            ? ApolloThemeTokenElevatedBackground
+            : ApolloThemeTokenBackground;
+
+        [ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
         [path fill];
 
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
@@ -1516,7 +1521,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
             [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
             [sep.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
-            [sep.heightAnchor constraintEqualToConstant:1.0],
+            [sep.heightAnchor constraintEqualToConstant:(2.0 / UIScreen.mainScreen.scale)]
         ]];
 
         objc_setAssociatedObject(cell, &kThumbWidthConstraintKey, thumbWidth, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
