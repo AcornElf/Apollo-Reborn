@@ -1312,8 +1312,8 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
     return [super apollo_themeCellBackgroundColor];
 }
 
-- (void)apollo_applyTheme {
-    [super apollo_applyTheme];
+- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
+    [super apollo_applyThemeToCell:cell];
 
     BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
     ApolloThemeToken cellBackgroundToken = darkMode
@@ -1321,9 +1321,31 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
         : ApolloThemeTokenBackground;
 
     UIColor *cellBackgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
-    if (!cellBackgroundColor) return;
+    if (cellBackgroundColor) {
+        cell.backgroundColor = cellBackgroundColor;
+    }
+}
 
-    for (UITableViewCell *cell in self.tableView.visibleCells) {
+- (void)apollo_applyTheme {
+    [super apollo_applyTheme];
+
+    NSArray<NSIndexPath *> *visibleIndexPaths = self.tableView.indexPathsForVisibleRows;
+    if (visibleIndexPaths.count > 0) {
+        [self.tableView reloadRowsAtIndexPaths:visibleIndexPaths
+                              withRowAnimation:UITableViewRowAnimationNone];
+    }
+}
+
+- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
+    [super apollo_applyThemeToCell:cell];
+
+    BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    ApolloThemeToken cellBackgroundToken = darkMode
+        ? ApolloThemeTokenSecondaryBackground
+        : ApolloThemeTokenBackground;
+
+    UIColor *cellBackgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+    if (cellBackgroundColor) {
         cell.backgroundColor = cellBackgroundColor;
     }
 }
