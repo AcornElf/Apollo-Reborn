@@ -694,7 +694,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     UIColor *flairTextColor = ApolloThemeRuntimeIsActive()
         ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel)
-        : [UIColor tertiaryLabelColor];
+        : [UIColor secondaryLabelColor];
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
@@ -1225,7 +1225,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
     CGFloat iconSize = 0.8 * metaFont.pointSize + 1.8;
-    CGFloat baselineOffset = (metaFont.pointSize - iconSize) / 2.0;
+    //Debug icon sizing
+    //CGFloat baselineOffset = (metaFont.pointSize - iconSize) / 2.0;
 
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
@@ -1291,7 +1292,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
 - (UIColor *)apollo_themeCellBackgroundColor {
     if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemePageBackgroundColor();
+        return ApolloThemeCardBackgroundColor();
     }
 
     return ApolloThemeCardBackgroundColor();
