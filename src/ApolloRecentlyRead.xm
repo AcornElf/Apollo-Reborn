@@ -1227,24 +1227,26 @@ if (ApolloThemeRuntimeIsActive()) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
-    CGFloat iconSize = 0.8 * metaFont.pointSize + 1.8;
-    //Debug icon sizing
-    //CGFloat baselineOffset = (metaFont.pointSize - iconSize) / 2.0;
+    CGFloat upIconSize = 12.0;
+    CGFloat commentIconSize = 13.0;
+    CGFloat clockIconSize = 13.0;
 
+    CGFloat upIconOffset = (metaFont.pointSize - upIconSize) / 2.0 + 0.5;
+    CGFloat commentIconOffset = (metaFont.pointSize - commentIconSize) / 2.0 + 0.5;
+    CGFloat clockIconOffset = (metaFont.pointSize - clockIconSize) / 2.0 + 0.5;
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *upAtt = [[NSTextAttachment alloc] init];
     upAtt.image = upIcon;
     CGFloat upIconWidth =
-        iconSize * (upIcon.size.width / upIcon.size.height);
+        upIconSize * (upIcon.size.width / upIcon.size.height);
 
     upAtt.bounds = CGRectMake(
         0,
-        0,
-        //baselineOffset,
+        upIconOffset,
         upIconWidth,
-        iconSize
+        upIconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:upAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
@@ -1257,14 +1259,13 @@ if (ApolloThemeRuntimeIsActive()) {
     NSTextAttachment *commentAtt = [[NSTextAttachment alloc] init];
     commentAtt.image = commentIcon;
     CGFloat commentIconWidth =
-        iconSize * (commentIcon.size.width / commentIcon.size.height);
+        commentIconSize * (commentIcon.size.width / commentIcon.size.height);
 
     commentAtt.bounds = CGRectMake(
         0,
-        0,
-        //baselineOffset,
+        commentIconOffset,
         commentIconWidth,
-        iconSize
+        commentIconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:commentAtt]];
     NSString *commentsStr = [(id)link respondsToSelector:@selector(totalComments)]
@@ -1279,14 +1280,13 @@ if (ApolloThemeRuntimeIsActive()) {
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
     CGFloat clockIconWidth =
-        iconSize * (clockIcon.size.width / clockIcon.size.height);
+        clockIconSize * (clockIcon.size.width / clockIcon.size.height);
 
     clockAtt.bounds = CGRectMake(
         0,
-        0,
-        //baselineOffset,
+        clockIconOffset,
         clockIconWidth,
-        iconSize
+        clockIconSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:clockAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
