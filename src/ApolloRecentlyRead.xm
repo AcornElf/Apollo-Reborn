@@ -720,8 +720,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
         BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
         ApolloThemeToken badgeBackgroundToken = darkMode
-            ? ApolloThemeTokenSecondaryBackground
-            : ApolloThemeTokenBackground;
+        ? ApolloThemeTokenBackground
+        : ApolloThemeTokenTertiaryBackground;
         //[ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
         // Debug
         UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(badgeBackgroundToken);
@@ -1314,12 +1314,7 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
     [super apollo_applyThemeToCell:cell];
 
-    BOOL darkMode = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
-    ApolloThemeToken cellBackgroundToken = darkMode
-        ? ApolloThemeTokenSecondaryBackground
-        : ApolloThemeTokenBackground;
-
-    UIColor *cellBackgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+    UIColor *cellBackgroundColor = ApolloThemeCardBackgroundColor();
     if (cellBackgroundColor) {
         cell.backgroundColor = cellBackgroundColor;
     }
@@ -1443,8 +1438,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
         ApolloThemeToken cellBackgroundToken = darkMode
-            ? ApolloThemeTokenTertiaryBackground
-            : ApolloThemeTokenSecondaryBackground;
+        ? ApolloThemeTokenSecondaryBackground
+        : ApolloThemeTokenBackground;
 
         cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
         //Debug
