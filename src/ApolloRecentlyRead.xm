@@ -718,8 +718,9 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        UIColor *badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
-        //[ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
+        UIColor *badgeBackgroundColor = ApolloThemeRuntimeIsActive()
+            ? ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground)
+            : [UIColor secondarySystemBackgroundColor];
         [badgeBackgroundColor setFill];
         [path fill];
 
@@ -1307,11 +1308,6 @@ static NSString *RecentlyReadDebugHexForColor(UIColor *color) {
 
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
     [super apollo_applyThemeToCell:cell];
-
-    UIColor *cellBackgroundColor = ApolloThemeCardBackgroundColor();
-    if (cellBackgroundColor) {
-        cell.backgroundColor = cellBackgroundColor;
-}
 }
 
 - (void)apollo_applyTheme {
@@ -1522,7 +1518,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         thumbnailView.contentMode = UIViewContentModeScaleAspectFill;
         thumbnailView.clipsToBounds = YES;
         thumbnailView.layer.cornerRadius = 6.0;
-        thumbnailView.backgroundColor = [UIColor tertiarySystemFillColor];
+        thumbnailView.backgroundColor = ApolloThemeRuntimeIsActive()
+            ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryBackground)
+            : [UIColor tertiarySystemFillColor];
         thumbnailView.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:thumbnailView];
 
@@ -1545,7 +1543,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
-        sep.backgroundColor = [UIColor separatorColor];
+        sep.backgroundColor = ApolloThemeRuntimeIsActive()
+            ? ApolloThemeRuntimeColor(ApolloThemeTokenSeparator)
+            : [UIColor separatorColor];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
 
