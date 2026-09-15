@@ -692,9 +692,12 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    UIColor *flairTextColor = ApolloThemeRuntimeIsActive()
-        ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel)
-        : [UIColor tertiaryLabelColor];
+    UIColor *flairTextColor;
+if (ApolloThemeRuntimeIsActive()) {
+    flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
+} else {
+    flairTextColor = [UIColor secondaryLabelColor];
+}
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
