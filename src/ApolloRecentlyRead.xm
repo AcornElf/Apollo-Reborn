@@ -720,8 +720,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
         BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
         ApolloThemeToken badgeBackgroundToken = darkMode
-            ? ApolloThemeTokenElevatedBackground
-            : ApolloThemeTokenBackground;
+            ? ApolloThemeTokenBackground
+            : ApolloThemeTokenTertiaryBackground;
 
         [ApolloThemeRuntimeColor(badgeBackgroundToken) setFill];
         [path fill];
@@ -1395,7 +1395,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellID];
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        cell.backgroundColor = ApolloThemePageBackgroundColor();
+        BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+        ApolloThemeToken cellBackgroundToken = darkMode
+            ? ApolloThemeTokenSecondaryBackground
+            : ApolloThemeTokenBackground;
+
+        cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         UIView *selectedBg = [[UIView alloc] init];
