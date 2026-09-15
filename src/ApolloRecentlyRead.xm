@@ -547,8 +547,7 @@ static NSString *RecentlyReadDisplayFlair(NSString *raw) {
     return [kept componentsJoinedByString:@" "];
 }
 
-
-
+    #pragma mark - Font scaling
 // Apollo's seven-position Text Size scale, measured from Compact post titles.
 // Step 4 is the default and therefore the reference point.
 static const CGFloat kRecentlyReadTextSizeScale[] = {
@@ -560,6 +559,39 @@ static const CGFloat kRecentlyReadTextSizeScale[] = {
     23.0 / 18.0,  // 6
     25.3 / 18.0   // 7
 };
+
+// Additional downward adjustment for info-row icons at each Text Size step.
+static const CGFloat kRecentlyReadIconOffset[] = {
+    2.33,  // 1
+    2.00,  // 2
+    2.00,  // 3
+    1.67,  // 4
+    1.67,  // 5
+    1.33,  // 6
+    1.00   // 7
+};
+
+static NSInteger RRTextSizeIndex(id node) {
+    NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
+
+    if ([category isEqualToString:UIContentSizeCategoryExtraSmall]) {
+        return 0;
+    } else if ([category isEqualToString:UIContentSizeCategorySmall]) {
+        return 1;
+    } else if ([category isEqualToString:UIContentSizeCategoryMedium]) {
+        return 2;
+    } else if ([category isEqualToString:UIContentSizeCategoryLarge]) {
+        return 3;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraLarge]) {
+        return 4;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraLarge]) {
+        return 5;
+    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraExtraLarge]) {
+        return 6;
+    }
+
+    return 3;
+}
 
 static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -581,25 +613,7 @@ static UIFont *RRScaledFont(UIFont *font, UIFontTextStyle textStyle, id node) {
                      compatibleWithTraitCollection:traits];
     }
 
-    NSString *category = RecentlyReadEffectiveContentSizeCategory(node);
-
-    NSInteger index = 3; // Step 4 is the default.
-
-    if ([category isEqualToString:UIContentSizeCategoryExtraSmall]) {
-        index = 0;
-    } else if ([category isEqualToString:UIContentSizeCategorySmall]) {
-        index = 1;
-    } else if ([category isEqualToString:UIContentSizeCategoryMedium]) {
-        index = 2;
-    } else if ([category isEqualToString:UIContentSizeCategoryLarge]) {
-        index = 3;
-    } else if ([category isEqualToString:UIContentSizeCategoryExtraLarge]) {
-        index = 4;
-    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraLarge]) {
-        index = 5;
-    } else if ([category isEqualToString:UIContentSizeCategoryExtraExtraExtraLarge]) {
-        index = 6;
-    }
+NSInteger index = RRTextSizeIndex(node);
 
     CGFloat scale = kRecentlyReadTextSizeScale[index];
     UIFont *result = [font fontWithSize:font.pointSize * scale];
@@ -1227,13 +1241,13 @@ if (ApolloThemeRuntimeIsActive()) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSDictionary *textAttrs = @{NSFontAttributeName: metaFont, NSForegroundColorAttributeName: metaColor};
-    CGFloat upIconSize = 12.0;
-    CGFloat commentIconSize = 13.0;
-    CGFloat clockIconSize = 13.0;
+    NSInteger textSizeIndex = RRTextSizeIndex(self);
 
-    CGFloat upIconOffset = (metaFont.pointSize - upIconSize) / 2.0 + 0.5;
-    CGFloat commentIconOffset = (metaFont.pointSize - commentIconSize) / 2.0 + 0.5;
-    CGFloat clockIconOffset = (metaFont.pointSize - clockIconSize) / 2.0 + 0.5;
+    CGFloat iconBoxSize = 13.0;
+    CGFloat upIconSize = 12.0;
+    CGFloat iconOffset = kRecentlyReadIconOffset[textSizeIndex];
+
+    CGFloat upIconInnerOffset = (iconBoxSize - upIconSize) / 2.0;
     // Upvote arrow
     UIImage *upIcon = [[UIImage imageNamed:@"posts-points"]
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
@@ -1244,7 +1258,7 @@ if (ApolloThemeRuntimeIsActive()) {
 
     upAtt.bounds = CGRectMake(
         0,
-        upIconOffset,
+        iconOffset + upIconInnerOffset,
         upIconWidth,
         upIconSize
     );
@@ -1258,14 +1272,12 @@ if (ApolloThemeRuntimeIsActive()) {
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *commentAtt = [[NSTextAttachment alloc] init];
     commentAtt.image = commentIcon;
-    CGFloat commentIconWidth =
-        commentIconSize * (commentIcon.size.width / commentIcon.size.height);
 
     commentAtt.bounds = CGRectMake(
         0,
-        commentIconOffset,
+        iconOffset,
         commentIconWidth,
-        commentIconSize
+        iconBoxSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:commentAtt]];
     NSString *commentsStr = [(id)link respondsToSelector:@selector(totalComments)]
@@ -1279,14 +1291,12 @@ if (ApolloThemeRuntimeIsActive()) {
         imageWithTintColor:metaColor renderingMode:UIImageRenderingModeAlwaysOriginal];
     NSTextAttachment *clockAtt = [[NSTextAttachment alloc] init];
     clockAtt.image = clockIcon;
-    CGFloat clockIconWidth =
-        clockIconSize * (clockIcon.size.width / clockIcon.size.height);
 
     clockAtt.bounds = CGRectMake(
         0,
-        clockIconOffset,
+        iconOffset,
         clockIconWidth,
-        clockIconSize
+        iconBoxSize
     );
     [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:clockAtt]];
     [result appendAttributedString:[[NSAttributedString alloc] initWithString:
@@ -1298,7 +1308,7 @@ if (ApolloThemeRuntimeIsActive()) {
 
 - (UIColor *)apollo_themeCellBackgroundColor {
     if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeCardBackgroundColor();
+        return ApolloThemePageBackgroundColor();
     }
 
     return ApolloThemeCardBackgroundColor();
