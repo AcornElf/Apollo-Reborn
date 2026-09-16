@@ -274,11 +274,9 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
 
 #pragma mark - Item row cell
 
-// One catalogue item: its menu icon, its title, a drag grip and the
-// show/hide switch. The switch is the accessory (so it keeps its native
-// placement and theming); the grip sits inside the content area just left of
-// it. A hidden item dims its icon and title but stays in the list, so it can
-// be dragged and switched back on any time.
+// One catalogue item: its menu icon, title, visibility indicator and drag
+// grip. A hidden item stays in the list so it can be shown again or moved
+// without losing its position.
 @interface ApolloAMItemCell : UITableViewCell
 @property (nonatomic, copy) NSString *itemID;
 @property (nonatomic, strong, readonly) UIImageView *visibilityIndicator;
@@ -329,7 +327,8 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     _accessoryStack.alignment = UIStackViewAlignmentCenter;
     _accessoryStack.spacing = 8.0;
 
-    self.accessoryView = _accessoryStack;
+    _accessoryStack.userInteractionEnabled = NO;
+    [self.contentView addSubview:_accessoryStack];
 
     self.imageView.contentMode = UIViewContentModeCenter;
     self.textLabel.numberOfLines = 1;
@@ -350,10 +349,17 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     imageFrame.origin.y = round((CGRectGetHeight(content) - 28.0) / 2.0);
     self.imageView.frame = imageFrame;
 
-    // Keep the title clear of the trailing switch + grabber accessory.
+    // Keep the title clear of the trailing visibility indicator + grabber accessory.
+    CGFloat accessoryWidth = 24.0 + 8.0 + (91.0 / 3.0);
+    CGFloat accessoryHeight = 24.0;
+    CGFloat accessoryTrailingInset = 16.0;
+
     CGRect accessoryFrame =
-        [self.contentView convertRect:self.accessoryStack.bounds
-                              fromView:self.accessoryStack];
+        CGRectMake(CGRectGetMaxX(content) - accessoryTrailingInset - accessoryWidth,
+                   round((CGRectGetHeight(content) - accessoryHeight) / 2.0),
+                   accessoryWidth,
+                   accessoryHeight);
+    self.accessoryStack.frame = accessoryFrame;
 
     CGRect textFrame = self.textLabel.frame;
     textFrame.origin.x = CGRectGetMaxX(imageFrame) + 12.0;
@@ -582,7 +588,7 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     NSString *itemsFooter;
     if (self.editingAllMenus) {
         menuFooter = @"Visibility across all four menus. Choose a specific menu to reorder its actions and preview it with the ••• button.";
-        itemsFooter = @"Switch an action on or off across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
+        itemsFooter = @"Tap to toggle an action on or off across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
     } else {
         menuFooter = [ApolloActionMenuContextDescription(context)
                       stringByAppendingString:@" Tap ••• at the top to see this menu as it opens right now, with your order and visibility applied."];
@@ -658,13 +664,8 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     return height;
 }
 
-// The look that follows the hidden state: dimmed icon and title, the All
-// overview's per-menu subtitle, accessibility. Kept apart from the cell's
-// creation so a switch flip can restyle the cell IN PLACE — reloading the row
-// there swapped the cell out under the switch mid-animation, cutting the
-// knob's own transition short and briefly drawing two switches (device
-// recording, 2026-09-14). Never sets the switch: it is either freshly
-// configured by the caller or animating under the user's thumb.
+// Applies the item's hidden/available state in place without reloading the
+// row, so the list does not jump while the user is interacting with it.
 - (void)styleItemCell:(ApolloAMItemCell *)cell forItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden {
     // A row Apollo only offers sometimes says so — unless this user's menu
     // offered it last time (a moderator's Moderator row, say). Same rule the
@@ -693,7 +694,6 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     cell.textLabel.textColor = hidden ? UIColor.secondaryLabelColor : UIColor.labelColor;
     if (!hidden) [self apollo_applyPrimaryTextColorToCell:cell];
     cell.textLabel.alpha = 1.0;
-    cell.accessibilityLabel = hidden ? [NSString stringWithFormat:@"%@, hidden", item.title] : item.title;
 }
 
 #pragma mark - Actions
