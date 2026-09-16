@@ -681,7 +681,8 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
             (hiddenCount == contexts.count ? @"Hidden in All Supported Menus" : @"Shown in Some Menus");
     }
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
-    cell.toggle.accessibilityLabel = [NSString stringWithFormat:@"Show %@", item.title];
+    cell.accessibilityLabel = item.title;
+    cell.accessibilityValue = hidden ? @"Hidden" : @"Shown";
     // Reuse pool: set BOTH states explicitly. A hidden row's label is disabled
     // (the theme pass leaves disabled labels alone, so the dim survives it);
     // a shown row is re-enabled, reset to the plain label colour and marked
