@@ -315,6 +315,7 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, strong) NSMutableSet<NSString *> *knownMissingFullNames;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIActivityIndicatorView *footerSpinner;
+@property (nonatomic, strong) id textSizeDefaultsObserver;
 @end
 
 static char kNavPathKey;
@@ -868,6 +869,13 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     [self.refreshControl addTarget:self
                             action:@selector(_pullToRefreshTriggered)
                   forControlEvents:UIControlEventValueChanged];
+        self.textSizeDefaultsObserver =
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification * _Nonnull __unused note) {
+        [self softRefreshPosts];
+    }];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1392,21 +1400,6 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
 - (void)apollo_applyTheme {
     [super apollo_applyTheme];
-
-    for (NSIndexPath *indexPath in self.tableView.indexPathsForVisibleRows) {
-        if (indexPath.row >= (NSInteger)self.activePosts.count) continue;
-
-        UITableViewCell *cell =
-            [self.tableView cellForRowAtIndexPath:indexPath];
-
-        UILabel *titleLabel =
-            [cell.contentView viewWithTag:kTitleTag];
-
-        if (!titleLabel) continue;
-
-        RDKLink *link = self.activePosts[indexPath.row];
-        [self applyTitleAppearanceToLabel:titleLabel forLink:link];
-    }
 }
 
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
