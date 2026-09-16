@@ -703,15 +703,19 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     }];
 }
 
+//Flair & link shared font colour helper
+static UIColor *RecentlyReadFlairTextColor(void) {
+    if (ApolloThemeRuntimeIsActive()) {
+        return ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
+    }
+
+    return [UIColor secondaryLabelColor];
+}
+
 //Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    UIColor *flairTextColor;
-if (ApolloThemeRuntimeIsActive()) {
-    flairTextColor = ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
-} else {
-    flairTextColor = [UIColor secondaryLabelColor];
-}
+    UIColor *flairTextColor = RecentlyReadFlairTextColor();
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
@@ -1441,6 +1445,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.tintColor = RecentlyReadMetaColor();
 
         UIView *selectedBg = [[UIView alloc] init];
         selectedBg.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.15];
@@ -1536,9 +1541,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         stack.alignment = UIStackViewAlignmentLeading;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:RRScaledSpacing(3, self)
+        [stack setCustomSpacing:RRScaledSpacing(10, self)
                     afterView:titleLabel];
-        [stack setCustomSpacing:RRScaledSpacing(3, self)
+        [stack setCustomSpacing:RRScaledSpacing(5, self)
                     afterView:footerStack];
         [stack setCustomSpacing:RRScaledSpacing(3, self)
                 afterView:authorTopBtn];
@@ -1546,7 +1551,17 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
-        sep.backgroundColor = ApolloThemeSeparatorColor() ?: [UIColor separatorColor];
+        UIColor *separatorColor = ApolloThemeSeparatorColor();
+
+        if (!ApolloThemeRuntimeIsActive() &&
+            [UITraitCollection currentTraitCollection].userInterfaceStyle != UIUserInterfaceStyleDark) {
+            separatorColor = [UIColor colorWithRed:238.0 / 255.0
+                                            green:238.0 / 255.0
+                                            blue:239.0 / 255.0
+                                            alpha:1.0];
+        }
+
+        sep.backgroundColor = separatorColor ?: [UIColor separatorColor];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
 
@@ -1650,7 +1665,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         }
     } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:RRScaledSpacing(3, self)
+        [stack setCustomSpacing:RRScaledSpacing(10, self)
                     afterView:titleLabel];
         // Subreddit below title with optional author
         subHeaderBtn.hidden = YES;
@@ -1676,15 +1691,32 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     NSString *flairText = RecentlyReadDisplayFlair(
         ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
     );
+    NSString *linkDomain = link.URL.host;
+    if ([linkDomain hasPrefix:@"www."]) {
+        linkDomain = [linkDomain substringFromIndex:4];
+    }
     UIFont *titleFont = titleLabel.font;
     NSMutableParagraphStyle *titlePara = [[NSMutableParagraphStyle alloc] init];
-    titlePara.lineSpacing = 1.5;
+    titlePara.lineSpacing = 1.0;
     NSDictionary *titleAttrs = @{NSFontAttributeName: titleFont,
                                  NSForegroundColorAttributeName: [UIColor labelColor],
                                  NSParagraphStyleAttributeName: titlePara};
+    NSDictionary *linkDomainAttrs = @{
+        NSFontAttributeName: titleFont,
+        NSForegroundColorAttributeName: RecentlyReadFlairTextColor(),
+        NSParagraphStyleAttributeName: titlePara
+    };
     if (link.isNSFW) {
         NSMutableAttributedString *titleAttr = [[NSMutableAttributedString alloc] initWithString:titleText
             attributes:titleAttrs];
+
+        if (linkDomain.length > 0) {
+            NSString *domainText = [NSString stringWithFormat:@" (%@)", linkDomain];
+            [titleAttr appendAttributedString:
+                [[NSAttributedString alloc] initWithString:domainText
+                                                attributes:linkDomainAttrs]];
+        }
+
         if (flairText.length > 0) {
             UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
 
@@ -1712,6 +1744,13 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         NSMutableAttributedString *titleAttr =
             [[NSMutableAttributedString alloc] initWithString:titleText
                                                     attributes:titleAttrs];
+
+        if (linkDomain.length > 0) {
+            NSString *domainText = [NSString stringWithFormat:@" (%@)", linkDomain];
+            [titleAttr appendAttributedString:
+                [[NSAttributedString alloc] initWithString:domainText
+                                                attributes:linkDomainAttrs]];
+        }
 
         if (flairText.length > 0) {
             UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
