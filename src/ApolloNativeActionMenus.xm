@@ -834,6 +834,22 @@ static UIAction *ApolloNativeActionMenuAction(NSString *title, NSString *subtitl
     return action;
 }
 
+BOOL ApolloNativeActionMenusActive(void) {
+    return ApolloNativeActionMenusEnabled();
+}
+
+// Same styling path as ApolloNativeActionMenuAction, minus the ActionController
+// round trip: the settings preview shows the menu, it never performs it.
+UIMenuElement *ApolloNativeActionMenuPreviewAction(NSString *title, UIImage *image, BOOL moderator, BOOL enabled) {
+    if (title.length == 0) return nil;
+    UIColor *tintColor = moderator ? ApolloNativeActionMenuModeratorColor() : nil;
+    if (tintColor && image) image = ApolloNativeActionMenuTintedImage(image, tintColor);
+    UIAction *action = [UIAction actionWithTitle:title image:image identifier:nil handler:^(__unused UIAction *selectedAction) {}];
+    ApolloNativeActionMenuStyleElementTitle(action, tintColor ? UIColor.labelColor : nil);
+    if (!enabled) action.attributes = UIMenuElementAttributesDisabled;
+    return action;
+}
+
 static void ApolloNativeActionMenuSortSavedCategoriesIfNeeded(id presenter, id actionController) {
     if (![presenter isMemberOfClass:objc_getClass("_TtC6Apollo32SavedPostsCommentsViewController")]) {
         return;

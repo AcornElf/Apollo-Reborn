@@ -57,8 +57,8 @@ UIKit icon renderer was stubbed for the host build.
   swaps in) is LOCKED (`ApolloActionMenuItem.locked`): never listed for
   editing, always first in a resolved or saved order, never in the hidden
   set. A stored layout that predates the lock is normalised on read
-  (`ApolloActionMenuLockedFirst`). The settings preview draws the button row
-  when that is what the menu shows, and the footer says the row stays put.
+  (`ApolloActionMenuLockedFirst`). The ••• preview shows the button row when
+  that is what the menu shows, and the footer says the row stays put.
 - In the settings screen, the drag completion and Reset apply the visibility
   diff (`visibilityDidChange`: the Reset row appearing or disappearing)
   BEFORE rebuilding the items section: `rebuildSectionContainingRowID:`
@@ -74,59 +74,28 @@ UIKit icon renderer was stubbed for the host build.
   morph short and briefly composited two switches (device recording,
   2026-09-14 23:07). After the change the glass sim's recording shows the
   full knob-to-track morph on both flips (60 fps frame crops).
-- The preview draws EVERY non-hidden item in the saved order and fades the
-  ones the menu didn't offer the last time it opened
-  (`ApolloActionMenuItemWasOffered`, 0.4 alpha on icon and title). Before,
-  those rows were dropped from the mock, so a row dragged to the top — Keep
-  in Floating Tab on a device whose last Post sheet hadn't carried it —
-  simply vanished from the preview (device report, 2026-09-15). The items
-  footer says the preview fades such rows.
-- Preview refresh animation: the incoming rendering is measured only after a
-  layout pass on the content view resolves its constraints. Before, it was
-  zero-sized when its rows were converted, so every survivor's old-to-new
-  slide started at the card's top-left corner — rows "slid in from the
-  side" on a switch flip (device report, 2026-09-15). The hairline (`last`)
-  is no longer part of a row's signature either, so a row that stops being
-  last doesn't cross-fade with itself. Sim recording after the fix: rows
-  move vertically only, the toggled row fades/scales in place.
+- The ••• button top-right IS the preview (there is no pinned card any
+  more — it took a third of the screen). Tapping it opens the menu being
+  edited as Apollo would open it right now, with the saved order and
+  visibility applied: on Liquid Glass a real UIMenu on the bar button
+  (`ApolloAMBuildGlassPreviewMenu`, rows styled by the renderer's own
+  `ApolloNativeActionMenuPreviewAction`, the feed's Submit Post as the
+  Photo/Link/Text/Poll row via `ApolloSubmitPostTypesMenu`, Gallery View in
+  its own inline section), built on every open through
+  `UIDeferredMenuElement`'s uncached provider; before glass a sheet drawn
+  after the classic ActionController (`ApolloAMPreviewSheetViewController`:
+  10pt insets, 58pt accent rows, chevron on Submit Post, Cancel card, tweak
+  rows appended below Apollo's as the legacy path does). Rows the menu
+  doesn't offer right now are dimmed, not dropped, so a moved row is always
+  where it was put; All has no preview (the button is disabled).
 - Item rows have EXACT heights (`itemRowHeightWithSubtitle:` — one template
-  cell per variant, cached per cell width and content size category) and
-  `animatePreviewStateChange` runs its batch update only when the card's
-  height actually changed. UIKit self-sized the rows from a 52 pt estimate;
+  cell per variant, cached per cell width and content size category). UIKit
+  self-sized the rows from a 52 pt estimate;
   subtitled rows are taller, so any batch update re-resolved the estimates of
   rows above the viewport and scrolled the list several rows on every switch
   flip while scrolled down (sim recording, 2026-09-15 02:11). After the
   change a flip deep in the list moves nothing but the switch and its row's
   dimming (frame-diff of the list region: ~3 vs 8–26 before).
-- Pinned card vs. batch updates (`ApolloSettingsPinnedPreview.m`, shared
-  host). The stuck card's screen position was derived from its spacer row's
-  live content y; a batch update applies section header/footer heights UIKit
-  had only estimated, and the row moves by the difference — on this screen
-  the Preview header goes 55.3 → 17.7pt, so the first update while scrolled
-  (the form base's footer re-measure, log "footer 2 is 110.0pt tall but its
-  view fits 90.3pt"; the reset row appearing) pushed the card ~20–38pt up
-  under the nav bar with "Preview" cut off (device recording, 2026-09-15
-  14:17; reproduced in the sim). Now: while stuck the table holds the row y
-  the card locked at (`lockedRowMinY`, dropped once the list is home or the
-  width changes) and logs "[PinnedPreview] spacer row moved N pt while
-  stuck … holding the card" when it drifts; the pinned pass also re-runs
-  after `endUpdates`, `performBatchUpdates:`, `reloadSections:` and
-  `reloadRowsAtIndexPaths:`. Sim: flipping a switch and tapping Reset at the
-  bottom of the list logged the −37.7pt drift and left the nav bar, title
-  and card strip pixel-identical (screenshot diff 0.0).
-- The reset row coming or going is applied WITHOUT animation while the card
-  is stuck (`applyVisibilityChange`): animated, the model offset moves at
-  once while UIKit animates the rows, and the card — placed at the final
-  offset — sat ~85pt above rows still on their way for a beat (sim recording,
-  2026-09-15). At the top of the list it still animates.
-- Drag auto-scroll under the stuck card: UIKit only auto-scrolls a drag near
-  the table's own edges, which the pinned card covers, so a row dragged
-  upward stalled at the card's bottom edge (device recording, 2026-09-15).
-  `trackDragAutoScrollForSession:` (from `dropSessionDidUpdate:`) keeps the
-  finger's visible-bounds y; while it sits within 56 pt below the stuck
-  card's bottom edge a display link scrolls the list up 2–12 pt per frame
-  (deeper = faster) until the list is home, the finger leaves the band, the
-  session exits/ends, or the screen disappears. The bottom edge is UIKit's.
 - Glass specs with a custom `buildElement` (Gallery View's combined section,
   the profile Hidden & Deleted row, Sticky as Subreddit) place their own
   element. `ApolloActionMenuInjectMenuElements` now diffs the children before
@@ -138,7 +107,7 @@ UIKit icon renderer was stubbed for the host build.
   Gallery View above Unsubscribe (sim, 2026-09-14). Unranked builders keep
   their own placement.
 - The settings list includes only that builder's supported actions; conditional
-  entries say “Shown when available.” The preview uses the last offered rows.
+  entries say “Shown when available.” The ••• preview dims rows the menu didn't offer last time.
 - All switches affect every supporting context; mixed visibility is labelled.
   All has no reorder controls. Individual menus can override the choice.
 - Reset removes the saved order and hidden set. Unknown native kinds remain

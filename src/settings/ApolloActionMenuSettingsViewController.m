@@ -2,505 +2,275 @@
 
 #import "ApolloActionMenuLayout.h"
 #import "ApolloCommon.h"
+#import "ApolloNativeActionMenus.h"
 #import "ApolloSettingsForm.h"
 #import "ApolloThemeRuntime.h"
 #import "UserDefaultConstants.h"
-#import "settings/ApolloSettingsPinnedPreview.h"
 
 #import <objc/runtime.h>
 
-// The live preview is hosted by the shared pinned-preview machinery
-// (ApolloSettingsPinnedPreview.h): the "Preview" section holds one transparent
-// spacer row and the card itself is a direct subview of the table that sits on
-// that row at rest and locks under the nav bar — with a copy of the section
-// title — once the row would scroll away, so the item list is rearranged with
-// the menu in view. Tap the card to pin/unpin it (remembered per screen).
-//
-// The preview is a miniature of the selected ••• menu as the saved layout
-// leaves it: the visible items in order, drawn the way this device draws the
-// menu (a Liquid Glass UIMenu, or Apollo's accent-tinted sheet before it),
-// capped at a handful of rows with a "+N more" line. Every row carries a KEY
-// (its item) and a SIGNATURE (its look): on a refresh a row that survived
-// slides from its old place to its new one, a hidden row scale-fades out, a
-// re-shown one scale-fades in, and the spacer row (hence the card) springs to
-// the new height alongside.
-
-#pragma mark - Preview model
+// The screen lists the selected ••• menu's items — drag to reorder, switch to
+// hide — and the ••• button in the top-right corner IS the preview: tap it and
+// it opens the menu being edited as Apollo would open it right now, with the
+// saved order and visibility applied. On Liquid Glass that is a real UIMenu
+// (the same UIKit menu Apollo's own ••• buttons show); on earlier iOS it is a
+// sheet styled after Apollo's classic action sheet. It is built fresh every
+// time it opens, so every change shows the next time it is tapped — exactly as
+// in the app. Rows the menu wouldn't offer right now (your own post's Edit, a
+// feature row that's off) are dimmed rather than dropped, so a row you just
+// moved is always where you put it.
 
 static NSString *const kApolloAMAllMenus = @"all";
 
-static NSString *const kApolloAMPreviewKeyCaption = @"caption";
-static NSString *const kApolloAMPreviewKeyPanel = @"panel";
-static NSString *const kApolloAMPreviewKeyMore = @"more";
-static NSString *const kApolloAMPreviewRowKeyPrefix = @"row.";
+static NSString *const kApolloAMRowMenu = @"menu";
+static NSString *const kApolloAMRowReset = @"reset";
+static NSString *const kApolloAMItemRowPrefix = @"item.";
 
-static const CGFloat kApolloAMPreviewTopPadding = 10.0;      // centres the caption on the pin glyph
-static const CGFloat kApolloAMPreviewBottomPadding = 12.0;
-static const CGFloat kApolloAMPreviewSidePadding = 14.0;
-static const CGFloat kApolloAMPreviewCaptionHeight = 14.0;
-static const CGFloat kApolloAMPreviewCaptionSpacing = 10.0;
-static const CGFloat kApolloAMPreviewPanelPadding = 5.0;
-static const CGFloat kApolloAMPreviewRowHeight = 30.0;
-static const CGFloat kApolloAMPreviewPanelMaxWidth = 250.0;
-static const CGFloat kApolloAMPreviewMoreHeight = 18.0;
-static const NSUInteger kApolloAMPreviewMaxRows = 8;
-// Rows the menu didn't offer the last time it opened stay in place but fade,
-// so a row the user just moved is always visible where they put it.
+// Rows the menu doesn't offer right now are drawn dimmed, not dropped.
 static const CGFloat kApolloAMPreviewUnavailableAlpha = 0.4;
 
-@interface ApolloAMPreviewState : NSObject
-@property (nonatomic, copy) ApolloActionMenuContext context;
-@property (nonatomic, copy) NSArray<ApolloActionMenuItem *> *visibleItems;   // saved order, hidden removed
-@property (nonatomic, copy) NSSet<NSString *> *unavailableItemIDs;           // drawn faded
-@property (nonatomic) BOOL glass;
-@property (nonatomic) CGFloat previewHeight;
+#pragma mark - Preview rows (what the ••• button shows)
+
+@interface ApolloAMPreviewRow : NSObject
+@property (nonatomic, strong) ApolloActionMenuItem *item;
+@property (nonatomic) BOOL available;   // the menu offered it last time (or usually does)
 @end
 
-@implementation ApolloAMPreviewState
+@implementation ApolloAMPreviewRow
 @end
 
-static ApolloAMPreviewState *ApolloAMCurrentPreviewState(ApolloActionMenuContext context) {
-    ApolloAMPreviewState *state = [ApolloAMPreviewState new];
-    state.context = context;
-    state.visibleItems = ApolloActionMenuPreviewItems(context);
-    NSMutableSet<NSString *> *unavailable = [NSMutableSet set];
-    for (ApolloActionMenuItem *item in state.visibleItems) {
-        if (!ApolloActionMenuItemWasOffered(context, item.itemID)) [unavailable addObject:item.itemID];
-    }
-    state.unavailableItemIDs = unavailable;
-    state.glass = IsLiquidGlass();
-    return state;
-}
-
-// The feed's locked Submit Post row is drawn as the quick new-post buttons
-// (Photo/Link/Text/Poll) on Liquid Glass while the Polls feature is on —
-// ApolloSubmitPostTypesMenu swaps the plain row for them — and the mock
-// follows suit, so the preview matches what that menu actually shows.
-static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
-    return glass && item.locked && [item.kinds containsObject:@51] && ApolloPollsFeatureEnabled();
-}
-
-#pragma mark - Preview view
-
-@interface ApolloAMPreviewView : UIView
-@property (nonatomic, strong) ApolloAMPreviewState *previewState;
-@property (nonatomic, strong) UIColor *accentColor;
-// The rendered blocks and their signatures, keyed — what the content view's
-// refresh diffs against the previous rendering.
-@property (nonatomic, copy) NSDictionary<NSString *, UIView *> *itemViewsByKey;
-@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *itemSignaturesByKey;
-- (void)apollo_configurePreview;
-- (CGFloat)apollo_heightForWidth:(CGFloat)width;
-@end
-
-@implementation ApolloAMPreviewView {
-    UILabel *_captionLabel;
-    UIView *_panelView;
-    NSArray<UIView *> *_rowViews;
-    UILabel *_moreLabel;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (!self) return nil;
-    self.backgroundColor = UIColor.clearColor;
-    self.opaque = NO;
-    return self;
-}
-
-- (UIColor *)apollo_accent {
-    return self.accentColor ?: ApolloThemeAccentColor() ?: self.tintColor;
-}
-
-- (NSUInteger)apollo_shownRowCount {
-    return MIN(self.previewState.visibleItems.count, kApolloAMPreviewMaxRows);
-}
-
-- (NSUInteger)apollo_moreCount {
-    NSUInteger visible = self.previewState.visibleItems.count;
-    return visible > kApolloAMPreviewMaxRows ? visible - kApolloAMPreviewMaxRows : 0;
-}
-
-- (CGFloat)apollo_panelHeight {
-    return 2.0 * kApolloAMPreviewPanelPadding + (CGFloat)[self apollo_shownRowCount] * kApolloAMPreviewRowHeight;
-}
-
-- (CGFloat)apollo_heightForWidth:(__unused CGFloat)width {
-    CGFloat height = kApolloAMPreviewTopPadding + kApolloAMPreviewCaptionHeight + kApolloAMPreviewCaptionSpacing
-        + [self apollo_panelHeight] + kApolloAMPreviewBottomPadding;
-    if ([self apollo_moreCount] > 0) height += kApolloAMPreviewMoreHeight;
-    return ceil(height);
-}
-
-// One menu row: icon + title, drawn like this device's menu draws it — label
-// ink on the glass UIMenu, the accent on Apollo's classic sheet — with a
-// hairline under every row but the last.
-// `available`: the menu offered this row last time (faded otherwise). The
-// fade sits on the icon and title, not the row, because the keyed refresh
-// animates the row's own alpha.
-- (UIView *)apollo_rowViewForItem:(ApolloActionMenuItem *)item last:(BOOL)last available:(BOOL)available {
-    BOOL glass = self.previewState.glass;
-    if (ApolloAMItemDrawsAsPalette(item, glass)) return [self apollo_paletteRowViewLast:last available:available];
-    UIView *row = [UIView new];
-    row.backgroundColor = UIColor.clearColor;
-    CGFloat inkAlpha = available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
-
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[item icon]];
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    icon.tintColor = glass ? UIColor.labelColor : [self apollo_accent];
-    icon.alpha = inkAlpha;
-    icon.tag = 1;
-    [row addSubview:icon];
-
-    UILabel *title = [UILabel new];
-    title.text = item.title;
-    title.font = [UIFont systemFontOfSize:13.0];
-    title.textColor = glass ? UIColor.labelColor : [self apollo_accent];
-    title.lineBreakMode = NSLineBreakByTruncatingTail;
-    title.alpha = inkAlpha;
-    title.tag = 2;
-    [row addSubview:title];
-
-    if (!last) {
-        UIView *separator = [UIView new];
-        separator.backgroundColor = [(ApolloThemeSeparatorColor() ?: UIColor.separatorColor) colorWithAlphaComponent:0.6];
-        separator.tag = 3;
-        [row addSubview:separator];
-    }
-    return row;
-}
-
-// The quick new-post buttons: the four glyphs the glass menu's small-element
-// section shows (the bundled custom symbols, with the same stock fallbacks),
-// spread evenly across the row, under the full-width hairline that section has.
-- (UIView *)apollo_paletteRowViewLast:(BOOL)last available:(BOOL)available {
-    UIView *row = [UIView new];
-    row.backgroundColor = UIColor.clearColor;
-    CGFloat inkAlpha = available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
-    UIImageSymbolConfiguration *configuration =
-        [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightRegular];
-    NSArray<NSArray<NSString *> *> *glyphs = @[ @[ @"custom.photo.badge.plus", @"photo" ],
-                                               @[ @"custom.link.badge.plus", @"link" ],
-                                               @[ @"custom.text.page.badge.plus", @"text.alignleft" ],
-                                               @[ @"custom.chart.bar.horizontal.page.fill.badge.plus", @"chart.bar" ] ];
-    for (NSArray<NSString *> *glyph in glyphs) {
-        UIImage *image = ApolloPollComposeSymbol(glyph[0]) ?: [UIImage systemImageNamed:glyph[1]];
-        image = [[image imageByApplyingSymbolConfiguration:configuration] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        UIImageView *icon = [[UIImageView alloc] initWithImage:image];
-        icon.contentMode = UIViewContentModeScaleAspectFit;
-        icon.tintColor = UIColor.labelColor;
-        icon.alpha = inkAlpha;
-        icon.tag = 4;
-        [row addSubview:icon];
-    }
-    if (!last) {
-        UIView *separator = [UIView new];
-        separator.backgroundColor = [(ApolloThemeSeparatorColor() ?: UIColor.separatorColor) colorWithAlphaComponent:0.6];
-        separator.tag = 3;
-        [row addSubview:separator];
-    }
-    return row;
-}
-
-- (void)apollo_configurePreview {
-    for (UIView *view in self.subviews) [view removeFromSuperview];
-    ApolloAMPreviewState *state = self.previewState;
-    if (!state) return;
-
-    NSMutableDictionary<NSString *, UIView *> *viewsByKey = [NSMutableDictionary dictionary];
-    NSMutableDictionary<NSString *, NSString *> *signaturesByKey = [NSMutableDictionary dictionary];
-    UIColor *accent = [self apollo_accent];
-    NSString *accentKey = [NSString stringWithFormat:@"%p", accent];
-
-    UILabel *caption = [UILabel new];
-    caption.text = [[NSString stringWithFormat:@"%@ menu", ApolloActionMenuContextTitle(state.context)] uppercaseString];
-    caption.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
-    caption.textColor = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel) ?: UIColor.secondaryLabelColor;
-    [self addSubview:caption];
-    _captionLabel = caption;
-    viewsByKey[kApolloAMPreviewKeyCaption] = caption;
-    signaturesByKey[kApolloAMPreviewKeyCaption] = [@"caption|" stringByAppendingString:caption.text];
-
-    // The menu surface, drawn under the rows (the rows are siblings, not
-    // children, so each animates on its own).
-    UIView *panel = [UIView new];
-    panel.backgroundColor = state.glass
-        ? [UIColor.secondarySystemFillColor colorWithAlphaComponent:0.55]
-        : [UIColor.tertiarySystemFillColor colorWithAlphaComponent:0.7];
-    panel.layer.cornerRadius = state.glass ? 18.0 : 12.0;
-    panel.layer.cornerCurve = kCACornerCurveContinuous;
-    panel.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
-    panel.layer.borderColor = [[(ApolloThemeSeparatorColor() ?: UIColor.separatorColor) colorWithAlphaComponent:0.5] resolvedColorWithTraitCollection:self.traitCollection].CGColor;
-    [self addSubview:panel];
-    _panelView = panel;
-    viewsByKey[kApolloAMPreviewKeyPanel] = panel;
-    signaturesByKey[kApolloAMPreviewKeyPanel] = [NSString stringWithFormat:@"panel|%d|%lu", state.glass,
-                                                 (unsigned long)[self apollo_shownRowCount]];
-
-    NSUInteger shown = [self apollo_shownRowCount];
-    NSMutableArray<UIView *> *rows = [NSMutableArray arrayWithCapacity:shown];
-    for (NSUInteger i = 0; i < shown; i++) {
-        ApolloActionMenuItem *item = state.visibleItems[i];
-        BOOL last = (i + 1 == shown);
-        BOOL available = ![state.unavailableItemIDs containsObject:item.itemID];
-        UIView *row = [self apollo_rowViewForItem:item last:last available:available];
-        [self addSubview:row];
+// The saved order with hidden items removed, each flagged with whether the
+// menu offers it right now.
+static NSArray<ApolloAMPreviewRow *> *ApolloAMPreviewRows(ApolloActionMenuContext context) {
+    NSMutableArray<ApolloAMPreviewRow *> *rows = [NSMutableArray array];
+    for (ApolloActionMenuItem *item in ApolloActionMenuPreviewItems(context)) {
+        ApolloAMPreviewRow *row = [ApolloAMPreviewRow new];
+        row.item = item;
+        row.available = ApolloActionMenuItemWasOffered(context, item.itemID);
         [rows addObject:row];
-        NSString *key = [kApolloAMPreviewRowKeyPrefix stringByAppendingString:item.itemID];
-        viewsByKey[key] = row;
-        // `last` (the hairline) is deliberately NOT part of the look: a row
-        // that stops being last would otherwise cross-fade with its twin and
-        // read as doubled text for a couple of frames; the hairline just pops.
-        signaturesByKey[key] = [NSString stringWithFormat:@"%@|%@|%d|%d|%@",
-                                ApolloAMItemDrawsAsPalette(item, state.glass) ? @"palette" : @"row",
-                                item.title, state.glass, available, accentKey];
     }
-    _rowViews = rows;
-
-    NSUInteger more = [self apollo_moreCount];
-    if (more > 0) {
-        UILabel *moreLabel = [UILabel new];
-        moreLabel.text = [NSString stringWithFormat:@"+%lu more", (unsigned long)more];
-        moreLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightMedium];
-        moreLabel.textColor = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel) ?: UIColor.secondaryLabelColor;
-        moreLabel.textAlignment = NSTextAlignmentCenter;
-        [self addSubview:moreLabel];
-        _moreLabel = moreLabel;
-        viewsByKey[kApolloAMPreviewKeyMore] = moreLabel;
-        signaturesByKey[kApolloAMPreviewKeyMore] = [@"more|" stringByAppendingString:moreLabel.text];
-    } else {
-        _moreLabel = nil;
-    }
-
-    self.itemViewsByKey = viewsByKey;
-    self.itemSignaturesByKey = signaturesByKey;
-    [self setNeedsLayout];
+    return rows;
 }
 
-// Frame-based: this is a plain settings mock, not a Texture hook, and the
-// keyed diff needs every block's frame the moment the rendering is laid out.
+static BOOL ApolloAMItemIsSubmitPost(ApolloActionMenuItem *item) {
+    return item.locked && [item.kinds containsObject:@51];
+}
+
+// The glass preview: a UIMenu mirroring what the glass renderer and the row
+// registry produce for this layout — Apollo's rows in the saved order with its
+// own option-* art (the Moderator row in its tint), the feed's locked Submit
+// Post as the quick new-post buttons when those apply, Apollo Reborn's rows at
+// their rank (Gallery View in its own inline section, as the real one is).
+static UIMenu *ApolloAMBuildGlassPreviewMenu(ApolloActionMenuContext context) {
+    NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
+    for (ApolloAMPreviewRow *row in ApolloAMPreviewRows(context)) {
+        ApolloActionMenuItem *item = row.item;
+        UIMenuElement *element = nil;
+        if (ApolloAMItemIsSubmitPost(item)) {
+            // Polls on + signed in: the Photo/Link/Text/Poll row, else nil and
+            // the plain row below — the same swap the renderer makes.
+            element = ApolloSubmitPostTypesMenu(nil, ^{});
+        }
+        if (!element) {
+            BOOL moderator = [item.itemID isEqualToString:@"moderator"];
+            element = ApolloNativeActionMenuPreviewAction(item.title, [item icon], moderator, row.available);
+        }
+        if (!element) continue;
+        // Gallery View's spec builds a section of its own on glass
+        // (ApolloGalleryMenu.xm, inlineSection); mirror the separators.
+        if ([item.specIdentifier isEqualToString:@"GalleryView"] && [element isKindOfClass:[UIAction class]]) {
+            element = [UIMenu menuWithTitle:@"" image:nil identifier:nil
+                                    options:UIMenuOptionsDisplayInline children:@[ element ]];
+        }
+        [children addObject:element];
+    }
+    return [UIMenu menuWithTitle:@"" children:children];
+}
+
+#pragma mark - Legacy preview sheet (pre-Liquid Glass)
+
+// Apollo's classic ••• sheet, drawn by us for the preview: a bottom card of
+// icon + title rows in the theme's accent, and a Cancel card beneath, dimming
+// the screen behind. Tweak rows sit below Apollo's — the legacy sheet always
+// appends them (ApolloActionMenu.h) — and rows the menu doesn't offer right
+// now are dimmed.
+// Geometry measured off the real sheet (non-glass sim, 2026-09-15): 10pt side
+// insets, 13pt corners, 58pt rows, a 24pt icon centred 33pt in, the 20pt
+// title (and the separator) starting 68pt in, a 6pt gap to the 57pt Cancel
+// card, everything in the theme's accent.
+static const CGFloat kApolloAMSheetRowHeight = 58.0;
+static const CGFloat kApolloAMSheetCornerRadius = 13.0;
+static const CGFloat kApolloAMSheetSideInset = 10.0;
+static const CGFloat kApolloAMSheetGap = 6.0;
+static const CGFloat kApolloAMSheetCancelHeight = 57.0;
+static const CGFloat kApolloAMSheetIconSide = 24.0;
+static const CGFloat kApolloAMSheetIconCenterX = 33.0;
+static const CGFloat kApolloAMSheetTextX = 68.0;
+
+@interface ApolloAMPreviewSheetCell : UITableViewCell
+@end
+
+@implementation ApolloAMPreviewSheetCell
+
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat width = CGRectGetWidth(self.bounds);
-    if (width <= 0.0) return;
-
-    CGFloat y = kApolloAMPreviewTopPadding;
-    _captionLabel.frame = CGRectMake(kApolloAMPreviewSidePadding, y,
-                                     MAX(0.0, width - 2.0 * kApolloAMPreviewSidePadding - 48.0), kApolloAMPreviewCaptionHeight);
-    y += kApolloAMPreviewCaptionHeight + kApolloAMPreviewCaptionSpacing;
-
-    CGFloat panelWidth = MIN(kApolloAMPreviewPanelMaxWidth, width - 2.0 * kApolloAMPreviewSidePadding);
-    CGFloat panelX = round((width - panelWidth) / 2.0);
-    CGFloat panelHeight = [self apollo_panelHeight];
-    _panelView.frame = CGRectMake(panelX, y, panelWidth, panelHeight);
-
-    CGFloat rowY = y + kApolloAMPreviewPanelPadding;
-    for (UIView *row in _rowViews) {
-        row.frame = CGRectMake(panelX, rowY, panelWidth, kApolloAMPreviewRowHeight);
-        UIView *icon = [row viewWithTag:1];
-        UIView *title = [row viewWithTag:2];
-        UIView *separator = [row viewWithTag:3];
-        CGFloat iconSide = 18.0;
-        CGFloat iconY = round((kApolloAMPreviewRowHeight - iconSide) / 2.0);
-        icon.frame = CGRectMake(14.0, iconY, iconSide, iconSide);
-        CGFloat titleX = 14.0 + iconSide + 10.0;
-        title.frame = CGRectMake(titleX, 0.0, MAX(0.0, panelWidth - titleX - 12.0), kApolloAMPreviewRowHeight);
-        // A new-post buttons row (no icon/title, tag-4 glyphs instead): spread
-        // the glyphs evenly and run its hairline the full width, as the menu does.
-        NSMutableArray<UIView *> *glyphs = [NSMutableArray array];
-        for (UIView *subview in row.subviews) {
-            if (subview.tag == 4) [glyphs addObject:subview];
-        }
-        CGFloat slot = glyphs.count > 0 ? panelWidth / (CGFloat)glyphs.count : 0.0;
-        for (NSUInteger g = 0; g < glyphs.count; g++) {
-            glyphs[g].frame = CGRectMake(round(slot * (CGFloat)g + (slot - iconSide) / 2.0), iconY, iconSide, iconSide);
-        }
-        CGFloat hairline = 1.0 / UIScreen.mainScreen.scale;
-        CGFloat separatorX = glyphs.count > 0 ? 0.0 : titleX;
-        separator.frame = CGRectMake(separatorX, kApolloAMPreviewRowHeight - hairline, MAX(0.0, panelWidth - separatorX), hairline);
-        rowY += kApolloAMPreviewRowHeight;
-    }
-    y += panelHeight;
-    if (_moreLabel) {
-        _moreLabel.frame = CGRectMake(panelX, y, panelWidth, kApolloAMPreviewMoreHeight);
-    }
+    CGRect bounds = self.contentView.bounds;
+    self.imageView.frame = CGRectMake(kApolloAMSheetIconCenterX - kApolloAMSheetIconSide / 2.0,
+                                      round((CGRectGetHeight(bounds) - kApolloAMSheetIconSide) / 2.0),
+                                      kApolloAMSheetIconSide, kApolloAMSheetIconSide);
+    CGFloat right = self.accessoryType == UITableViewCellAccessoryNone ? CGRectGetWidth(bounds) - 16.0 : CGRectGetWidth(bounds) - 8.0;
+    self.textLabel.frame = CGRectMake(kApolloAMSheetTextX, 0.0, MAX(0.0, right - kApolloAMSheetTextX), CGRectGetHeight(bounds));
 }
 
 @end
 
-#pragma mark - Preview content view (fills the pinned card)
-
-// The host's contentView: owns the current rendering, replaces it with an
-// animated keyed diff when the layout changes, and knows how tall the card
-// must be for a given state (what the spacer row's height block asks).
-@interface ApolloAMPreviewContentView : UIView
-@property (nonatomic, strong) ApolloAMPreviewView *currentPreviewView;
+@interface ApolloAMPreviewSheetViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, copy) NSArray<ApolloAMPreviewRow *> *rows;
 @property (nonatomic, strong) UIColor *accentColor;
-@property (nonatomic, strong) UIViewPropertyAnimator *previewAnimator;
-@property (nonatomic) NSUInteger previewTransitionGeneration;
-@property (nonatomic) BOOL previewRefreshPending;
-@property (nonatomic, copy) ApolloActionMenuContext pendingContext;
-+ (CGFloat)heightForState:(ApolloAMPreviewState *)state;
-- (void)apollo_refreshForContext:(ApolloActionMenuContext)context width:(CGFloat)width animated:(BOOL)animated;
-- (void)apollo_finishPreviewTransition;
+@property (nonatomic, strong) UIColor *cardColor;
+@property (nonatomic, strong) UIColor *separatorColor;
 @end
 
-@implementation ApolloAMPreviewContentView
+@implementation ApolloAMPreviewSheetViewController {
+    UIView *_dimmingView;
+    UIView *_card;
+    UITableView *_table;
+    UIButton *_cancelButton;
+    BOOL _shown;
+}
 
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+- (instancetype)init {
+    self = [super initWithNibName:nil bundle:nil];
     if (!self) return nil;
-    self.backgroundColor = UIColor.clearColor;
-    self.clipsToBounds = YES;
+    self.modalPresentationStyle = UIModalPresentationOverFullScreen;
     return self;
 }
 
-+ (CGFloat)heightForState:(ApolloAMPreviewState *)state {
-    ApolloAMPreviewView *probe = [[ApolloAMPreviewView alloc] initWithFrame:CGRectZero];
-    probe.previewState = state;
-    return [probe apollo_heightForWidth:0.0];
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.clearColor;
+
+    _dimmingView = [[UIView alloc] initWithFrame:self.view.bounds];
+    _dimmingView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.4];
+    _dimmingView.alpha = 0.0;
+    _dimmingView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [_dimmingView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissSheet)]];
+    [self.view addSubview:_dimmingView];
+
+    _card = [UIView new];
+    _card.backgroundColor = self.cardColor ?: UIColor.systemBackgroundColor;
+    _card.layer.cornerRadius = kApolloAMSheetCornerRadius;
+    _card.layer.cornerCurve = kCACornerCurveContinuous;
+    _card.clipsToBounds = YES;
+    [self.view addSubview:_card];
+
+    _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    _table.dataSource = self;
+    _table.delegate = self;
+    _table.backgroundColor = UIColor.clearColor;
+    _table.separatorColor = self.separatorColor ?: UIColor.separatorColor;
+    _table.separatorInset = UIEdgeInsetsMake(0.0, kApolloAMSheetTextX, 0.0, 0.0);
+    _table.rowHeight = kApolloAMSheetRowHeight;
+    _table.tableFooterView = [UIView new];
+    _table.alwaysBounceVertical = NO;
+    [_card addSubview:_table];
+
+    _cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [_cancelButton setTitle:@"Cancel" forState:UIControlStateNormal];
+    _cancelButton.titleLabel.font = [UIFont systemFontOfSize:21.0 weight:UIFontWeightSemibold];
+    [_cancelButton setTitleColor:(self.accentColor ?: self.view.tintColor) forState:UIControlStateNormal];
+    _cancelButton.backgroundColor = self.cardColor ?: UIColor.systemBackgroundColor;
+    _cancelButton.layer.cornerRadius = kApolloAMSheetCornerRadius;
+    _cancelButton.layer.cornerCurve = kCACornerCurveContinuous;
+    [_cancelButton addTarget:self action:@selector(dismissSheet) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:_cancelButton];
 }
 
-- (ApolloAMPreviewView *)apollo_previewViewForState:(ApolloAMPreviewState *)state width:(CGFloat)width {
-    ApolloAMPreviewView *preview = [[ApolloAMPreviewView alloc] initWithFrame:CGRectZero];
-    preview.translatesAutoresizingMaskIntoConstraints = NO;
-    preview.accentColor = self.accentColor;
-    preview.previewState = state;
-    [preview apollo_configurePreview];
-    state.previewHeight = [preview apollo_heightForWidth:width];
-    return preview;
-}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGRect bounds = self.view.bounds;
+    UIEdgeInsets safe = self.view.safeAreaInsets;
+    CGFloat width = CGRectGetWidth(bounds) - 2.0 * kApolloAMSheetSideInset;
+    CGFloat cancelHeight = kApolloAMSheetCancelHeight;
+    CGFloat cancelY = CGRectGetHeight(bounds) - safe.bottom - 12.0 - cancelHeight;
+    _cancelButton.frame = CGRectMake(kApolloAMSheetSideInset, cancelY, width, cancelHeight);
 
-- (void)apollo_addPreviewView:(ApolloAMPreviewView *)preview height:(CGFloat)height {
-    [self addSubview:preview];
-    [NSLayoutConstraint activateConstraints:@[
-        [preview.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [preview.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [preview.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [preview.heightAnchor constraintEqualToConstant:height]
-    ]];
-}
-
-- (void)apollo_finishPreviewTransition {
-    UIViewPropertyAnimator *animator = self.previewAnimator;
-    if (!animator) return;
-    [animator stopAnimation:NO];
-    [animator finishAnimationAtPosition:UIViewAnimatingPositionEnd];
-}
-
-- (void)apollo_replacePreviewImmediately:(ApolloAMPreviewView *)preview state:(ApolloAMPreviewState *)state {
-    [self apollo_finishPreviewTransition];
-    for (UIView *subview in self.subviews) [subview removeFromSuperview];
-    [self apollo_addPreviewView:preview height:state.previewHeight];
-    preview.alpha = 1.0;
-    self.currentPreviewView = preview;
-    [UIView performWithoutAnimation:^{ [self layoutIfNeeded]; }];
-}
-
-// Re-render for the context's current layout. Animated: the new rendering is
-// laid out over the old one and each block is matched by key — a row that
-// survived slides from its old spot to its new one (a pixel-identical twin
-// swaps in silently; a restyled one cross-fades on the way), a hidden row
-// scale-fades out, a re-shown one scale-fades in. The screen springs the
-// spacer row (and so the card) to the new height alongside. A refresh landing
-// mid-animation is queued and replayed once the animation completes.
-- (void)apollo_refreshForContext:(ApolloActionMenuContext)context width:(CGFloat)width animated:(BOOL)animated {
-    if (animated && self.previewAnimator.state == UIViewAnimatingStateActive) {
-        self.previewRefreshPending = YES;
-        self.pendingContext = context;
-        return;
+    CGFloat available = cancelY - kApolloAMSheetGap - safe.top - 44.0;
+    CGFloat wanted = (CGFloat)self.rows.count * kApolloAMSheetRowHeight;
+    CGFloat cardHeight = MIN(wanted, available);
+    _card.frame = CGRectMake(kApolloAMSheetSideInset, cancelY - kApolloAMSheetGap - cardHeight, width, cardHeight);
+    _table.frame = _card.bounds;
+    _table.scrollEnabled = wanted > available + 0.5;
+    if (!_shown) {
+        // Slide in from below on first appearance, the way the real sheet does.
+        _shown = YES;
+        CGAffineTransform offscreen = CGAffineTransformMakeTranslation(0.0, CGRectGetHeight(bounds) - CGRectGetMinY(_card.frame));
+        _card.transform = offscreen;
+        _cancelButton.transform = offscreen;
+        [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
+                            options:UIViewAnimationOptionCurveEaseOut animations:^{
+            self->_dimmingView.alpha = 1.0;
+            self->_card.transform = CGAffineTransformIdentity;
+            self->_cancelButton.transform = CGAffineTransformIdentity;
+        } completion:nil];
     }
-    [self apollo_finishPreviewTransition];
+}
 
-    ApolloAMPreviewState *state = ApolloAMCurrentPreviewState(context);
-    ApolloAMPreviewView *incoming = [self apollo_previewViewForState:state width:width];
-    ApolloAMPreviewView *outgoing = self.currentPreviewView;
-    if (!animated || UIAccessibilityIsReduceMotionEnabled() || !outgoing) {
-        [self apollo_replacePreviewImmediately:incoming state:state];
-        return;
-    }
-
-    [self layoutIfNeeded];
-    [self apollo_addPreviewView:incoming height:state.previewHeight];
-    // Lay out THIS view again, not just the incoming one: the incoming
-    // rendering's frame comes from its constraints on this view, and until a
-    // pass here resolves them it is zero-sized — its rows then measure as
-    // zero rects at the top-left, and every survivor's old-to-new slide
-    // started from the card's corner instead of the row's old spot (the rows
-    // "sliding in from the side" on a switch flip).
-    [self layoutIfNeeded];
-    [incoming layoutIfNeeded];
-    self.currentPreviewView = incoming;
-
-    NSDictionary<NSString *, UIView *> *oldItems = outgoing.itemViewsByKey;
-    NSDictionary<NSString *, UIView *> *newItems = incoming.itemViewsByKey;
-    NSMutableArray<UIView *> *departingItems = [NSMutableArray array]; // gone: scale-fade out in place
-    NSMutableArray<UIView *> *restyledItems = [NSMutableArray array];  // old look of a survivor: fade out in place
-    for (NSString *key in newItems) {
-        UIView *newItem = newItems[key];
-        UIView *oldItem = oldItems[key];
-        if (!oldItem) {
-            newItem.alpha = 0.0;
-            newItem.transform = CGAffineTransformMakeScale(0.88, 0.88);
-            continue;
-        }
-        CGRect oldFrame = [oldItem convertRect:oldItem.bounds toView:self];
-        CGRect newFrame = [newItem convertRect:newItem.bounds toView:self];
-        // Top-aligned slide: the panel grows/shrinks from its top edge, and a
-        // row keeps its own height, so anchoring on the top keeps a moving
-        // row's icon and title on one straight path.
-        newItem.transform = CGAffineTransformMakeTranslation(CGRectGetMinX(oldFrame) - CGRectGetMinX(newFrame),
-                                                              CGRectGetMinY(oldFrame) - CGRectGetMinY(newFrame));
-        BOOL sameLook = [outgoing.itemSignaturesByKey[key] isEqualToString:incoming.itemSignaturesByKey[key]];
-        if (sameLook) {
-            oldItem.alpha = 0.0; // the twin takes over from the very first frame
-        } else {
-            newItem.alpha = 0.0;
-            [restyledItems addObject:oldItem];
-        }
-    }
-    for (NSString *key in oldItems) {
-        if (!newItems[key]) [departingItems addObject:oldItems[key]];
-    }
-
-    NSUInteger generation = ++self.previewTransitionGeneration;
-    UISpringTimingParameters *timing = [[UISpringTimingParameters alloc] initWithDampingRatio:0.88];
-    UIViewPropertyAnimator *animator = [[UIViewPropertyAnimator alloc] initWithDuration:0.34 timingParameters:timing];
-    __weak __typeof(self) weakSelf = self;
-    __weak UIViewPropertyAnimator *weakAnimator = animator;
-    [animator addAnimations:^{
-        for (UIView *item in newItems.allValues) {
-            item.alpha = 1.0;
-            item.transform = CGAffineTransformIdentity;
-        }
-        for (UIView *item in departingItems) {
-            item.alpha = 0.0;
-            item.transform = CGAffineTransformMakeScale(0.88, 0.88);
-        }
-        for (UIView *item in restyledItems) item.alpha = 0.0;
+- (void)dismissSheet {
+    CGAffineTransform offscreen = CGAffineTransformMakeTranslation(0.0, CGRectGetHeight(self.view.bounds) - CGRectGetMinY(_card.frame));
+    [UIView animateWithDuration:0.22 animations:^{
+        self->_dimmingView.alpha = 0.0;
+        self->_card.transform = offscreen;
+        self->_cancelButton.transform = offscreen;
+    } completion:^(__unused BOOL finished) {
+        [self dismissViewControllerAnimated:NO completion:nil];
     }];
-    [animator addCompletion:^(__unused UIViewAnimatingPosition finalPosition) {
-        [outgoing removeFromSuperview];
-        incoming.alpha = 1.0;
-        __strong __typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        if (strongSelf.previewTransitionGeneration == generation && strongSelf.previewAnimator == weakAnimator) {
-            strongSelf.previewAnimator = nil;
-        }
-        if (strongSelf.previewRefreshPending) {
-            strongSelf.previewRefreshPending = NO;
-            ApolloActionMenuContext pending = strongSelf.pendingContext ?: context;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (weakSelf.previewTransitionGeneration != generation) return;
-                [weakSelf apollo_refreshForContext:pending width:CGRectGetWidth(weakSelf.bounds) animated:YES];
-            });
-        }
-    }];
-    self.previewAnimator = animator;
-    [animator startAnimation];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return (NSInteger)self.rows.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *const reuseID = @"Cell_ActionMenuPreviewSheet";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseID]
+        ?: [[ApolloAMPreviewSheetCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseID];
+    ApolloAMPreviewRow *row = self.rows[(NSUInteger)indexPath.row];
+    UIColor *ink = self.accentColor ?: tableView.tintColor;
+    cell.backgroundColor = UIColor.clearColor;
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.tintColor = ink;
+    cell.textLabel.text = row.item.title;
+    cell.textLabel.font = [UIFont systemFontOfSize:20.0];
+    cell.textLabel.textColor = ink;
+    cell.imageView.image = [row.item icon];
+    cell.imageView.tintColor = ink;
+    cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    // Submit Post opens the post-type list on the classic sheet — chevron.
+    cell.accessoryType = ApolloAMItemIsSubmitPost(row.item) ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
+    cell.contentView.alpha = row.available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
+    cell.accessibilityLabel = row.available ? row.item.title
+        : [NSString stringWithFormat:@"%@, shown when available", row.item.title];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    [self dismissSheet]; // a preview row does nothing but close, like tapping Cancel
 }
 
 @end
+
+// Legacy order: Apollo's rows in the saved order, then Apollo Reborn's rows —
+// the legacy sheet always appends injected rows after the native ones.
+static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenuContext context) {
+    NSMutableArray<ApolloAMPreviewRow *> *native = [NSMutableArray array];
+    NSMutableArray<ApolloAMPreviewRow *> *tweak = [NSMutableArray array];
+    for (ApolloAMPreviewRow *row in ApolloAMPreviewRows(context)) {
+        [(row.item.isTweakRow ? tweak : native) addObject:row];
+    }
+    return [native arrayByAddingObjectsFromArray:tweak];
+}
 
 #pragma mark - Item row cell
 
@@ -567,24 +337,11 @@ static BOOL ApolloAMItemDrawsAsPalette(ApolloActionMenuItem *item, BOOL glass) {
 
 @interface ApolloActionMenuSettingsViewController () <UITableViewDragDelegate, UITableViewDropDelegate>
 @property (nonatomic, copy) ApolloActionMenuContext context;
-@property (nonatomic, strong) ApolloPinnedPreviewHost *previewHost;
-// Card width the spacer row was last measured for (0 = only the table's own
-// section inset was available). Updated from the real cell frame by the pinned
-// layout pass, which then asks for a one-row re-measure.
-@property (nonatomic) CGFloat previewCardWidth;
-@property (nonatomic, strong) UISelectionFeedbackGenerator *selectionFeedback;
-// Drag auto-scroll under the stuck card (see trackDragAutoScrollForSession:).
-@property (nonatomic, strong) CADisplayLink *dragAutoScrollLink;
-@property (nonatomic) CGFloat dragFingerY; // the lifted row's finger, in the table's visible bounds
+@property (nonatomic, strong) UIBarButtonItem *previewButton;
 // Exact item-row heights (see itemRowHeightWithSubtitle:).
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *itemRowHeights;
 @property (nonatomic, strong) ApolloAMItemCell *measuringItemCell;
 @end
-
-static NSString *const kApolloAMRowMenu = @"menu";
-static NSString *const kApolloAMRowReset = @"reset";
-static NSString *const kApolloAMRowPreview = @"preview";
-static NSString *const kApolloAMItemRowPrefix = @"item.";
 
 @implementation ApolloActionMenuSettingsViewController
 
@@ -592,7 +349,6 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     self.context = ApolloActionMenuContextPost;
     [super viewDidLoad];
     self.title = @"Action Menus";
-    self.selectionFeedback = [[UISelectionFeedbackGenerator alloc] init];
 
     // Drag & drop powers the item rows' reordering (touch and hold a row, then
     // drag). Scoped hard to that section by the drag delegate + drop proposal;
@@ -602,53 +358,63 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     self.tableView.dragDelegate = self;
     self.tableView.dropDelegate = self;
 
-    // The pinned preview: shared layout pass on the table (the subclass adds no
-    // ivars, so isa-swizzling the existing table view is safe) + the host as a
-    // direct subview of it, never a cell, so it survives every reload.
-    if (![self.tableView isKindOfClass:[ApolloPinnedPreviewTableView class]]) {
-        object_setClass(self.tableView, [ApolloPinnedPreviewTableView class]);
+    // The preview: a ••• button like Apollo's own, top-right. On glass it
+    // carries the preview UIMenu (built fresh on every tap); before glass it
+    // presents the classic-sheet preview.
+    UIImage *ellipsis = [UIImage systemImageNamed:@"ellipsis"];
+    UIBarButtonItem *preview;
+    if (ApolloNativeActionMenusActive()) {
+        preview = [[UIBarButtonItem alloc] initWithImage:ellipsis menu:nil];
+    } else {
+        preview = [[UIBarButtonItem alloc] initWithImage:ellipsis style:UIBarButtonItemStylePlain
+                                                  target:self action:@selector(presentLegacyPreview)];
     }
-    ApolloPinnedPreviewHost *host = [[ApolloPinnedPreviewHost alloc] initWithFrame:CGRectZero];
-    host.contentView = [[ApolloAMPreviewContentView alloc] initWithFrame:CGRectZero];
-    __weak __typeof(self) weakSelf = self;
-    host.spacerIndexPath = ^NSIndexPath * {
-        return [weakSelf indexPathForRowID:kApolloAMRowPreview];
-    };
-    host.cardWidthDidChange = ^(CGFloat width) {
-        [weakSelf previewCardWidthDidChange:width];
-    };
-    host.pinned = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyActionMenuPreviewPinned];
-    host.pinDidChange = ^(BOOL pinned) {
-        [[NSUserDefaults standardUserDefaults] setBool:pinned forKey:UDKeyActionMenuPreviewPinned];
-        ApolloLog(@"[ActionMenuSettings] preview %@", pinned ? @"pinned" : @"unpinned");
-        // Slide the block into (or out of) its pinned spot instead of snapping:
-        // the table's layout pass computes the new frames inside the animation.
-        UITableView *table = weakSelf.tableView;
-        [table setNeedsLayout];
-        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
-                            options:UIViewAnimationOptionBeginFromCurrentState
-                         animations:^{ [table layoutIfNeeded]; }
-                         completion:nil];
-    };
-    self.previewHost = host;
-    ApolloPinnedPreviewAttachHost(self.tableView, host);
-    [self applyThemeToPreviewHost];
-    [self.previewContentView apollo_refreshForContext:self.context
-                                                width:[self previewCardWidthForTable:self.tableView]
-                                             animated:NO];
+    preview.accessibilityLabel = @"Preview this menu";
+    self.previewButton = preview;
+    self.navigationItem.rightBarButtonItem = preview;
+    [self refreshPreviewButton];
 }
 
-- (void)viewWillDisappear:(BOOL)animated {
-    [self stopDragAutoScroll];
-    self.previewContentView.previewRefreshPending = NO;
-    self.previewContentView.pendingContext = nil;
-    [self.previewContentView apollo_finishPreviewTransition];
-    ++self.previewContentView.previewTransitionGeneration;
-    [super viewWillDisappear:animated];
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // A real ••• opened since (recording what it offered) changes the dimming;
+    // the glass menu is built on tap anyway, this keeps the button state right.
+    [self refreshPreviewButton];
 }
 
-- (ApolloAMPreviewContentView *)previewContentView {
-    return (ApolloAMPreviewContentView *)self.previewHost.contentView;
+#pragma mark - The ••• preview
+
+// Glass: hand the button a menu whose content is produced the moment it opens
+// (UIDeferredMenuElement's uncached provider), so the preview never lags a
+// change. Legacy: the button just presents the sheet.
+- (void)refreshPreviewButton {
+    UIBarButtonItem *button = self.previewButton;
+    if (!button) return;
+    button.enabled = !self.editingAllMenus; // All is not a menu
+    if (!ApolloNativeActionMenusActive()) return;
+    if (@available(iOS 15.0, *)) {
+        __weak __typeof(self) weakSelf = self;
+        UIDeferredMenuElement *deferred =
+            [UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)) {
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            ApolloActionMenuContext context = strongSelf.context;
+            completion(context && !strongSelf.editingAllMenus ? ApolloAMBuildGlassPreviewMenu(context).children : @[]);
+        }];
+        button.menu = [UIMenu menuWithTitle:@"" children:@[ deferred ]];
+    } else {
+        // Glass never runs below iOS 26, so this is only reached in theory.
+        button.menu = self.editingAllMenus ? nil : ApolloAMBuildGlassPreviewMenu(self.context);
+    }
+}
+
+- (void)presentLegacyPreview {
+    if (self.editingAllMenus) return;
+    ApolloAMPreviewSheetViewController *sheet = [[ApolloAMPreviewSheetViewController alloc] init];
+    sheet.rows = ApolloAMLegacyPreviewRows(self.context);
+    sheet.accentColor = [self apollo_themeAccentColor] ?: ApolloThemeAccentColor() ?: self.view.tintColor;
+    sheet.cardColor = [self apollo_themeCellBackgroundColor] ?: UIColor.systemBackgroundColor;
+    sheet.separatorColor = ApolloThemeSeparatorColor() ?: UIColor.separatorColor;
+    [self presentViewController:sheet animated:NO completion:nil];
 }
 
 #pragma mark - Form
@@ -711,9 +477,10 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 - (NSString *)lockedItemsNote {
     if (self.editingAllMenus) return nil;
     NSMutableArray<NSString *> *notes = [NSMutableArray array];
+    BOOL buttons = ApolloNativeActionMenusActive() && ApolloPollsFeatureEnabled();
     for (ApolloActionMenuItem *item in ApolloActionMenuCatalog(self.context)) {
         if (!item.locked) continue;
-        [notes addObject:ApolloAMItemDrawsAsPalette(item, IsLiquidGlass())
+        [notes addObject:(buttons && ApolloAMItemIsSubmitPost(item))
             ? [NSString stringWithFormat:@"The new-post buttons (%@) always stay at the top of this menu and can’t be hidden.", item.title]
             : [NSString stringWithFormat:@"%@ always stays at the top of this menu and can’t be hidden.", item.title]];
     }
@@ -723,27 +490,6 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 - (NSArray<ApolloSettingsSection *> *)buildForm {
     __weak __typeof(self) weakSelf = self;
     ApolloActionMenuContext context = self.context;
-
-    // ---- Preview (the spacer row the pinned card sits on) ----
-
-    // Escape hatch (custom row): a transparent placeholder — the pinned host
-    // draws the card on top of (or, once scrolled, instead of) this slot. Its
-    // height is the card's height for the selected menu's current layout.
-    ApolloSettingsRow *preview =
-        [ApolloSettingsRow customRowWithID:kApolloAMRowPreview
-                                      cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
-            ApolloPinnedPreviewSpacerCell *cell =
-                [[ApolloPinnedPreviewSpacerCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-            ApolloPinnedPreviewClearSpacerCell(cell);
-            cell.isAccessibilityElement = NO;
-            return cell;
-        }
-                                  onSelect:nil];
-    preview.height = ^CGFloat {
-        __strong __typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) return 0.0;
-        return [ApolloAMPreviewContentView heightForState:ApolloAMCurrentPreviewState(strongSelf.context)];
-    };
 
     // ---- Menu picker ----
 
@@ -761,8 +507,8 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     NSMutableArray<ApolloSettingsRow *> *itemRows = [NSMutableArray array];
     for (ApolloActionMenuItem *item in [self editableItems]) {
         NSString *itemID = item.itemID;
-        // Hidden state is read live on every configure (a switch flip reloads
-        // just this row by identity), never captured at build time.
+        // Hidden state is read live on every configure (a switch flip restyles
+        // the cell in place), never captured at build time.
         ApolloSettingsRow *row =
             [ApolloSettingsRow customRowWithID:[self itemRowIDForItemID:itemID]
                                           cell:^UITableViewCell *(UITableView *tableView, __unused ApolloSettingsRow *r) {
@@ -789,28 +535,27 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
                                     action:^{ [weakSelf resetCurrentMenu]; }];
     reset.visible = ^BOOL { return weakSelf.editingAllMenus ? ApolloActionMenuCustomizedContextCount() > 0 : ApolloActionMenuContextIsCustomized(weakSelf.context); };
 
+    NSString *menuFooter;
     NSString *itemsFooter;
     if (self.editingAllMenus) {
+        menuFooter = @"Visibility across all four menus. Choose a specific menu to reorder its actions and preview it with the ••• button.";
         itemsFooter = @"Switch an action on or off across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
     } else {
-        itemsFooter = @"Only actions supported by this menu are listed. Some appear only for your own content or when a feature is enabled; the preview fades those. Touch and hold to reorder. Switching visibility preserves Apollo’s order. The preview reflects the last time you opened this menu.";
+        menuFooter = [ApolloActionMenuContextDescription(context)
+                      stringByAppendingString:@" Tap ••• at the top to see this menu as it opens right now, with your order and visibility applied."];
+        itemsFooter = @"Only actions supported by this menu are listed. Some appear only for your own content or when a feature is enabled; the ••• preview dims those. Touch and hold to reorder. Switching visibility preserves Apollo’s order.";
         NSString *lockedNote = [self lockedItemsNote];
         if (lockedNote) itemsFooter = [itemsFooter stringByAppendingFormat:@" %@", lockedNote];
-    }
-    if (!self.editingAllMenus && !IsLiquidGlass()) {
-        itemsFooter = [itemsFooter stringByAppendingString:@"\n\nOn this version of iOS, Apollo Reborn's own items always sit below Apollo's."];
+        if (!ApolloNativeActionMenusActive()) {
+            itemsFooter = [itemsFooter stringByAppendingString:@"\n\nOn this version of iOS, Apollo Reborn's own items always sit below Apollo's."];
+        }
     }
 
-    NSMutableArray *sections = [NSMutableArray array];
-    if (!self.editingAllMenus) [sections addObject:[ApolloSettingsSection sectionWithTitle:@"Preview" footer:nil rows:@[ preview ]]];
-    [sections addObjectsFromArray:@[
-        [ApolloSettingsSection sectionWithTitle:nil
-                                         footer:self.editingAllMenus ? @"Visibility across all context menus. Choose a specific menu to reorder its available actions." : ApolloActionMenuContextDescription(context)
-                                           rows:@[ menu ]],
+    return @[
+        [ApolloSettingsSection sectionWithTitle:nil footer:menuFooter rows:@[ menu ]],
         [ApolloSettingsSection sectionWithTitle:@"Items" footer:itemsFooter rows:itemRows],
         [ApolloSettingsSection sectionWithTitle:nil footer:nil rows:@[ reset ]],
-    ]];
-    return sections;
+    ];
 }
 
 - (UITableViewCell *)itemCellForItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden inTable:(UITableView *)tableView {
@@ -832,18 +577,16 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 // UIKit sizes the item cells itself (rowHeight automatic, estimated 52 pt),
 // and a subtitled row is taller than the estimate. Rows above the viewport
 // keep the estimate until they are displayed, and any batch update — the
-// card's height changing, the reset row appearing, the section rebuild after
-// a drag — re-resolves them, which jumped the list several rows whenever it
-// was scrolled down (sim recording, 2026-09-15). So hand UIKit exact heights:
-// one template cell measured per variant (subtitle or not), cached per cell
-// width and content size category.
+// reset row appearing, the section rebuild after a drag — re-resolves them,
+// which jumped the list several rows whenever it was scrolled down (sim
+// recording, 2026-09-15). So hand UIKit exact heights: one template cell
+// measured per variant (subtitle or not), cached per cell width and content
+// size category.
 - (CGFloat)itemRowHeightWithSubtitle:(BOOL)subtitle {
     UITableView *table = self.tableView;
-    CGFloat width = self.previewCardWidth;
-    if (width <= 0.0) {
-        UIEdgeInsets inset = ApolloPinnedPreviewSectionContentInset(table);
-        width = CGRectGetWidth(table.bounds) - inset.left - inset.right;
-    }
+    CGFloat width = CGRectGetWidth(table.bounds) - table.layoutMargins.left - table.layoutMargins.right;
+    UITableViewCell *sample = table.visibleCells.firstObject;
+    if (sample && sample.superview) width = CGRectGetWidth([sample.superview convertRect:sample.frame toView:table]);
     if (width <= 0.0) return UITableViewAutomaticDimension;
     NSString *key = [NSString stringWithFormat:@"%d|%.0f|%@", subtitle, width,
                      table.traitCollection.preferredContentSizeCategory ?: @""];
@@ -877,13 +620,13 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 // overview's per-menu subtitle, accessibility. Kept apart from the cell's
 // creation so a switch flip can restyle the cell IN PLACE — reloading the row
 // there swapped the cell out under the switch mid-animation, cutting the
-// knob's own transition short and briefly drawing two switches (the "odd
-// toggle" in the 2026-09-14 device recording). Never sets the switch: it is
-// either freshly configured by the caller or animating under the user's thumb.
+// knob's own transition short and briefly drawing two switches (device
+// recording, 2026-09-14). Never sets the switch: it is either freshly
+// configured by the caller or animating under the user's thumb.
 - (void)styleItemCell:(ApolloAMItemCell *)cell forItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden {
     // A row Apollo only offers sometimes says so — unless this user's menu
     // offered it last time (a moderator's Moderator row, say). Same rule the
-    // preview fades by.
+    // ••• preview dims by.
     BOOL offered = self.editingAllMenus || ApolloActionMenuItemWasOffered(self.context, item.itemID);
     cell.detailTextLabel.text = offered ? nil : @"Shown when available";
     if (self.editingAllMenus) {
@@ -925,26 +668,18 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     });
 }
 
-// Swap the whole lower half of the screen to another menu: the picker row's
-// footer, the item list and the reset row all follow, and the preview
-// re-renders for that menu's layout (its rows cross over by key, so shared
-// items like Share glide between the two renderings).
+// Swap the whole screen to another menu: the picker row's footer, the item
+// list, the reset row and the ••• preview all follow.
 - (void)switchToContext:(ApolloActionMenuContext)context {
     if (!context || [context isEqualToString:self.context]) return;
-    self.previewContentView.previewRefreshPending = NO;
-    self.previewContentView.pendingContext = nil;
-    [self.previewContentView apollo_finishPreviewTransition];
-    ++self.previewContentView.previewTransitionGeneration;
     self.context = context;
-    self.previewHost.hidden = self.editingAllMenus;
     ApolloLog(@"[ActionMenuSettings] editing %@", context);
     // The item list changes length between menus, so this must be a whole
     // reload (rebuildForm → reloadData): reloading one section against a
     // model whose OTHER sections have already changed trips UITableView's
-    // batch-update consistency check. The pinned card survives reloadData
-    // (it is a table subview, never a cell); only the preview animates.
+    // batch-update consistency check.
     [self rebuildForm];
-    [self animatePreviewStateChange];
+    [self refreshPreviewButton];
 }
 
 - (void)itemSwitchToggled:(UISwitch *)sender {
@@ -971,37 +706,24 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     // Only if the model refused the change (it never does for a listed item)
     // does the switch need putting back; otherwise it keeps its own motion.
     if (cell.toggle.on == nowHidden) [cell.toggle setOn:!nowHidden animated:YES];
-    [self applyVisibilityChange]; // the reset row
-    [self animatePreviewStateChange];
-}
-
-// The reset row coming or going is a table batch update. Animated while the
-// card is stuck it shows a beat where the card — placed from the model
-// offset the update moved at once — sits above rows still animating to it
-// (a deletion at the bottom of the list shrinks the content, so the offset
-// clamps; sim recording, 2026-09-15). So no animation while stuck; the row
-// simply appears or disappears, and the pinned pass after the update keeps
-// the card where it is.
-- (void)applyVisibilityChange {
-    if (self.previewHost.stuck) {
-        [UIView performWithoutAnimation:^{ [self visibilityDidChange]; }];
-    } else {
-        [self visibilityDidChange];
-    }
+    [self visibilityDidChange]; // the reset row
+    [self refreshPreviewButton];
 }
 
 - (void)resetCurrentMenu {
     for (NSString *context in (self.editingAllMenus ? ApolloActionMenuAllContexts() : @[ self.context ])) {
         ApolloActionMenuResetContext(context);
     }
-    // Visibility first (this very row disappears), then the items section —
-    // same ordering rule as the drag completion above.
-    [self applyVisibilityChange];
+    // Visibility first (this very row disappears), then the items section:
+    // rebuildSectionContainingRowID re-snapshots every section's visibility
+    // while reloading one, so the reset row must already be gone from the
+    // table or UIKit's batch-update check trips on that section's count.
+    [self visibilityDidChange];
     NSString *firstItemRowID = [self firstItemRowID];
     if (firstItemRowID) {
         [self rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationFade];
     }
-    [self animatePreviewStateChange];
+    [self refreshPreviewButton];
 }
 
 #pragma mark - Reordering (drag & drop)
@@ -1033,23 +755,22 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 
     // Re-sync the form model with the moved rows (UIKit already animated the
     // move; rebuilding on the next runloop turn keeps the drop animation
-    // intact), show the reset row, and slide the preview's rows into the new
-    // order. The reset row comes FIRST: an untouched menu's first drag makes
-    // it appear, and rebuildSectionContainingRowID re-snapshots every
-    // section's visibility while reloading only the items section — with the
-    // reset row not yet inserted, UIKit's batch-update check trips on that
-    // section's count (1 in the snapshot vs 0 in the table). Diffing the
-    // visibility in first inserts the row, so the rebuild's snapshot matches.
+    // intact) and show the reset row. The reset row comes FIRST: an untouched
+    // menu's first drag makes it appear, and rebuildSectionContainingRowID
+    // re-snapshots every section's visibility while reloading only the items
+    // section — with the reset row not yet inserted, UIKit's batch-update
+    // check trips on that section's count. Diffing the visibility in first
+    // inserts the row, so the rebuild's snapshot matches.
     __weak __typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
-        [strongSelf applyVisibilityChange];
+        [strongSelf visibilityDidChange];
         NSString *firstItemRowID = [strongSelf firstItemRowID];
         if (firstItemRowID) {
             [strongSelf rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationNone];
         }
-        [strongSelf animatePreviewStateChange];
+        [strongSelf refreshPreviewButton];
     });
 }
 
@@ -1073,12 +794,10 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
 
 - (UITableViewDropProposal *)tableView:(UITableView *)tableView dropSessionDidUpdate:(id<UIDropSession>)session withDestinationIndexPath:(NSIndexPath *)destinationIndexPath {
     if (session.localDragSession) {
-        [self trackDragAutoScrollForSession:session];
-        // Keep the move alive wherever the finger is: once the list has
-        // auto-scrolled home under a lifted row, the finger sits over the
-        // preview or Menu rows, and targetIndexPathForMove… clamps such a
-        // destination into the items section. (Only item rows ever lift, so a
-        // local session is always one of ours.)
+        // Keep the move alive wherever the finger is: a lifted item row can sit
+        // over the Menu row after the list auto-scrolled home under it, and
+        // targetIndexPathForMove… clamps such a destination into the items
+        // section. (Only item rows ever lift, so a local session is always ours.)
         return [[UITableViewDropProposal alloc] initWithDropOperation:UIDropOperationMove
                                                                intent:UITableViewDropIntentInsertAtDestinationIndexPath];
     }
@@ -1089,155 +808,6 @@ static NSString *const kApolloAMItemRowPrefix = @"item.";
     // Local same-table reorders with a .move/insertAtDestination proposal are
     // committed by UIKit through tableView:moveRowAtIndexPath:toIndexPath:
     // before this is called; nothing else can be dropped here.
-    [self stopDragAutoScroll];
-}
-
-- (void)tableView:(UITableView *)tableView dropSessionDidExit:(id<UIDropSession>)session {
-    [self stopDragAutoScroll];
-}
-
-- (void)tableView:(UITableView *)tableView dropSessionDidEnd:(id<UIDropSession>)session {
-    [self stopDragAutoScroll];
-}
-
-#pragma mark Auto-scroll under the pinned card
-
-// UIKit auto-scrolls a drag only near the table's own edges, and the stuck
-// card covers the top of the list — so a row dragged upward stalled at the
-// card's bottom edge and had to be dropped, scrolled and lifted again (device
-// recording, 2026-09-15). While a lifted row hovers in a band just under the
-// stuck card, scroll the list up ourselves, faster the deeper the finger sits
-// in the band, until the list is home or the finger leaves. The drop target
-// keeps following the rows as they move beneath the finger.
-static const CGFloat kApolloAMDragAutoScrollBand = 56.0;    // pt below the card's bottom edge
-static const CGFloat kApolloAMDragAutoScrollMinStep = 2.0;  // pt per frame at the band's lower edge
-static const CGFloat kApolloAMDragAutoScrollMaxStep = 12.0; // pt per frame at the card's edge
-
-- (void)trackDragAutoScrollForSession:(id<UIDropSession>)session {
-    UITableView *table = self.tableView;
-    // locationInView: on a scroll view is in content coordinates; the band is
-    // a screen-relative thing, so keep the finger relative to the visible bounds.
-    self.dragFingerY = [session locationInView:table].y - table.contentOffset.y;
-    if ([self dragAutoScrollStepForFingerY:self.dragFingerY] <= 0.0 || self.dragAutoScrollLink) return;
-    self.dragAutoScrollLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(dragAutoScrollTick:)];
-    [self.dragAutoScrollLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-}
-
-// Scroll step for a finger at `fingerY` (visible-bounds coordinates): 0 when
-// the card isn't stuck or the finger is below the band.
-- (CGFloat)dragAutoScrollStepForFingerY:(CGFloat)fingerY {
-    ApolloPinnedPreviewHost *host = self.previewHost;
-    UITableView *table = self.tableView;
-    if (!host.stuck || host.hidden) return 0.0;
-    CGFloat cardBottom = CGRectGetMaxY(host.frame) - table.contentOffset.y; // host.frame is content-relative
-    CGFloat depth = cardBottom + kApolloAMDragAutoScrollBand - fingerY;      // > 0 inside the band
-    if (depth <= 0.0) return 0.0;
-    CGFloat t = MIN(1.0, depth / kApolloAMDragAutoScrollBand);
-    return kApolloAMDragAutoScrollMinStep + (kApolloAMDragAutoScrollMaxStep - kApolloAMDragAutoScrollMinStep) * t;
-}
-
-- (void)dragAutoScrollTick:(__unused CADisplayLink *)link {
-    UITableView *table = self.tableView;
-    CGFloat step = [self dragAutoScrollStepForFingerY:self.dragFingerY];
-    CGFloat top = -table.adjustedContentInset.top;
-    CGPoint offset = table.contentOffset;
-    if (step <= 0.0 || offset.y <= top + 0.5) {
-        [self stopDragAutoScroll];
-        return;
-    }
-    offset.y = MAX(top, offset.y - step);
-    [table setContentOffset:offset animated:NO];
-}
-
-- (void)stopDragAutoScroll {
-    [self.dragAutoScrollLink invalidate];
-    self.dragAutoScrollLink = nil;
-}
-
-#pragma mark - Pinned preview plumbing
-
-// Card chrome follows the same theme walk as the real cells (cell colour,
-// section corner radius, table background for the stuck backdrop, accent for
-// the pin glyph), and the mock is re-rendered for the theme's ink.
-- (void)applyThemeToPreviewHost {
-    ApolloPinnedPreviewHost *host = self.previewHost;
-    if (!host) return;
-    host.card.backgroundColor = [self apollo_themeCellBackgroundColor];
-    host.card.layer.cornerRadius = ApolloPinnedPreviewSectionCornerRadius(self.tableView);
-    UIColor *tableBackground = self.tableView.backgroundColor;
-    UIColor *resolved = [tableBackground resolvedColorWithTraitCollection:self.tableView.traitCollection];
-    if (!resolved || CGColorGetAlpha(resolved.CGColor) < 0.99) {
-        tableBackground = [UIColor systemGroupedBackgroundColor];
-    }
-    host.backdropColor = tableBackground;
-    UIColor *accent = [self apollo_themeAccentColor];
-    host.accentColor = accent;
-    self.previewContentView.accentColor = accent;
-    [self.previewContentView apollo_refreshForContext:self.context
-                                                width:[self previewCardWidthForTable:self.tableView]
-                                             animated:NO];
-}
-
-- (void)apollo_applyTheme {
-    [super apollo_applyTheme];
-    [self applyThemeToPreviewHost];
-}
-
-// The spacer row must stay invisible whatever the theme pass does to cells.
-- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
-    if ([cell isKindOfClass:[ApolloPinnedPreviewSpacerCell class]]) {
-        ApolloPinnedPreviewClearSpacerCell(cell);
-        return;
-    }
-    [super apollo_applyThemeToCell:cell];
-}
-
-// Width the spacer row's height is derived from: the measured cell width once
-// the layout pass has seen a real cell, else the table's reported section inset.
-- (CGFloat)previewCardWidthForTable:(UITableView *)tableView {
-    if (self.previewCardWidth > 0) return self.previewCardWidth;
-    UIEdgeInsets inset = ApolloPinnedPreviewSectionContentInset(tableView);
-    CGFloat width = CGRectGetWidth(tableView.bounds) - inset.left - inset.right;
-    if (width <= 0.0) width = CGRectGetWidth(UIScreen.mainScreen.bounds) - inset.left - inset.right;
-    return MAX(0.0, width);
-}
-
-- (void)previewCardWidthDidChange:(CGFloat)width {
-    if (width <= 0 || fabs(width - self.previewCardWidth) <= 0.5) return;
-    self.previewCardWidth = width;
-    // The mock's height doesn't depend on the width (rows are fixed-height and
-    // the panel is capped), so only the rendering needs the real width.
-    [self.previewContentView apollo_refreshForContext:self.context width:width animated:NO];
-}
-
-// The layout changed: re-render the mock (keyed slide/fade) and spring the
-// spacer row — and with it the card and every row beneath — to the new
-// height in the same beat. Nothing reloads.
-- (void)animatePreviewStateChange {
-    if (self.editingAllMenus) return;
-    CGFloat width = [self previewCardWidthForTable:self.tableView];
-    [self.previewContentView apollo_refreshForContext:self.context width:width animated:YES];
-    UITableView *table = self.tableView;
-    // Touch the table only when the card's height actually changed (visible
-    // rows crossing the eight-row cap, the "+N more" line coming or going).
-    // A batch update for its own sake re-lays out every row and header, and
-    // scrolled the list on each switch flip.
-    NSIndexPath *spacer = [self indexPathForRowID:kApolloAMRowPreview];
-    CGFloat newHeight = [ApolloAMPreviewContentView heightForState:ApolloAMCurrentPreviewState(self.context)];
-    CGFloat currentHeight = spacer ? CGRectGetHeight([table rectForRowAtIndexPath:spacer]) : newHeight;
-    if (fabs(newHeight - currentHeight) < 0.5) return;
-    if (UIAccessibilityIsReduceMotionEnabled()) {
-        [table performBatchUpdates:nil completion:nil]; // re-reads the spacer's height block
-        return;
-    }
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
-                        options:UIViewAnimationOptionBeginFromCurrentState |
-                                UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-        [table performBatchUpdates:nil completion:nil]; // re-reads the spacer's height block
-        [table layoutIfNeeded];                         // the host follows the new row rect
-    }
-                     completion:nil];
 }
 
 @end

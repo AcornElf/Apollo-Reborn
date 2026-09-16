@@ -722,13 +722,10 @@ static NSString *const ApolloInlineMediaLayoutDidChangeNotification = @"ApolloIn
 // An absent context means Apollo's own order with nothing hidden, and that
 // sheet is never touched. Model and item vocabulary: ApolloActionMenuLayout.h.
 static NSString *const UDKeyActionMenuLayouts = @"ActionMenuLayouts";
-// Whether the Action Menus screen keeps its live preview pinned while the rows
-// scroll beneath it (default YES); tap the card to toggle, like the other
-// pinned-preview screens.
-static NSString *const UDKeyActionMenuPreviewPinned = @"ActionMenuPreviewPinned";
 // Which catalogue items each ••• menu offered the last time it was opened
 // (context id → [itemID…]); written by the menu owner, read by the settings
-// preview so it mirrors this user's menus rather than the whole catalogue.
+// screen's ••• preview so it mirrors this user's menus rather than the whole
+// catalogue.
 static NSString *const UDKeyActionMenuLastPresented = @"ActionMenuLastPresented";
 // Posted (object = the context id) whenever a menu's order or hidden set changes.
 static NSString *const ApolloActionMenuLayoutsChangedNotification = @"ApolloActionMenuLayoutsChangedNotification";
