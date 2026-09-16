@@ -1583,6 +1583,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.text = @" by ";
         byLabel.textColor = metaColor;
         UIFont *byFont = RRSubheadlineFont(self);
+        NSInteger textSizeIndex = RRTextSizeIndex(self);
         CGFloat byTracking =
             byFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
