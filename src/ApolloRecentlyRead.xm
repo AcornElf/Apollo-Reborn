@@ -1733,15 +1733,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
         UIColor *separatorColor = ApolloThemeSeparatorColor();
-
-        if (!ApolloThemeRuntimeIsActive() &&
-            [UITraitCollection currentTraitCollection].userInterfaceStyle != UIUserInterfaceStyleDark) {
-            separatorColor = [UIColor colorWithRed:238.0 / 255.0
-                                            green:238.0 / 255.0
-                                            blue:239.0 / 255.0
-                                            alpha:1.0];
-        }
-
         sep.backgroundColor = separatorColor ?: [UIColor separatorColor];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
