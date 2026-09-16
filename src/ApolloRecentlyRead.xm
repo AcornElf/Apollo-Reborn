@@ -559,7 +559,7 @@ static const CGFloat kRecentlyReadTitleFontSize[] = {
     21.0   // 7
 };
 
-static const CGFloat kRecentlyReadAuthorFontSize[] = {
+static const CGFloat kRecentlyReadMetadataFontSize[] = {
     11.0,  // 1
     12.0,  // 2
     12.0,  // 3
@@ -600,7 +600,7 @@ static const CGFloat kRecentlyReadTitleTracking[] = {
     -0.02   // 7
 };
 
-static const CGFloat kRecentlyReadAuthorTracking[] = {
+static const CGFloat kRecentlyReadMetadataTracking[] = {
      0.005,  // 1
      0.000,  // 2
      0.000,  // 3
@@ -657,7 +657,7 @@ static NSInteger RRTextSizeIndex(id node) {
 
 typedef NS_ENUM(NSInteger, RRFontRole) {
     RRFontRoleTitle,
-    RRFontRoleSubreddit,
+    RRFontRoleMetadata,
     RRFontRoleInfo
 };
 
@@ -692,8 +692,8 @@ switch (role) {
         fontSize = kRecentlyReadTitleFontSize[index];
         break;
 
-    case RRFontRoleAuthor:
-        fontSize = kRecentlyReadAuthorFontSize[index];
+    case RRFontRoleMetadata:
+        fontSize = kRecentlyReadMetadataFontSize[index];
         break;
 
     case RRFontRoleInfo:
@@ -742,7 +742,7 @@ static UIFont *RRCalloutFont(id node) {
     return RRScaledFont(
         [UIFont systemFontOfSize:15 weight:UIFontWeightMedium],
         UIFontTextStyleCallout,
-        RRFontRoleSubreddit,
+        RRFontRoleMetadata,
         node
     );
 }
@@ -751,7 +751,7 @@ static UIFont *RRMediumSubheadlineFont(id node) {
     return RRScaledFont(
         [UIFont systemFontOfSize:13 weight:UIFontWeightMedium],
         UIFontTextStyleSubheadline,
-        RRFontRoleSubreddit,
+        RRFontRoleMetadata,
         node
     );
 }
@@ -760,7 +760,7 @@ static UIFont *RRSubheadlineFont(id node) {
     return RRScaledFont(
         [UIFont systemFontOfSize:13 weight:UIFontWeightRegular],
         UIFontTextStyleSubheadline,
-        RRFontRoleSubreddit,
+        RRFontRoleMetadata,
         node
     );
 }
@@ -1584,7 +1584,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.textColor = metaColor;
         UIFont *byFont = RRSubheadlineFont(self);
         CGFloat byTracking =
-            byFont.pointSize * kRecentlyReadAuthorTracking[textSizeIndex];
+            byFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
         byLabel.attributedText =
             [[NSAttributedString alloc] initWithString:byLabel.text ?: @""
@@ -1767,7 +1767,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             authorTopBtn.hidden = NO;
             UIFont *authorTopFont = RRMediumSubheadlineFont(self);
             CGFloat authorTopTracking =
-                authorTopFont.pointSize * kRecentlyReadAuthorTracking[textSizeIndex];
+                authorTopFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
             NSAttributedString *authorTopTitle =
                 [[NSAttributedString alloc] initWithString:link.author
@@ -1793,7 +1793,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         footerStack.hidden = NO;
         CGFloat subredditTracking =
-            mediumFont.pointSize * kRecentlyReadAuthorTracking[textSizeIndex];
+            mediumFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
         NSAttributedString *subredditTitle =
             [[NSAttributedString alloc] initWithString:link.subreddit ?: @""
@@ -1811,7 +1811,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             byLabel.hidden = NO;
             authorFooterBtn.hidden = NO;
             CGFloat authorTracking =
-                mediumFont.pointSize * kRecentlyReadAuthorTracking[textSizeIndex];
+                mediumFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
             NSAttributedString *authorTitle =
                 [[NSAttributedString alloc] initWithString:link.author
@@ -1898,7 +1898,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         NSMutableAttributedString *titleAttr =
             [[NSMutableAttributedString alloc] initWithString:titleText
                                                     attributes:titleAttrs];
-x
+
         if (linkDomain.length > 0) {
             NSString *domainText = [NSString stringWithFormat:@" (%@)", linkDomain];
             [titleAttr appendAttributedString:
