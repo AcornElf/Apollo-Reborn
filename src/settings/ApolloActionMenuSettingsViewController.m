@@ -281,8 +281,9 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
 // be dragged and switched back on any time.
 @interface ApolloAMItemCell : UITableViewCell
 @property (nonatomic, copy) NSString *itemID;
-@property (nonatomic, strong, readonly) UISwitch *toggle;
+@property (nonatomic, strong, readonly) UIImageView *visibilityIndicator;
 @property (nonatomic, strong, readonly) UIImageView *grip;
+@property (nonatomic, strong, readonly) UIStackView *accessoryStack;
 @end
 
 @implementation ApolloAMItemCell
@@ -290,42 +291,82 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
     self = [super initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuseIdentifier];
     if (!self) return nil;
-    self.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    self.selectionStyle = UITableViewCellSelectionStyleDefault;
     self.detailTextLabel.font = [UIFont systemFontOfSize:12.0];
-    _toggle = [[UISwitch alloc] init];
-    self.accessoryView = _toggle;
+
+    UIImageSymbolConfiguration *visibilityConfiguration =
+        [UIImageSymbolConfiguration configurationWithPointSize:17.0
+                                                          weight:UIImageSymbolWeightMedium];
+    _visibilityIndicator =
+        [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark"
+                                                       withConfiguration:visibilityConfiguration]];
+    _visibilityIndicator.tintColor = UIColor.secondaryLabelColor;
+    _visibilityIndicator.contentMode = UIViewContentModeCenter;
+    _visibilityIndicator.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [_visibilityIndicator.widthAnchor constraintEqualToConstant:24.0],
+        [_visibilityIndicator.heightAnchor constraintEqualToConstant:24.0]
+    ]];
+
     UIImageSymbolConfiguration *gripConfiguration =
-        [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightMedium];
-    _grip = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.horizontal.3" withConfiguration:gripConfiguration]];
+        [UIImageSymbolConfiguration configurationWithPointSize:15.0
+                                                          weight:UIImageSymbolWeightMedium];
+    _grip =
+        [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.horizontal.3"
+                                                       withConfiguration:gripConfiguration]];
     _grip.tintColor = UIColor.tertiaryLabelColor;
     _grip.contentMode = UIViewContentModeCenter;
-    [self.contentView addSubview:_grip];
+    _grip.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [_grip.widthAnchor constraintEqualToConstant:(91.0 / 3.0)],
+        [_grip.heightAnchor constraintEqualToConstant:(49.0 / 3.0)]
+    ]];
+
+    _accessoryStack =
+        [[UIStackView alloc] initWithArrangedSubviews:@[_visibilityIndicator, _grip]];
+    _accessoryStack.axis = UILayoutConstraintAxisHorizontal;
+    _accessoryStack.alignment = UIStackViewAlignmentCenter;
+    _accessoryStack.spacing = 8.0;
+
+    self.accessoryView = _accessoryStack;
+
     self.imageView.contentMode = UIViewContentModeCenter;
     self.textLabel.numberOfLines = 1;
     self.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+
     return self;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+
     CGRect content = self.contentView.bounds;
-    CGFloat gripSide = 24.0;
-    self.grip.frame = CGRectMake(CGRectGetMaxX(content) - gripSide - 4.0,
-                                 round((CGRectGetHeight(content) - gripSide) / 2.0), gripSide, gripSide);
+
     // Apollo's option-* art is a mixed bag of shapes; a fixed 28pt box keeps
     // every title on the same column.
     CGRect imageFrame = self.imageView.frame;
     imageFrame.size = CGSizeMake(28.0, 28.0);
     imageFrame.origin.y = round((CGRectGetHeight(content) - 28.0) / 2.0);
     self.imageView.frame = imageFrame;
+
+    // Keep the title clear of the trailing switch + grabber accessory.
+    CGRect accessoryFrame =
+        [self.contentView convertRect:self.accessoryStack.bounds
+                              fromView:self.accessoryStack];
+
     CGRect textFrame = self.textLabel.frame;
     textFrame.origin.x = CGRectGetMaxX(imageFrame) + 12.0;
-    textFrame.size.width = MAX(0.0, CGRectGetMinX(self.grip.frame) - 8.0 - CGRectGetMinX(textFrame));
+    textFrame.size.width =
+        MAX(0.0,
+            CGRectGetMinX(accessoryFrame) - 8.0 - CGRectGetMinX(textFrame));
     self.textLabel.frame = textFrame;
+
     CGRect detailFrame = self.detailTextLabel.frame;
     detailFrame.origin.x = textFrame.origin.x;
     detailFrame.size.width = textFrame.size.width;
     self.detailTextLabel.frame = detailFrame;
+
     // The theme pass tints every image view in the cell with the accent; the
     // grip is chrome, not content.
     self.grip.tintColor = UIColor.tertiaryLabelColor;
@@ -516,7 +557,9 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
                                       hidden:[weakSelf itemIsHidden:item.itemID]
                                      inTable:tableView];
         }
-                                      onSelect:nil];
+                                    onSelect:^{
+                                        [weakSelf toggleVisibilityForItemID:itemID];
+                                    }];
         // An exact height, never UIKit's estimate (see itemRowHeightWithSubtitle:).
         row.height = ^CGFloat {
             __strong __typeof(weakSelf) strongSelf = weakSelf;
@@ -563,13 +606,12 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     ApolloAMItemCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseID];
     if (!cell) {
         cell = [[ApolloAMItemCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuseID];
-        [cell.toggle addTarget:self action:@selector(itemSwitchToggled:) forControlEvents:UIControlEventValueChanged];
     }
     cell.itemID = item.itemID;
     cell.textLabel.text = item.title;
     cell.imageView.image = [item icon];
     cell.grip.hidden = self.editingAllMenus;
-    cell.toggle.on = !hidden;
+    cell.visibilityIndicator.hidden = hidden;
     [self styleItemCell:cell forItem:item hidden:hidden];
     return cell;
 }
@@ -682,31 +724,41 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     [self refreshPreviewButton];
 }
 
-- (void)itemSwitchToggled:(UISwitch *)sender {
-    ApolloAMItemCell *cell = nil;
-    for (UIView *view = sender.superview; view; view = view.superview) {
-        if ([view isKindOfClass:[ApolloAMItemCell class]]) { cell = (ApolloAMItemCell *)view; break; }
-    }
-    NSString *itemID = cell.itemID;
+- (void)toggleVisibilityForItemID:(NSString *)itemID {
     if (itemID.length == 0) return;
-    BOOL hide = !sender.isOn;
+
+    BOOL hide = ![self itemIsHidden:itemID];
 
     for (NSString *context in [self contextsForItem:itemID]) {
         ApolloActionMenuSetItemHidden(context, itemID, hide);
     }
-    // Restyle the tapped cell in place (see styleItemCell:). No row reload
-    // here: the switch is still animating under the user's thumb, and a
-    // reload replaces the cell — and the switch — beneath it.
+
     ApolloActionMenuItem *item = nil;
     for (ApolloActionMenuItem *candidate in [self editableItems]) {
-        if ([candidate.itemID isEqualToString:itemID]) { item = candidate; break; }
+        if ([candidate.itemID isEqualToString:itemID]) {
+            item = candidate;
+            break;
+        }
     }
+
     BOOL nowHidden = [self itemIsHidden:itemID];
-    if (item) [self styleItemCell:cell forItem:item hidden:nowHidden];
-    // Only if the model refused the change (it never does for a listed item)
-    // does the switch need putting back; otherwise it keeps its own motion.
-    if (cell.toggle.on == nowHidden) [cell.toggle setOn:!nowHidden animated:YES];
-    [self visibilityDidChange]; // the reset row
+
+    if (item) {
+        // Update the visible cell in place rather than reloading the row.
+        // This keeps the row from jumping while the user is tapping it.
+        for (UITableViewCell *candidateCell in self.tableView.visibleCells) {
+            if ([candidateCell isKindOfClass:[ApolloAMItemCell class]]) {
+                ApolloAMItemCell *cell = (ApolloAMItemCell *)candidateCell;
+                if ([cell.itemID isEqualToString:itemID]) {
+                    cell.visibilityIndicator.hidden = nowHidden;
+                    [self styleItemCell:cell forItem:item hidden:nowHidden];
+                    break;
+                }
+            }
+        }
+    }
+
+    [self visibilityDidChange];
     [self refreshPreviewButton];
 }
 
