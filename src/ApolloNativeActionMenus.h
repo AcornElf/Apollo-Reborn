@@ -1,8 +1,6 @@
 #import <Foundation/Foundation.h>
 @class UIView;
 @class UIViewController;
-@class UIImage;
-@class UIMenuElement;
 
 NS_ASSUME_NONNULL_BEGIN
 __BEGIN_DECLS
@@ -38,6 +36,9 @@ BOOL ApolloNativeActionMenuOwnsNavigationSurface(UIView * _Nullable surface);
 BOOL ApolloNativeActionMenuDeferNavigationUpdate(UIView * _Nullable surface,
                                                   NSString *key,
                                                   dispatch_block_t update);
+
+@class UIImage;
+@class UIMenuElement;
 
 // Whether Apollo's ••• sheets are being drawn as native Liquid Glass UIMenus
 // right now (Liquid Glass build on an iOS that has the glass menu metrics).
