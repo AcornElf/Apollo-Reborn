@@ -1589,6 +1589,16 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     UIButton *authorFooterBtn = (UIButton *)[cell.contentView viewWithTag:kSubFooterAuthorTag];
     UIButton *authorTopBtn = (UIButton *)[cell.contentView viewWithTag:kAuthorTopTag];
     UILabel *statsLabel = [cell.contentView viewWithTag:kBottomTag];
+    
+    //Explicit refresh on reuse
+    UIFont *mediumFont = RRMediumSubheadlineFont(self);
+    titleLabel.font = RRBodyFont(self);
+    subHeaderBtn.titleLabel.font = RRCalloutFont(self);
+    subredditFooterBtn.titleLabel.font = mediumFont;
+    byLabel.font = RRSubheadlineFont(self);
+    authorFooterBtn.titleLabel.font = mediumFont;
+    authorTopBtn.titleLabel.font = mediumFont;
+
     UIImageView *thumbnailView = (UIImageView *)[cell.contentView viewWithTag:kThumbTag];
 
     NSLayoutConstraint *thumbWidth = objc_getAssociatedObject(cell, &kThumbWidthConstraintKey);
