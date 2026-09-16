@@ -590,36 +590,6 @@ static const CGFloat kRecentlyReadTitleLineHeight[] = {
     25.0   // 7
 };
 
-static const CGFloat kRecentlyReadTitleTracking[] = {
-     0.00,  // 1
-     0.03,  // 2
-     0.03,  // 3
-    -0.02,  // 4
-     0.01,  // 5
-     0.00,  // 6
-    -0.02   // 7
-};
-
-static const CGFloat kRecentlyReadMetadataTracking[] = {
-     0.005,  // 1
-     0.000,  // 2
-     0.000,  // 3
-    -0.010,  // 4
-    -0.015,  // 5
-    -0.025,  // 6
-    -0.025   // 7
-};
-
-static const CGFloat kRecentlyReadInfoTracking[] = {
-     0.005,  // 1
-     0.005,  // 2
-     0.005,  // 3
-     0.000,  // 4
-     0.000,  // 5
-    -0.030,  // 6
-    -0.030   // 7
-};
-
 // Additional downward adjustment for info-row icons at each Text Size step.
 static const CGFloat kRecentlyReadIconOffset[] = {
     2.33,  // 1
@@ -1339,13 +1309,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIColor *metaColor = RecentlyReadMetaColor();
     UIFont *metaFont = RRFootnoteFont(self);
     NSInteger textSizeIndex = RRTextSizeIndex(self);
-    CGFloat infoTracking =
-        metaFont.pointSize * kRecentlyReadInfoTracking[textSizeIndex];
 
     NSDictionary *textAttrs = @{
         NSFontAttributeName: metaFont,
         NSForegroundColorAttributeName: metaColor,
-        NSKernAttributeName: @(infoTracking)
     };
 
     CGFloat iconBoxSize = 13.0;
@@ -1425,6 +1392,21 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
 - (void)apollo_applyTheme {
     [super apollo_applyTheme];
+
+    for (NSIndexPath *indexPath in self.tableView.indexPathsForVisibleRows) {
+        if (indexPath.row >= (NSInteger)self.activePosts.count) continue;
+
+        UITableViewCell *cell =
+            [self.tableView cellForRowAtIndexPath:indexPath];
+
+        UILabel *titleLabel =
+            [cell.contentView viewWithTag:kTitleTag];
+
+        if (!titleLabel) continue;
+
+        RDKLink *link = self.activePosts[indexPath.row];
+        [self applyTitleAppearanceToLabel:titleLabel forLink:link];
+    }
 }
 
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
@@ -1526,6 +1508,110 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     [task resume];
 }
 
+- (void)applyTitleAppearanceToLabel:(UILabel *)titleLabel
+                               forLink:(RDKLink *)link {
+    if (!titleLabel || !link) return;
+
+    NSString *titleText = link.title ?: @"(untitled)";
+    NSString *flairText = RecentlyReadDisplayFlair(
+        ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
+    );
+    NSString *linkDomain = link.URL.host;
+    if ([linkDomain hasPrefix:@"www."]) {
+        linkDomain = [linkDomain substringFromIndex:4];
+    }
+
+    UIFont *titleFont = titleLabel.font;
+    NSInteger textSizeIndex = RRTextSizeIndex(self);
+
+    CGFloat titleLineHeight =
+        kRecentlyReadTitleLineHeight[textSizeIndex];
+
+    NSMutableParagraphStyle *titlePara =
+        [[NSMutableParagraphStyle alloc] init];
+    titlePara.minimumLineHeight = titleLineHeight;
+    titlePara.maximumLineHeight = titleLineHeight;
+
+    NSDictionary *titleAttrs = @{
+        NSFontAttributeName: titleFont,
+        NSForegroundColorAttributeName: [UIColor labelColor],
+        NSParagraphStyleAttributeName: titlePara,
+    };
+
+    NSDictionary *linkDomainAttrs = @{
+        NSFontAttributeName: titleFont,
+        NSForegroundColorAttributeName: RecentlyReadFlairTextColor(),
+        NSParagraphStyleAttributeName: titlePara,
+    };
+
+    NSMutableAttributedString *titleAttr =
+        [[NSMutableAttributedString alloc] initWithString:titleText
+                                                attributes:titleAttrs];
+
+    if (linkDomain.length > 0) {
+        NSString *domainText =
+            [NSString stringWithFormat:@" (%@)", linkDomain];
+
+        [titleAttr appendAttributedString:
+            [[NSAttributedString alloc] initWithString:domainText
+                                            attributes:linkDomainAttrs]];
+    }
+
+    if (flairText.length > 0) {
+        UIImage *flairBadge =
+            RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
+
+        NSTextAttachment *flairAtt =
+            [[NSTextAttachment alloc] init];
+        flairAtt.image = flairBadge;
+
+        CGFloat fontMid =
+            (titleFont.ascender + titleFont.descender) / 2.0;
+        CGFloat yOffset =
+            fontMid - flairBadge.size.height / 2.0;
+
+        flairAtt.bounds =
+            CGRectMake(0,
+                       yOffset,
+                       flairBadge.size.width,
+                       flairBadge.size.height);
+
+        [titleAttr appendAttributedString:
+            [[NSAttributedString alloc] initWithString:@" "]];
+
+        [titleAttr appendAttributedString:
+            [NSAttributedString attributedStringWithAttachment:flairAtt]];
+    }
+
+    if (link.isNSFW) {
+        [titleAttr appendAttributedString:
+            [[NSAttributedString alloc] initWithString:@" "]];
+
+        UIImage *badge =
+            RecentlyReadNSFWBadgeImage(titleFont.pointSize);
+
+        NSTextAttachment *att =
+            [[NSTextAttachment alloc] init];
+        att.image = badge;
+
+        CGFloat fontMid =
+            (titleFont.ascender + titleFont.descender) / 2.0;
+        CGFloat yOffset =
+            fontMid - badge.size.height / 2.0;
+
+        att.bounds =
+            CGRectMake(0,
+                       yOffset,
+                       badge.size.width,
+                       badge.size.height);
+
+        [titleAttr appendAttributedString:
+            [NSAttributedString attributedStringWithAttachment:att]];
+    }
+
+    titleLabel.attributedText = titleAttr;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     static NSString *cellID = @"RecentPostCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
@@ -1584,15 +1670,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.textColor = metaColor;
         UIFont *byFont = RRSubheadlineFont(self);
         NSInteger textSizeIndex = RRTextSizeIndex(self);
-        CGFloat byTracking =
-            byFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
         byLabel.attributedText =
             [[NSAttributedString alloc] initWithString:byLabel.text ?: @""
                                             attributes:@{
                 NSFontAttributeName: byFont,
                 NSForegroundColorAttributeName: metaColor,
-                NSKernAttributeName: @(byTracking)
             }];
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
@@ -1683,7 +1766,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             thumbWidth,
             [thumbnailView.bottomAnchor constraintLessThanOrEqualToAnchor:cell.contentView.bottomAnchor constant:-kRecentlyReadCellVerticalInset],
             [stack.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:kRecentlyReadCellVerticalInset],
-            [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-8],
+            [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16],
             [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-kRecentlyReadCellVerticalInset],
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
             [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
@@ -1767,15 +1850,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         if (showUsernames && link.author.length > 0) {
             authorTopBtn.hidden = NO;
             UIFont *authorTopFont = RRMediumSubheadlineFont(self);
-            CGFloat authorTopTracking =
-                authorTopFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
             NSAttributedString *authorTopTitle =
                 [[NSAttributedString alloc] initWithString:link.author
                                                 attributes:@{
                     NSFontAttributeName: authorTopFont,
                     NSForegroundColorAttributeName: metaColor,
-                    NSKernAttributeName: @(authorTopTracking)
                 }];
 
             [authorTopBtn setAttributedTitle:authorTopTitle
@@ -1793,15 +1873,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         authorTopBtn.hidden = YES;
 
         footerStack.hidden = NO;
-        CGFloat subredditTracking =
-            mediumFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
         NSAttributedString *subredditTitle =
             [[NSAttributedString alloc] initWithString:link.subreddit ?: @""
                                             attributes:@{
                 NSFontAttributeName: mediumFont,
                 NSForegroundColorAttributeName: metaColor,
-                NSKernAttributeName: @(subredditTracking)
             }];
 
         [subredditFooterBtn setAttributedTitle:subredditTitle
@@ -1811,15 +1888,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         if (showUsernames && link.author.length > 0) {
             byLabel.hidden = NO;
             authorFooterBtn.hidden = NO;
-            CGFloat authorTracking =
-                mediumFont.pointSize * kRecentlyReadMetadataTracking[textSizeIndex];
 
             NSAttributedString *authorTitle =
                 [[NSAttributedString alloc] initWithString:link.author
                                                 attributes:@{
                     NSFontAttributeName: mediumFont,
                     NSForegroundColorAttributeName: metaColor,
-                    NSKernAttributeName: @(authorTracking)
                 }];
 
             [authorFooterBtn setAttributedTitle:authorTitle
@@ -1832,97 +1906,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     }
 
     // Title with optional NSFW badge
-    NSString *titleText = link.title ?: @"(untitled)";
-    NSString *flairText = RecentlyReadDisplayFlair(
-        ((NSString *(*)(id, SEL))objc_msgSend)(link, @selector(linkFlairText))
-    );
-    NSString *linkDomain = link.URL.host;
-    if ([linkDomain hasPrefix:@"www."]) {
-        linkDomain = [linkDomain substringFromIndex:4];
-    }
-    UIFont *titleFont = titleLabel.font;
-
-    CGFloat titleTracking =
-        titleFont.pointSize * kRecentlyReadTitleTracking[textSizeIndex];
-
-    CGFloat titleLineHeight =
-        kRecentlyReadTitleLineHeight[textSizeIndex];
-    NSMutableParagraphStyle *titlePara = [[NSMutableParagraphStyle alloc] init];
-    titlePara.minimumLineHeight = titleLineHeight;
-    titlePara.maximumLineHeight = titleLineHeight;
-    NSDictionary *titleAttrs = @{NSFontAttributeName: titleFont,
-                      NSForegroundColorAttributeName: [UIColor labelColor],
-                       NSParagraphStyleAttributeName: titlePara,
-                                 NSKernAttributeName: @(titleTracking)};
-
-    NSDictionary *linkDomainAttrs = @{
-        NSFontAttributeName: titleFont,
-        NSForegroundColorAttributeName: RecentlyReadFlairTextColor(),
-        NSParagraphStyleAttributeName: titlePara,
-        NSKernAttributeName: @(titleTracking)
-    };
-    if (link.isNSFW) {
-        NSMutableAttributedString *titleAttr = [[NSMutableAttributedString alloc] initWithString:titleText
-            attributes:titleAttrs];
-
-        if (linkDomain.length > 0) {
-            NSString *domainText = [NSString stringWithFormat:@" (%@)", linkDomain];
-            [titleAttr appendAttributedString:
-                [[NSAttributedString alloc] initWithString:domainText
-                                                attributes:linkDomainAttrs]];
-        }
-
-        if (flairText.length > 0) {
-            UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
-
-            NSTextAttachment *flairAtt = [[NSTextAttachment alloc] init];
-            flairAtt.image = flairBadge;
-
-            CGFloat fontMid = (titleFont.ascender + titleFont.descender) / 2.0;
-            CGFloat yOffset = fontMid - flairBadge.size.height / 2.0;
-            flairAtt.bounds = CGRectMake(0, yOffset, flairBadge.size.width, flairBadge.size.height);
-
-            [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
-            [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:flairAtt]];
-        }
-
-        [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
-        UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize);
-        NSTextAttachment *att = [[NSTextAttachment alloc] init];
-        att.image = badge;
-        CGFloat fontMid = (titleFont.ascender + titleFont.descender) / 2.0;
-        CGFloat yOffset = fontMid - badge.size.height / 2.0;
-        att.bounds = CGRectMake(0, yOffset, badge.size.width, badge.size.height);
-        [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
-        titleLabel.attributedText = titleAttr;
-    } else {
-        NSMutableAttributedString *titleAttr =
-            [[NSMutableAttributedString alloc] initWithString:titleText
-                                                    attributes:titleAttrs];
-
-        if (linkDomain.length > 0) {
-            NSString *domainText = [NSString stringWithFormat:@" (%@)", linkDomain];
-            [titleAttr appendAttributedString:
-                [[NSAttributedString alloc] initWithString:domainText
-                                                attributes:linkDomainAttrs]];
-        }
-
-        if (flairText.length > 0) {
-            UIImage *flairBadge = RecentlyReadFlairBadgeImage(flairText, titleFont.pointSize);
-
-            NSTextAttachment *flairAtt = [[NSTextAttachment alloc] init];
-            flairAtt.image = flairBadge;
-
-            CGFloat fontMid = (titleFont.ascender + titleFont.descender) / 2.0;
-            CGFloat yOffset = fontMid - flairBadge.size.height / 2.0;
-            flairAtt.bounds = CGRectMake(0, yOffset, flairBadge.size.width, flairBadge.size.height);
-
-            [titleAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
-            [titleAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:flairAtt]];
-        }
-
-        titleLabel.attributedText = titleAttr;
-    }
+    [self applyTitleAppearanceToLabel:titleLabel forLink:link];
 
     statsLabel.attributedText = [self statsAttributedStringForLink:link];
 
