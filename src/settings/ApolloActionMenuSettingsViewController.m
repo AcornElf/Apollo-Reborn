@@ -299,7 +299,7 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
     _visibilityIndicator =
         [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark"
                                                        withConfiguration:visibilityConfiguration]];
-    _visibilityIndicator.tintColor = UIColor.secondaryLabelColor;
+    _visibilityIndicator.tintColor = ApolloThemeAccentColor();
     _visibilityIndicator.contentMode = UIViewContentModeCenter;
     _visibilityIndicator.translatesAutoresizingMaskIntoConstraints = NO;
     [NSLayoutConstraint activateConstraints:@[
