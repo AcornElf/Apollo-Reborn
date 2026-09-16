@@ -1669,7 +1669,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.text = @" by ";
         byLabel.textColor = metaColor;
         UIFont *byFont = RRSubheadlineFont(self);
-        NSInteger textSizeIndex = RRTextSizeIndex(self);
 
         byLabel.attributedText =
             [[NSAttributedString alloc] initWithString:byLabel.text ?: @""
@@ -1796,7 +1795,6 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     
     //Explicit refresh on reuse
     UIFont *mediumFont = RRMediumSubheadlineFont(self);
-    NSInteger textSizeIndex = RRTextSizeIndex(self);
     UIColor *metaColor = RecentlyReadMetaColor();
     titleLabel.font = RRBodyFont(self);
     subHeaderBtn.titleLabel.font = RRCalloutFont(self);
