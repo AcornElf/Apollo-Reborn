@@ -1415,6 +1415,19 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
 - (void)apollo_applyTheme {
     [super apollo_applyTheme];
+
+    for (UITableViewCell *cell in self.tableView.visibleCells) {
+        UILabel *titleLabel = [cell.contentView viewWithTag:kTitleTag];
+        if (!titleLabel) continue;
+
+        NSIndexPath *indexPath = [self.tableView indexPathForCell:cell];
+        if (!indexPath) continue;
+
+        RDKLink *link = self.activePosts[indexPath.row];
+        if (link) {
+            [self applyTitleAppearanceToLabel:titleLabel forLink:link];
+        }
+    }
 }
 
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
