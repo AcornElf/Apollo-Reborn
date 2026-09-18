@@ -773,8 +773,8 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 static UIColor *RecentlyReadCellBackgroundColor(UITraitCollection *traits) {
     BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
     ApolloThemeToken token = darkMode
-        ? ApolloThemeTokenSecondaryBackground
-        : ApolloThemeTokenBackground;
+        ? ApolloThemeTokenTertiaryBackground
+        : ApolloThemeTokenSecondaryBackground;
 
     if (ApolloThemeRuntimeIsActive()) {
         return ApolloThemeRuntimeColor(token);
@@ -825,8 +825,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
         if (ApolloThemeRuntimeIsActive()) {
             badgeBackgroundColor = ApolloThemeRuntimeColor(
                 darkMode
-                    ? ApolloThemeTokenBackground
-                    : ApolloThemeTokenElevatedBackground
+                    ? ApolloThemeTokenSecondaryBackground
+                    : ApolloThemeTokenBackground
             );
         } else {
             badgeBackgroundColor = darkMode
