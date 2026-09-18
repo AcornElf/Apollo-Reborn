@@ -65,16 +65,16 @@
         ApolloLog(@"[InfoRowSettings] comments=%d", sender.isOn);
     }];
 
-    ApolloSettingsRow *timestamp =
-    [ApolloSettingsRow valueRowWithID:@"infoRow.timestamp"
-                                title:@"Full Timestamp on Tap"
+    ApolloSettingsRow *details =
+    [ApolloSettingsRow valueRowWithID:@"infoRow.details"
+                                title:@"Full Details on Tap"
                             detail:^NSString * {
     if (sInfoRowPopupMode) return @"Pop-Up";
     if (sInfoRowOverlayMode) return @"Overlay";
     return @"Off";
 }
                             onSelect:^{
-    [weakSelf presentTimestampPicker];
+    [weakSelf presentDetailsPicker];
 }];
 
     ApolloSettingsRow *translation =
@@ -100,10 +100,10 @@
                                          footer:@"Hold, slide and release on an icon to activate it."
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
-                                        footer: !sEnableBulkTranslation
-                                        ? @"Enable Bulk Translation to use this setting."
-                                        : nil
-                                        rows:@[ comments, timestamp, translation ]],
+                                        footer: ![self translationMarkerAvailable]
+                                        ? @"Reveal more detail when tapping the timestamp and vote percentage icons. Enable Bulk Translation and a Details option to use Globe Toggles Translation."
+                                        : @"Reveal more detail when tapping the timestamp and vote percentage icons."
+                                        rows:@[ comments, details, translation ]],
     ];
 }
 
@@ -111,17 +111,17 @@
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setBool:sInfoRowPopupMode forKey:UDKeyInfoRowPopupMode];
     [defaults setBool:sInfoRowOverlayMode forKey:UDKeyInfoRowOverlayMode];
-    [self reloadRowWithID:@"infoRow.timestamp"];
+    [self reloadRowWithID:@"infoRow.details"];
         NSString *mode = @"Off";
         if (sInfoRowPopupMode) {
             mode = @"Pop-Up";
         } else if (sInfoRowOverlayMode) {
             mode = @"Overlay";
         }
-    ApolloLog(@"[InfoRowSettings] Full Timestamp on Tap: %@", mode);
+    ApolloLog(@"[InfoRowSettings] Full details on Tap: %@", mode);
 }
 
-- (void)presentTimestampPicker {
+- (void)presentDetailsPicker {
     __weak typeof(self) weakSelf = self;
 
     NSInteger selectedIndex = 0;
@@ -132,8 +132,8 @@
     }
 
     ApolloSettingsPresentPicker(self,
-                                [self cellForRowID:@"infoRow.timestamp"],
-                                @"Full Timestamp on Tap",
+                                [self cellForRowID:@"infoRow.details"],
+                                @"Full details on Tap",
                                 @[@"Off", @"Overlay", @"Pop-Up"],
                                 selectedIndex,
                                 ^(NSInteger pickedIndex) {
