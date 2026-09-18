@@ -1624,10 +1624,14 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
         ApolloThemeToken cellBackgroundToken = darkMode
-        ? ApolloThemeTokenSecondaryBackground
-        : ApolloThemeTokenBackground;
+            ? ApolloThemeTokenSecondaryBackground
+            : ApolloThemeTokenBackground;
 
-        cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+        if (ApolloThemeRuntimeIsActive()) {
+            cell.backgroundColor = ApolloThemeRuntimeColor(cellBackgroundToken);
+        } else {
+            cell.backgroundColor = [UIColor systemBackgroundColor];
+        }
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.tintColor = RecentlyReadMetaColor();
 
