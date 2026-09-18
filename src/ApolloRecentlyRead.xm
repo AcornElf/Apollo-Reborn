@@ -315,6 +315,7 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, strong) NSMutableSet<NSString *> *knownMissingFullNames;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIActivityIndicatorView *footerSpinner;
+@property (nonatomic, copy) NSString *lastTextSizeCategory;
 @property (nonatomic, strong) id textSizeDefaultsObserver;
 @end
 
@@ -880,9 +881,18 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+
+    NSString *textSizeCategory = RecentlyReadEffectiveContentSizeCategory(self);
+    BOOL textSizeChanged = self.lastTextSizeCategory &&
+        ![self.lastTextSizeCategory isEqualToString:textSizeCategory];
+
+    self.lastTextSizeCategory = textSizeCategory;
+
     if (!self.hasLoadedOnce) {
         self.hasLoadedOnce = YES;
         [self refreshPosts];
+    } else if (textSizeChanged) {
+        [self.tableView reloadData];
     } else {
         // Returning to the screen (a nav pop runs the top VC's
         // viewWillDisappear first, so a just-left post is already marked):
