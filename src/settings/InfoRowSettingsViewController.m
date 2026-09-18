@@ -43,7 +43,7 @@
 
     ApolloSettingsRow *upvote =
         [ApolloSettingsRow switchRowWithID:@"infoRow.upvote"
-                                     title:@"Upvote on Release"
+                                     title:@"Upvote From Magnifier"
                                       isOn:^BOOL { return sInfoRowTapUpvote; }
                                   onToggle:^(UISwitch *sender) {
         sInfoRowTapUpvote = sender.isOn;
@@ -79,7 +79,7 @@
 
     ApolloSettingsRow *translation =
         [ApolloSettingsRow switchRowWithID:@"infoRow.translation"
-                                     title:@"Globe Toggles Translation"
+                                     title:@"Interactive Translation Indicator"
                                       isOn:^BOOL {
         return sInfoRowTapTranslation;
     }
@@ -101,7 +101,7 @@
                                            rows:@[ magnifier, upvote ]],
         [ApolloSettingsSection sectionWithTitle:@"Icon Tap Actions"
                                         footer: ![self translationMarkerAvailable]
-                                        ? @"Reveal more detail when tapping the timestamp and vote percentage icons. Enable Bulk Translation and a Details option to use Globe Toggles Translation."
+                                        ? @"Reveal more detail when tapping the timestamp and vote percentage icons. Enable additional Translation options to show the translation indicator (globe)."
                                         : @"Reveal more detail when tapping the timestamp and vote percentage icons."
                                         rows:@[ comments, details, translation ]],
     ];
