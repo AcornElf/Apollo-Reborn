@@ -151,6 +151,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.run.outputs.release_tag }}
         run: |
           echo "Finding old build releases..."
 
@@ -158,7 +159,7 @@ jobs:
             --repo "$REPOSITORY" \
             --limit 100 \
             --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("build-"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+            --jq '[.[] | select(.tagName | startswith("build-") and .tagName != "'"$RELEASE_TAG"'")] | sort_by(.createdAt) | reverse | .[4:] | .[].tagName')
 
           if [ -z "$OLD_RELEASES" ]; then
             echo "No old releases to remove."
