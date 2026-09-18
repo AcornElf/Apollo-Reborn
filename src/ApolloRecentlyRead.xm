@@ -772,7 +772,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
 //Flair & link shared font colour helper
 static UIColor *RecentlyReadFlairTextColor(void) {
     if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryLabel);
+        return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
     }
 
     return [UIColor secondaryLabelColor];
