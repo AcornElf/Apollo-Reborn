@@ -806,10 +806,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
 
         UIColor *badgeBackgroundColor;
 
+        BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+
         if (ApolloThemeRuntimeIsActive()) {
-            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenElevatedBackground);
+            badgeBackgroundColor = ApolloThemeRuntimeColor(
+                darkMode
+                    ? ApolloThemeTokenBackground
+                    : ApolloThemeTokenTertiaryBackground
+            );
         } else {
-            BOOL darkMode = [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
             badgeBackgroundColor = darkMode
                 ? [UIColor secondarySystemBackgroundColor]
                 : [UIColor systemGroupedBackgroundColor];
