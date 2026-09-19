@@ -147,6 +147,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloProgressiveBlur.xm \
     $(SRC_DIR)/settings/ApolloSettings.xm \
     $(SRC_DIR)/ApolloRecentlyRead.xm \
+    $(SRC_DIR)/ApolloNativeLayoutProbe.xm \
     $(SRC_DIR)/ApolloProfileMoreMenu.xm \
     $(SRC_DIR)/ApolloHiddenContentData.m \
     $(SRC_DIR)/ApolloHiddenContentViewController.m \
