@@ -900,8 +900,6 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
                 ![self.lastTextSizeCategory isEqualToString:textSizeCategory]) {
                 self.lastTextSizeCategory = textSizeCategory;
                 [self.tableView reloadData];
-            } else {
-                [self softRefreshPosts];
             }
         }];
 }
