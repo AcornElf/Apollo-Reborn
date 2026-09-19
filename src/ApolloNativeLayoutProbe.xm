@@ -108,15 +108,44 @@ static void NativeProbeOutlineCell(
         bringSubviewToFront:outline];
 }
 
-static UILabel *NativeProbeHUD(
+@interface NativeProbeHUDView : UILabel
+
+@property (nonatomic, assign) BOOL collapsed;
+@property (nonatomic, copy) NSString *expandedText;
+
+@end
+
+@implementation NativeProbeHUDView
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches
+           withEvent:(UIEvent *)event {
+    self.collapsed = !self.collapsed;
+
+    if (self.collapsed) {
+        self.text = @"PROBE";
+        self.textAlignment = NSTextAlignmentCenter;
+        self.numberOfLines = 1;
+    } else {
+        self.text = self.expandedText;
+        self.textAlignment = NSTextAlignmentLeft;
+        self.numberOfLines = 0;
+    }
+
+    [self setNeedsLayout];
+    [self sizeToFit];
+}
+
+@end
+
+static NativeProbeHUDView *NativeProbeHUD(
     UIWindow *window
 ) {
-    UILabel *hud =
-        [window viewWithTag:kNativeProbeHUDTag];
+    NativeProbeHUDView *hud =
+        (NativeProbeHUDView *)[window viewWithTag:kNativeProbeHUDTag];
 
     if (!hud) {
         hud =
-            [[UILabel alloc]
+            [[NativeProbeHUDView alloc]
                 initWithFrame:CGRectZero];
 
         hud.tag = kNativeProbeHUDTag;
@@ -136,7 +165,7 @@ static UILabel *NativeProbeHUD(
         hud.layer.cornerRadius = 8.0;
         hud.layer.masksToBounds = YES;
 
-        hud.userInteractionEnabled = NO;
+        hud.userInteractionEnabled = YES;
 
         [window addSubview:hud];
     }
@@ -241,11 +270,16 @@ static void NativeProbeUpdateHUD(
         UIApplication.sharedApplication
             .preferredContentSizeCategory];
 
-    UILabel *hud =
-        NativeProbeHUD(window);
+    NativeProbeHUDView *hud =
+    NativeProbeHUD(window);
 
-    hud.text =
+    hud.expandedText =
         report;
+
+    if (!hud.collapsed) {
+        hud.text =
+            report;
+    }
 
     UIEdgeInsets safeInsets =
         window.safeAreaInsets;
