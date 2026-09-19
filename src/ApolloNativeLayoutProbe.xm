@@ -24,54 +24,6 @@ static NSString *NativeProbeClassName(id object) {
     return NSStringFromClass([object class]);
 }
 
-static CGFloat NativeProbeTracking(NSAttributedString *string) {
-    if (!string.length) {
-        return 0.0;
-    }
-
-    __block CGFloat result = 0.0;
-
-    [string enumerateAttribute:NSKernAttributeName
-                       inRange:NSMakeRange(0, string.length)
-                       options:0
-                    usingBlock:^(id value, NSRange range, BOOL *stop) {
-        if (value) {
-            result = [value doubleValue];
-            *stop = YES;
-        }
-    }];
-
-    return result;
-}
-
-static NSString *NativeProbeParagraphInfo(NSAttributedString *string) {
-    if (!string.length) {
-        return @"default";
-    }
-
-    __block NSParagraphStyle *paragraph = nil;
-
-    [string enumerateAttribute:NSParagraphStyleAttributeName
-                       inRange:NSMakeRange(0, string.length)
-                       options:0
-                    usingBlock:^(id value, NSRange range, BOOL *stop) {
-        if (value) {
-            paragraph = value;
-            *stop = YES;
-        }
-    }];
-
-    if (!paragraph) {
-        return @"default";
-    }
-
-    return [NSString stringWithFormat:
-        @"min %.1f max %.1f spacing %.1f",
-        paragraph.minimumLineHeight,
-        paragraph.maximumLineHeight,
-        paragraph.lineSpacing];
-}
-
 static void NativeProbeCollectDisplayViews(
     UIView *view,
     NSMutableArray<NSDictionary *> *results,
