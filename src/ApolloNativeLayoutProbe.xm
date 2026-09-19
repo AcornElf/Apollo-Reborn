@@ -156,7 +156,7 @@ static NSString *NativeProbeTextForView(UIView *view,
     return text;
 }
 
-static void NativeProbeCollectTextViews(
+static void NativeProbeCollectDisplayViews(
     UIView *view,
     NSMutableArray<NSDictionary *> *results,
     UIView *cell
@@ -165,43 +165,22 @@ static void NativeProbeCollectTextViews(
         return;
     }
 
-    UIFont *font = nil;
-    CGFloat tracking = 0.0;
-    NSString *paragraph = nil;
+    NSString *className =
+        NativeProbeClassName(view);
 
-    NSString *text =
-        NativeProbeTextForView(
-            view,
-            &font,
-            &tracking,
-            &paragraph
-        );
-
-    if (text.length && font) {
+    if ([className isEqualToString:@"_ASDisplayView"]) {
         CGRect frame =
             [view convertRect:view.bounds toView:cell];
 
         [results addObject:@{
             @"view": view,
-            @"class": NativeProbeClassName(view),
-            @"text": NativeProbeShortText(text),
-            @"font": font,
-            @"weight": NativeProbeFontWeight(font),
-            @"tracking": @(tracking),
-            @"paragraph": paragraph ?: @"default",
+            @"class": className,
             @"frame": [NSValue valueWithCGRect:frame]
         }];
-
-        /*
-         * UILabels and UIButtons can contain their own text-bearing
-         * subviews. Once we've captured the control itself, don't
-         * recurse into it.
-         */
-        return;
     }
 
     for (UIView *subview in view.subviews) {
-        NativeProbeCollectTextViews(
+        NativeProbeCollectDisplayViews(
             subview,
             results,
             cell
@@ -210,8 +189,46 @@ static void NativeProbeCollectTextViews(
 }
 
 static BOOL NativeProbeLooksLikePostCell(
-    UITableViewCell *cell,
-    NSArray<NSDictionary *> *textViews
+    UITableViewCell *cell
+) {
+    return [NSStringFromClass(cell.class)
+        isEqualToString:@"_ASTableViewCell"];
+}
+
+static void NativeProbeCollectDisplayViews(
+    UIView *view,
+    NSMutableArray<NSDictionary *> *results,
+    UIView *cell
+) {
+    if (!view) {
+        return;
+    }
+
+    NSString *className =
+        NativeProbeClassName(view);
+
+    if ([className isEqualToString:@"_ASDisplayView"]) {
+        CGRect frame =
+            [view convertRect:view.bounds toView:cell];
+
+        [results addObject:@{
+            @"view": view,
+            @"class": className,
+            @"frame": [NSValue valueWithCGRect:frame]
+        }];
+    }
+
+    for (UIView *subview in view.subviews) {
+        NativeProbeCollectDisplayViews(
+            subview,
+            results,
+            cell
+        );
+    }
+}
+
+static BOOL NativeProbeLooksLikePostCell(
+    UITableViewCell *cell
 ) {
     return [NSStringFromClass(cell.class)
         isEqualToString:@"_ASTableViewCell"];
@@ -221,19 +238,7 @@ static UITableViewCell *NativeProbeFindPostCell(
     UITableView *tableView
 ) {
     for (UITableViewCell *cell in tableView.visibleCells) {
-        NSMutableArray *textViews =
-            [NSMutableArray array];
-
-        NativeProbeCollectTextViews(
-            cell.contentView,
-            textViews,
-            cell
-        );
-
-        if (NativeProbeLooksLikePostCell(
-                cell,
-                textViews
-            )) {
+        if (NativeProbeLooksLikePostCell(cell)) {
             return cell;
         }
     }
@@ -312,9 +317,10 @@ static UILabel *NativeProbeHUD(
 
 static void NativeProbeUpdateHUD(
     UITableViewCell *cell,
-    NSArray<NSDictionary *> *textViews
+    NSArray<NSDictionary *> *displayViews
 ) {
-    UIWindow *window = cell.window;
+    UIWindow *window =
+        cell.window;
 
     if (!window) {
         return;
@@ -324,16 +330,12 @@ static void NativeProbeUpdateHUD(
         [NSMutableString string];
 
     [report appendFormat:
-        @"Native cell: %@\n",
+        @"NATIVE PROBE\n"
+         @"%@\n\n",
         NativeProbeClassName(cell)];
 
-    [report appendFormat:
-        @"Text size: %@\n\n",
-        UIApplication.sharedApplication
-            .preferredContentSizeCategory];
-
     NSArray *sorted =
-        [textViews sortedArrayUsingComparator:
+        [displayViews sortedArrayUsingComparator:
             ^NSComparisonResult(
                 NSDictionary *a,
                 NSDictionary *b
@@ -354,6 +356,16 @@ static void NativeProbeUpdateHUD(
                     return NSOrderedDescending;
                 }
 
+                if (aFrame.origin.x <
+                    bFrame.origin.x) {
+                    return NSOrderedAscending;
+                }
+
+                if (aFrame.origin.x >
+                    bFrame.origin.x) {
+                    return NSOrderedDescending;
+                }
+
                 return NSOrderedSame;
             }];
 
@@ -364,50 +376,47 @@ static void NativeProbeUpdateHUD(
         CGRect frame =
             [entry[@"frame"] CGRectValue];
 
-        UIFont *font =
-            entry[@"font"];
-
         if (havePrevious) {
             CGFloat gap =
                 frame.origin.y -
                 previousBottom;
 
-            [report appendFormat:
-                @"GAP %.1f\n",
-                gap];
+            if (gap >= -1.0) {
+                [report appendFormat:
+                    @"GAP %.1f\n",
+                    gap];
+            }
         }
 
         [report appendFormat:
             @"%@\n"
-             @"  %@\n"
-             @"  %.1fpt %@\n"
-             @"  line %.1f asc %.1f desc %.1f\n"
-             @"  kern %.2f  %@\n"
              @"  frame %.1f, %.1f, %.1f, %.1f\n\n",
             entry[@"class"],
-            entry[@"text"] ?: @"",
-            font.pointSize,
-            entry[@"weight"],
-            font.lineHeight,
-            font.ascender,
-            font.descender,
-            [entry[@"tracking"] doubleValue],
-            entry[@"paragraph"],
             frame.origin.x,
             frame.origin.y,
             frame.size.width,
             frame.size.height];
 
         previousBottom =
-            CGRectGetMaxY(frame);
+            MAX(
+                previousBottom,
+                CGRectGetMaxY(frame)
+            );
 
         havePrevious = YES;
     }
 
+    [report appendFormat:
+        @"SYSTEM\n"
+         @"  category: %@\n",
+        UIApplication.sharedApplication
+            .preferredContentSizeCategory];
+
     UILabel *hud =
         NativeProbeHUD(window);
 
-    hud.text = report;
+    hud.text =
+        report;
 
     UIEdgeInsets safeInsets =
         window.safeAreaInsets;
@@ -457,12 +466,12 @@ static void NativeProbeInspectTableView(
         [oldOutline removeFromSuperview];
     }
 
-    NSMutableArray *textViews =
+    NSMutableArray *displayViews =
         [NSMutableArray array];
 
-    NativeProbeCollectTextViews(
+    NativeProbeCollectDisplayViews(
         cell.contentView,
-        textViews,
+        displayViews,
         cell
     );
 
@@ -470,7 +479,7 @@ static void NativeProbeInspectTableView(
 
     NativeProbeUpdateHUD(
         cell,
-        textViews
+        displayViews
     );
 }
 
