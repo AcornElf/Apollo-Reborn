@@ -890,12 +890,20 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
                             action:@selector(_pullToRefreshTriggered)
                   forControlEvents:UIControlEventValueChanged];
         self.textSizeDefaultsObserver =
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
-                                                          object:nil
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification * _Nonnull __unused note) {
-        [self softRefreshPosts];
-    }];
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
+                                                            object:nil
+                                                            queue:[NSOperationQueue mainQueue]
+                                                        usingBlock:^(NSNotification * _Nonnull __unused note) {
+            NSString *textSizeCategory = RecentlyReadEffectiveContentSizeCategory(self);
+
+            if (self.lastTextSizeCategory &&
+                ![self.lastTextSizeCategory isEqualToString:textSizeCategory]) {
+                self.lastTextSizeCategory = textSizeCategory;
+                [self.tableView reloadData];
+            } else {
+                [self softRefreshPosts];
+            }
+        }];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1754,8 +1762,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         stack.alignment = UIStackViewAlignmentLeading;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
-        [stack setCustomSpacing:RRScaledSpacing(10, self)
-                    afterView:titleLabel];
+        [stack setCustomSpacing:4.0
+            afterView:titleLabel];
         [stack setCustomSpacing:RRScaledSpacing(5, self)
                     afterView:footerStack];
         [stack setCustomSpacing:RRScaledSpacing(3, self)
