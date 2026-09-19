@@ -195,45 +195,6 @@ static BOOL NativeProbeLooksLikePostCell(
         isEqualToString:@"_ASTableViewCell"];
 }
 
-static void NativeProbeCollectDisplayViews(
-    UIView *view,
-    NSMutableArray<NSDictionary *> *results,
-    UIView *cell
-) {
-    if (!view) {
-        return;
-    }
-
-    NSString *className =
-        NativeProbeClassName(view);
-
-    if ([className isEqualToString:@"_ASDisplayView"]) {
-        CGRect frame =
-            [view convertRect:view.bounds toView:cell];
-
-        [results addObject:@{
-            @"view": view,
-            @"class": className,
-            @"frame": [NSValue valueWithCGRect:frame]
-        }];
-    }
-
-    for (UIView *subview in view.subviews) {
-        NativeProbeCollectDisplayViews(
-            subview,
-            results,
-            cell
-        );
-    }
-}
-
-static BOOL NativeProbeLooksLikePostCell(
-    UITableViewCell *cell
-) {
-    return [NSStringFromClass(cell.class)
-        isEqualToString:@"_ASTableViewCell"];
-}
-
 static UITableViewCell *NativeProbeFindPostCell(
     UITableView *tableView
 ) {
