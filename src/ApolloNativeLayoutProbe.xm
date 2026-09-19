@@ -213,7 +213,8 @@ static BOOL NativeProbeLooksLikePostCell(
     UITableViewCell *cell,
     NSArray<NSDictionary *> *textViews
 ) {
-    return cell && textViews.count > 0;
+    return [NSStringFromClass(cell.class)
+        isEqualToString:@"_ASTableViewCell"];
 }
 
 static UITableViewCell *NativeProbeFindPostCell(
@@ -445,6 +446,15 @@ static void NativeProbeInspectTableView(
 
     if (!cell) {
         return;
+    }
+
+    // Remove outlines from previously inspected visible cells.
+    for (UITableViewCell *visibleCell in tableView.visibleCells) {
+        UIView *oldOutline =
+            [visibleCell.contentView viewWithTag:
+                kNativeProbeOutlineTag];
+
+        [oldOutline removeFromSuperview];
     }
 
     NSMutableArray *textViews =
