@@ -24,37 +24,6 @@ static NSString *NativeProbeClassName(id object) {
     return NSStringFromClass([object class]);
 }
 
-static NSString *NativeProbeShortText(NSString *text) {
-    if (!text.length) {
-        return nil;
-    }
-
-    NSString *oneLine =
-        [[text componentsSeparatedByCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]]
-            componentsJoinedByString:@" "];
-
-    if (oneLine.length <= 70) {
-        return oneLine;
-    }
-
-    return [[oneLine substringToIndex:69]
-        stringByAppendingString:@"…"];
-}
-
-static NSString *NativeProbeFontWeight(UIFont *font) {
-    if (!font) {
-        return @"none";
-    }
-
-    NSNumber *weight = font.fontDescriptor.fontAttributes[UIFontWeightTrait];
-    if (!weight) {
-        return @"unknown";
-    }
-
-    return [NSString stringWithFormat:@"%.2f", weight.doubleValue];
-}
-
 static CGFloat NativeProbeTracking(NSAttributedString *string) {
     if (!string.length) {
         return 0.0;
@@ -101,60 +70,6 @@ static NSString *NativeProbeParagraphInfo(NSAttributedString *string) {
         paragraph.minimumLineHeight,
         paragraph.maximumLineHeight,
         paragraph.lineSpacing];
-}
-
-static NSString *NativeProbeTextForView(UIView *view,
-                                         UIFont **fontOut,
-                                         CGFloat *trackingOut,
-                                         NSString **paragraphOut) {
-    NSString *text = nil;
-    UIFont *font = nil;
-    CGFloat tracking = 0.0;
-    NSString *paragraph = @"default";
-
-    if ([view isKindOfClass:[UILabel class]]) {
-        UILabel *label = (UILabel *)view;
-
-        text = label.text;
-        font = label.font;
-
-        if (label.attributedText.length) {
-            tracking = NativeProbeTracking(label.attributedText);
-            paragraph =
-                NativeProbeParagraphInfo(label.attributedText);
-        }
-    }
-    else if ([view isKindOfClass:[UIButton class]]) {
-        UIButton *button = (UIButton *)view;
-
-        text = button.currentTitle;
-        font = button.titleLabel.font;
-
-        if (button.currentAttributedTitle.length) {
-            tracking =
-                NativeProbeTracking(button.currentAttributedTitle);
-
-            paragraph =
-                NativeProbeParagraphInfo(
-                    button.currentAttributedTitle
-                );
-        }
-    }
-
-    if (fontOut) {
-        *fontOut = font;
-    }
-
-    if (trackingOut) {
-        *trackingOut = tracking;
-    }
-
-    if (paragraphOut) {
-        *paragraphOut = paragraph;
-    }
-
-    return text;
-}
 
 static void NativeProbeCollectDisplayViews(
     UIView *view,
