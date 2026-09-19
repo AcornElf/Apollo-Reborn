@@ -70,6 +70,7 @@ static NSString *NativeProbeParagraphInfo(NSAttributedString *string) {
         paragraph.minimumLineHeight,
         paragraph.maximumLineHeight,
         paragraph.lineSpacing];
+}
 
 static void NativeProbeCollectDisplayViews(
     UIView *view,
