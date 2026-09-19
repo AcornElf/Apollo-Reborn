@@ -769,7 +769,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     }];
 }
 
-//Cell and flair background colors
+// Cell background colors
 static UIColor *RecentlyReadCellBackgroundColor(UITraitCollection *traits) {
     BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
     ApolloThemeToken token = darkMode
@@ -783,7 +783,7 @@ static UIColor *RecentlyReadCellBackgroundColor(UITraitCollection *traits) {
     return [UIColor systemBackgroundColor];
 }
 
-//Flair & link shared font color helper
+// Flair text color
 static UIColor *RecentlyReadFlairTextColor(void) {
     if (ApolloThemeRuntimeIsActive()) {
         return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
@@ -792,7 +792,7 @@ static UIColor *RecentlyReadFlairTextColor(void) {
     return [UIColor secondaryLabelColor];
 }
 
-//Flair badge creation
+// Flair badge creation
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text, CGFloat fontSize) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
     UIColor *flairTextColor = RecentlyReadFlairTextColor();
