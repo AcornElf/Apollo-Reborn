@@ -181,14 +181,16 @@ static id ApolloAuthorInsightsPlaceInSpec(
     id originalSpec = %orig;
 
     @try {
-        ApolloLog(@"[AuthorInsights][probe] entered");
-
         RDKLink *link = MSHookIvar<RDKLink *>(self, "link");
+        NSString *activeUsername = ApolloActiveAccountUsername();
 
-        ApolloLog(@"[AuthorInsights][probe] link = %@", link);
-        ApolloLog(@"[AuthorInsights][probe] author = %@", link.author);
-        ApolloLog(@"[AuthorInsights][probe] active = %@",
-                  ApolloActiveAccountUsername());
+        if (link.author.length == 0 || activeUsername.length == 0) {
+            return originalSpec;
+        }
+
+        if ([link.author caseInsensitiveCompare:activeUsername] != NSOrderedSame) {
+            return originalSpec;
+        }
 
         ASDisplayNode *insightNode =
             ApolloAuthorInsightsEnsureNode((id)self);
