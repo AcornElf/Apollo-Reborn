@@ -12,22 +12,33 @@
 
 #import "ApolloCommon.h"
 #import "ApolloTextureDecls.h"
+#import "ApolloAccountCredentials.h"
+#import "Tweak.h"
 
 #pragma mark - Node
 
 static const void *kApolloAuthorInsightsNodeKey = &kApolloAuthorInsightsNodeKey;
 
-static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
-    ASTextNode *node =
+static ASDisplayNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
+    ASDisplayNode *node =
         objc_getAssociatedObject(headerNode, kApolloAuthorInsightsNodeKey);
 
     if (node) return node;
 
-    node = [ASTextNode new];
-    node.userInteractionEnabled = NO;
-    node.maximumNumberOfLines = 1;
+    Class textNodeClass = NSClassFromString(@"ASTextNode");
+    if (!textNodeClass) {
+        ApolloLog(@"[AuthorInsights][UI] ASTextNode class not found");
+        return nil;
+    }
 
-    node.attributedText =
+    node = [[textNodeClass alloc] init];
+    node.userInteractionEnabled = NO;
+    node.backgroundColor = [UIColor systemRedColor];
+    node.cornerRadius = 4.0;
+
+    ASTextNode *textNode = (ASTextNode *)node;
+    textNode.maximumNumberOfLines = 1;
+    textNode.attributedText =
         [[NSAttributedString alloc]
             initWithString:@"96% upvoted · 96 ↑ 4 ↓ · 96:4"
                 attributes:@{
@@ -36,9 +47,6 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
                     NSForegroundColorAttributeName:
                         [UIColor whiteColor]
                 }];
-
-    node.backgroundColor = [UIColor systemRedColor];
-    node.cornerRadius = 4.0;
 
     objc_setAssociatedObject(headerNode,
                              kApolloAuthorInsightsNodeKey,
@@ -173,7 +181,16 @@ static id ApolloAuthorInsightsPlaceInSpec(
     id originalSpec = %orig;
 
     @try {
-        ASTextNode *insightNode =
+        ApolloLog(@"[AuthorInsights][probe] entered");
+
+        RDKLink *link = MSHookIvar<RDKLink *>(self, "link");
+
+        ApolloLog(@"[AuthorInsights][probe] link = %@", link);
+        ApolloLog(@"[AuthorInsights][probe] author = %@", link.author);
+        ApolloLog(@"[AuthorInsights][probe] active = %@",
+                  ApolloActiveAccountUsername());
+
+        ASDisplayNode *insightNode =
             ApolloAuthorInsightsEnsureNode((id)self);
 
         if (!insightNode) return originalSpec;
@@ -188,6 +205,7 @@ static id ApolloAuthorInsightsPlaceInSpec(
         ApolloLog(@"[AuthorInsights][layout] PostInfoNode not found; leaving original layout unchanged");
     }
     @catch (__unused id e) {
+        ApolloLog(@"[AuthorInsights][probe] exception while reading link/author");
     }
 
     return originalSpec;
