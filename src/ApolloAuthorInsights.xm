@@ -231,6 +231,31 @@ static id ApolloAuthorInsightsPlaceInSpec(
     ASDisplayNode *insightNode =
         ApolloAuthorInsightsEnsureNode((id)self, insightText);
 
+    //Debug
+    id postInfoNode = nil;
+    @try {
+        postInfoNode = object_getIvar(self, class_getInstanceVariable(object_getClass(self), "postInfoNode"));
+    } @catch (__unused NSException *e) {}
+
+    id percentageNode = nil;
+    if (postInfoNode) {
+        @try {
+            percentageNode = object_getIvar(postInfoNode,
+                class_getInstanceVariable(object_getClass(postInfoNode), "percentageLikedButtonNode"));
+        } @catch (__unused NSException *e) {}
+    }
+
+    if (percentageNode) {
+        ApolloLog(@"[AuthorInsights][probe] percentage node label BEFORE = %@",
+                [percentageNode accessibilityLabel]);
+
+        [percentageNode setAccessibilityLabel:@"TEST PERCENTAGE"];
+
+        ApolloLog(@"[AuthorInsights][probe] percentage node label AFTER = %@",
+                [percentageNode accessibilityLabel]);
+    }
+    //End debug
+
         if (!insightNode) return originalSpec;
 
         id rebuilt =
