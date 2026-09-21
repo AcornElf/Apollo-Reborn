@@ -2,8 +2,8 @@
 //  ApolloAuthorInsights.xm
 //  Apollo-Reborn
 //
-//  Prototype: inserts a fake author-insights row into the CommentsHeaderCellNode
-//  layout, immediately after Apollo's existing PostInfoNode.
+//  Prototype: inserts a fake author-insights row into the
+//  CommentsHeaderCellNode layout, immediately after PostInfoNode.
 //
 
 #import <Foundation/Foundation.h>
@@ -18,7 +18,9 @@
 static const void *kApolloAuthorInsightsNodeKey = &kApolloAuthorInsightsNodeKey;
 
 static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
-    ASTextNode *node = objc_getAssociatedObject(headerNode, kApolloAuthorInsightsNodeKey);
+    ASTextNode *node =
+        objc_getAssociatedObject(headerNode, kApolloAuthorInsightsNodeKey);
+
     if (node) return node;
 
     node = [ASTextNode new];
@@ -26,25 +28,61 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
     node.maximumNumberOfLines = 1;
 
     node.attributedText =
-        [[NSAttributedString alloc] initWithString:@"96% upvoted · 96 ↑ 4 ↓ · 96:4"
-                                         attributes:@{
-        NSFontAttributeName: [UIFont systemFontOfSize:12.0],
-        NSForegro        NSForegro       UIColor whiteColor]
-    }];
+        [[NSAttributedString alloc]
+            initWithString:@"96% upvoted · 96 ↑ 4 ↓ · 96:4"
+                attributes:@{
+                    NSFontAttributeName:
+                        [UIFont systemFontOfSize:12.0],
+                    NSForegroundColorAttributeName:
+                        [UIColor whiteColor]
+                }];
 
     node.backgroundColor = [UIColor systemRedColor];
     node.cornerRadius = 4.0;
 
     objc_setAssociatedObject(headerNode,
                              kApolloAuthorInsightsNodeKey,
-                                                                                       _NO                      pla                             :node];
+                             node,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    return node    return node    return node    return node    return node    rlloAuthorInsightsRebuildStack(
+    [(ASDisplayNode *)headerNode addSubnode:node];
+
+    return node;
+}
+
+#pragma mark - Layout helpers
+
+static ASStackLayoutSpec *ApolloAuthorInsightsRebuildStack(
     ASStackLayoutSpec *stack,
     NSArray *children
-))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))et)))))))))))))))))))))))))utS)))))))))))))))))))))))))))ck)))))))))))))))))))))))))))))))))))sta))))))))))))))))))))))))))))))                        spacing:))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))                                    alignItems:stack.alignI)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))re)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))gnContent = stack.alignContent;
-    rebuilt.lineSpacing = stack.    rebuilt.lineSpacing = sbui    rebuilt.lineSpacing = stack.    reoAuthorInsightsInsertAfterPostInfo(
-    ASStackLayoutSpec *sta    ASStackLayoutSpec *sta    ASStackLayoutSpec *sta    ASStackLayoutSpec *sta    ASStackLayoutSpec *sta    ASStackLayoutSpec *sta    ASStackLayoutSpeOfClass:stackClass] || depth > 6) {
+) {
+    Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
+    if (!stackClass) return nil;
+
+    ASStackLayoutSpec *rebuilt =
+        [stackClass stackLayoutSpecWithDirection:stack.direction
+                                         spacing:stack.spacing
+                                  justifyContent:stack.justifyContent
+                                      alignItems:stack.alignItems
+                                        children:children];
+
+    rebuilt.flexWrap = stack.flexWrap;
+    rebuilt.alignContent = stack.alignContent;
+    rebuilt.lineSpacing = stack.lineSpacing;
+
+    return rebuilt;
+}
+
+static ASStackLayoutSpec *ApolloAuthorInsightsInsertAfterPostInfo(
+    ASStackLayoutSpec *stack,
+    id insightNode,
+    NSUInteger depth
+) {
+    Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
+
+    if (!stackClass ||
+        ![stack isKindOfClass:stackClass] ||
+        depth > 6) {
         return nil;
     }
 
@@ -52,7 +90,6 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
 
     for (NSUInteger i = 0; i < children.count; i++) {
         id child = children[i];
-
         NSString *className = NSStringFromClass([child class]);
 
         if ([className isEqualToString:@"Apollo.PostInfoNode"] ||
@@ -65,11 +102,11 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
                       (unsigned long)depth,
                       (unsigned long)i);
 
-            return ApolloAuthorInsightsRebuildStack(stack, rebuiltChildren);
+            return ApolloAuthorInsightsRebuildStack(stack,
+                                                     rebuiltChildren);
         }
     }
 
-    // The PostInfoNode may be inside a nested stack.
     for (NSUInteger i = 0; i < children.count; i++) {
         id child = children[i];
 
@@ -78,15 +115,27 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
                 ApolloAuthorInsightsInsertAfterPostInfo(
                     (ASStackLayoutSpec *)child,
                     insightNode,
-                    depth + 1
-                                                                      leArray *rebuiltChildren = [children mutableCopy];
+                    depth + 1);
+
+            if (rebuilt) {
+                NSMutableArray *rebuiltChildren = [children mutableCopy];
                 rebuiltChildren[i] = rebuilt;
-                return ApolloAuthorInsightsRe                return ApolloAutn);
+
+                return ApolloAuthorInsightsRebuildStack(
+                    stack,
+                    rebuiltChildren);
             }
         }
     }
 
-                                                                       c, id insightNode, NSUInteger depth) {
+    return nil;
+}
+
+static id ApolloAuthorInsightsPlaceInSpec(
+    id rootSpec,
+    id insightNode,
+    NSUInteger depth
+) {
     if (!rootSpec || !insightNode || depth > 6) return nil;
 
     Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
@@ -96,8 +145,7 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
         return ApolloAuthorInsightsInsertAfterPostInfo(
             (ASStackLayoutSpec *)rootSpec,
             insightNode,
-            0
-        );
+            0);
     }
 
     if (insetClass && [rootSpec isKindOfClass:insetClass]) {
@@ -121,7 +169,13 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
 
 %hook _TtC6Apollo22CommentsHeaderCellNode
 
-- (id)layoutSpecThatFits:(- (id)layoutSpecThatFits:(- (id)layoutSpecThatFits:(- (idigin- (id)layoutSpecThatFits:(- (id)layoutSpecThatFits:(- (id)lay ApolloAuthorInsightsEnsureNode((id)self);
+- (id)layoutSpecThatFits:(struct ApolloTextureSizeRange)constrainedSize {
+    id originalSpec = %orig;
+
+    @try {
+        ASTextNode *insightNode =
+            ApolloAuthorInsightsEnsureNode((id)self);
+
         if (!insightNode) return originalSpec;
 
         id rebuilt =
@@ -131,7 +185,9 @@ static ASTextNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
 
         if (rebuilt) return rebuilt;
 
-        ApolloLog(@"[AuthorInsights][layout] PostInfoNode not found; leaving original layout unchan        ApolloLog(@"[Autnused id e) {
+        ApolloLog(@"[AuthorInsights][layout] PostInfoNode not found; leaving original layout unchanged");
+    }
+    @catch (__unused id e) {
     }
 
     return originalSpec;
