@@ -44,6 +44,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloFoundationModels.swift \
     $(SRC_DIR)/ApolloAISummary.xm \
     $(SRC_DIR)/ApolloAICloudBridge.m \
+    $(SRC_DIR)/ApolloAuthorInsights.xm \
     $(SRC_DIR)/ApolloAutoHideMetaFeeds.xm \
     $(SRC_DIR)/ApolloDevvitPosts.xm \
     $(SRC_DIR)/ApolloWhatsNew.xm \
