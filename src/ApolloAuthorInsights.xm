@@ -15,11 +15,16 @@
 #import "ApolloAccountCredentials.h"
 #import "Tweak.h"
 
+@interface RDKLink (ApolloAuthorInsightsAccessor)
+@property (nonatomic, readonly) double upvoteRatio;
+@end
+
 #pragma mark - Node
 
 static const void *kApolloAuthorInsightsNodeKey = &kApolloAuthorInsightsNodeKey;
 
-static ASDisplayNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
+static ASDisplayNode *ApolloAuthorInsightsEnsureNode(id headerNode,
+                                                     NSString *text) {
     ASDisplayNode *node =
         objc_getAssociatedObject(headerNode, kApolloAuthorInsightsNodeKey);
 
@@ -40,7 +45,7 @@ static ASDisplayNode *ApolloAuthorInsightsEnsureNode(id headerNode) {
     textNode.maximumNumberOfLines = 1;
     textNode.attributedText =
         [[NSAttributedString alloc]
-            initWithString:@"96% upvoted · 96 ↑ 4 ↓ · 96:4"
+            initWithString:text
                 attributes:@{
                     NSFontAttributeName:
                         [UIFont systemFontOfSize:12.0],
@@ -184,6 +189,18 @@ static id ApolloAuthorInsightsPlaceInSpec(
         RDKLink *link = MSHookIvar<RDKLink *>(self, "link");
         NSString *activeUsername = ApolloActiveAccountUsername();
 
+        long long score = link.score;
+        double upvoteRatio = link.upvoteRatio;
+
+        long long upvotes = 0;
+        long long downvotes = 0;
+
+        BOOL hasVoteCounts =
+            ApolloApproximateVoteCounts(score,
+                                        upvoteRatio * 100.0,
+                                        &upvotes,
+                                        &downvotes);
+
         if (link.author.length == 0 || activeUsername.length == 0) {
             return originalSpec;
         }
@@ -192,8 +209,27 @@ static id ApolloAuthorInsightsPlaceInSpec(
             return originalSpec;
         }
 
-        ASDisplayNode *insightNode =
-            ApolloAuthorInsightsEnsureNode((id)self);
+        NSString *percentText =
+        [NSString stringWithFormat:@"%.0f%%", upvoteRatio * 100.0];
+
+    NSString *insightText;
+
+    if (hasVoteCounts) {
+        insightText =
+            [NSString stringWithFormat:@"%@ upvoted · ↑ %lld ↓ %lld · %.0f:%.0f",
+                                    percentText,
+                                    upvotes,
+                                    downvotes,
+                                    upvoteRatio * 100.0,
+                                    (1.0 - upvoteRatio) * 100.0];
+    } else {
+        insightText =
+            [NSString stringWithFormat:@"%@ upvoted",
+                                    percentText];
+    }
+
+    ASDisplayNode *insightNode =
+        ApolloAuthorInsightsEnsureNode((id)self, insightText);
 
         if (!insightNode) return originalSpec;
 

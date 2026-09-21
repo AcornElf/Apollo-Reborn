@@ -225,7 +225,7 @@ static NSString *ApolloRelativeAgoString(NSDate *date) {
 // rather than any extra precision in the model so the calculation agrees with the
 // value the user tapped. Returns NO when only the normal percentage detail should
 // be shown.
-static BOOL ApolloApproximateVoteCounts(long long score, double displayedPercent,
+BOOL ApolloApproximateVoteCounts(long long score, double displayedPercent,
                                         long long *outUpvotes, long long *outDownvotes) {
     if (displayedPercent < 60 || displayedPercent > 100 || score <= 0) return NO;
 

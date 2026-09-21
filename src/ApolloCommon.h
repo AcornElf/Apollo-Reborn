@@ -272,4 +272,13 @@ NSString *ApolloDebugPoisonAccountAccessibility(void);
 // marked objects — otherwise tweak UI can be mistaken for the post body.
 void ApolloMarkTweakUITextNode(id node);
 BOOL ApolloTextNodeIsTweakUI(id node);
+
+// Reconstruct approximate upvote/downvote counts from Reddit's fuzzed score
+// and whole-number upvote percentage. Used by the Info Row and Author Insights.
+// Returns NO when the percentage/score cannot produce a meaningful estimate.
+BOOL ApolloApproximateVoteCounts(long long score,
+                                 double displayedPercent,
+                                 long long *outUpvotes,
+                                 long long *outDownvotes);
+
 __END_DECLS
