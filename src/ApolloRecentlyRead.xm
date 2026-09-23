@@ -932,10 +932,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     // Reload when either text size or the Recently Read layout preferences changed.
     } else if (textSizeChanged || layoutPreferencesChanged) {
         [self.tableView reloadData];
-
-        // Recalculate self-sizing row heights after layout-affecting changes.
-        [self.tableView beginUpdates];
-        [self.tableView endUpdates];
+        [self.tableView setNeedsLayout];
+        [self.tableView layoutIfNeeded];
     } else {
         // Returning to the screen (a nav pop runs the top VC's
         // viewWillDisappear first, so a just-left post is already marked):
@@ -1729,14 +1727,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         byLabel.tag = kSubFooterByTag;
         byLabel.text = @" by ";
         byLabel.textColor = metaColor;
-        UIFont *byFont = RRSubheadlineFont(self);
-
-        byLabel.attributedText =
-            [[NSAttributedString alloc] initWithString:byLabel.text ?: @""
-                                            attributes:@{
-                NSFontAttributeName: byFont,
-                NSForegroundColorAttributeName: metaColor,
-            }];
+        byLabel.font = RRSubheadlineFont(self);
         [byLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
         UIButton *authorFooterBtn = [UIButton buttonWithType:UIButtonTypeCustom];
