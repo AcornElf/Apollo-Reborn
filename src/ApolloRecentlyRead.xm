@@ -916,14 +916,18 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
 
     self.lastTextSizeCategory = textSizeCategory;
 
-    // Detect changes to the two Recently Read layout preferences.
-    BOOL layoutPreferencesChanged = self.hasCachedLayoutPreferences &&
-        (self.lastShowSubredditAtTop != sShowSubredditAtTop ||
-        self.lastAlwaysShowUsernames != sAlwaysShowUsernames);
+    // Detect changes to Apollo's shared post display preferences.
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL showSubredditAtTop = [defaults boolForKey:@"ShowSubredditAtTop"];
+    BOOL alwaysShowUsernames = [defaults boolForKey:@"AlwaysShowUsernames"];
 
-    // Cache the current layout preferences for the next appearance.
-    self.lastShowSubredditAtTop = sShowSubredditAtTop;
-    self.lastAlwaysShowUsernames = sAlwaysShowUsernames;
+    BOOL layoutPreferencesChanged = self.hasCachedLayoutPreferences &&
+        (self.lastShowSubredditAtTop != showSubredditAtTop ||
+        self.lastAlwaysShowUsernames != alwaysShowUsernames);
+
+    // Cache the current values for the next appearance.
+    self.lastShowSubredditAtTop = showSubredditAtTop;
+    self.lastAlwaysShowUsernames = alwaysShowUsernames;
     self.hasCachedLayoutPreferences = YES;
 
     if (!self.hasLoadedOnce) {
@@ -1834,10 +1838,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         objc_setAssociatedObject(cell, &kStackLeadingNoThumbConstraintKey, stackLeadingNoThumb, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // Read the shared Recently Read display preferences.
+    // Read Apollo's shared post display preferences.
     RDKLink *link = self.activePosts[indexPath.row];
-    BOOL subAtTop = sShowSubredditAtTop;
-    BOOL showUsernames = sAlwaysShowUsernames;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL subAtTop = [defaults boolForKey:@"ShowSubredditAtTop"];
+    BOOL showUsernames = [defaults boolForKey:@"AlwaysShowUsernames"];
 
     UIStackView *stack = (UIStackView *)[cell.contentView viewWithTag:kStackTag];
     UIButton *subHeaderBtn = (UIButton *)[cell.contentView viewWithTag:kSubHeaderTag];
@@ -1848,16 +1853,35 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     UIButton *authorFooterBtn = (UIButton *)[cell.contentView viewWithTag:kSubFooterAuthorTag];
     UIButton *authorTopBtn = (UIButton *)[cell.contentView viewWithTag:kAuthorTopTag];
     UILabel *statsLabel = [cell.contentView viewWithTag:kBottomTag];
+    UIView *sep = [cell.contentView viewWithTag:kSepTag];
 
     // Explicit refresh on reuse.
     UIFont *mediumFont = RRMediumSubheadlineFont(self);
     UIColor *metaColor = RecentlyReadMetaColor();
+    UIColor *separatorColor = ApolloThemeSeparatorColor();
+    sep.backgroundColor = separatorColor ?: [UIColor separatorColor];
+    UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
+
     titleLabel.font = RRBodyFont(self);
     subHeaderBtn.titleLabel.font = RRCalloutFont(self);
     subredditFooterBtn.titleLabel.font = mediumFont;
     byLabel.font = RRSubheadlineFont(self);
     authorFooterBtn.titleLabel.font = mediumFont;
     authorTopBtn.titleLabel.font = mediumFont;
+
+    [subHeaderBtn setTitleColor:metaColor forState:UIControlStateNormal];
+    [subHeaderBtn setTitleColor:metaHighlight forState:UIControlStateHighlighted];
+
+    [subredditFooterBtn setTitleColor:metaColor forState:UIControlStateNormal];
+    [subredditFooterBtn setTitleColor:metaHighlight forState:UIControlStateHighlighted];
+
+    byLabel.textColor = metaColor;
+
+    [authorFooterBtn setTitleColor:metaColor forState:UIControlStateNormal];
+    [authorFooterBtn setTitleColor:metaHighlight forState:UIControlStateHighlighted];
+
+    [authorTopBtn setTitleColor:metaColor forState:UIControlStateNormal];
+    [authorTopBtn setTitleColor:metaHighlight forState:UIControlStateHighlighted];
     // Keep the metadata → info spacing in sync with the current Text Size
     // for both the normal footer and the Subreddit-at-Top layout.
     [stack setCustomSpacing:RRMetadataInfoSpacing(self)

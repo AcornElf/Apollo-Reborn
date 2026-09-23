@@ -3723,8 +3723,6 @@ static BOOL ApolloDefaultsKeyChangesNativeFavorites(NSString *key) {
                                     UDKeyEnableFlairColors: @NO,
                                     UDKeyBoldPostTitles: @NO,
                                     UDKeyShowRecentlyReadThumbnails: @YES,
-                                    UDKeyShowSubredditAtTop: @NO,
-                                    UDKeyAlwaysShowUsernames: @NO,
                                     UDKeyFeedTextPostThumbnails: @YES,
                                     UDKeyFeedGalleryCarousel: @YES,
                                     UDKeyFeedGalleryEdgeSwipeNav: @NO,
@@ -3873,8 +3871,6 @@ static BOOL ApolloDefaultsKeyChangesNativeFavorites(NSString *key) {
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:UDKeyPassiveDeletedComments];
     }
     sShowRecentlyReadThumbnails = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowRecentlyReadThumbnails];
-    sShowSubredditAtTop = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowSubredditAtTop];
-    sAlwaysShowUsernames = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyAlwaysShowUsernames];
     sFeedTextPostThumbnails = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedTextPostThumbnails];
     sFeedGalleryCarousel = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedGalleryCarousel];
     sFeedGalleryEdgeSwipeNav = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedGalleryEdgeSwipeNav];

@@ -1658,21 +1658,6 @@ typedef NS_ENUM(NSInteger, Tag) {
                                       isOn:^BOOL { return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowRecentlyReadThumbnails]; }
                                   onToggle:^(UISwitch *sender) { [weakSelf showRecentlyReadThumbnailsSwitchToggled:sender]; }];
 
-    // Add the Show Subreddit at Top setting using the same pattern as the existing Recently Read toggle.
-    ApolloSettingsRow *showSubredditAtTop =
-            [ApolloSettingsRow switchRowWithID:@"gen.showSubredditAtTop"
-                                        title:@"Show Subreddit at Top"
-                                        // Read the shared Recently Read subreddit-position setting.
-                                        isOn:^BOOL { return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowSubredditAtTop]; }
-                                    onToggle:^(UISwitch *sender) { [weakSelf showSubredditAtTopSwitchToggled:sender]; }];
-
-    // Add the Always Show Usernames setting.
-    ApolloSettingsRow *alwaysShowUsernames =
-            [ApolloSettingsRow switchRowWithID:@"gen.alwaysShowUsernames"
-                                        title:@"Show Usernames"
-                                        isOn:^BOOL { return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyAlwaysShowUsernames]; }
-                                    onToggle:^(UISwitch *sender) { [weakSelf alwaysShowUsernamesSwitchToggled:sender]; }];
-
     ApolloSettingsRow *readPostMax =
         [ApolloSettingsRow customRowWithID:@"gen.readPostMax"
                                       cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
@@ -1695,7 +1680,7 @@ typedef NS_ENUM(NSInteger, Tag) {
 
     return [ApolloSettingsSection sectionWithTitle:@"Recently Read"
                                             footer:@"Choose how posts appear in Recently Read and how many Apollo remembers."
-                                            rows:@[ readThumbnails, showSubredditAtTop, alwaysShowUsernames, readPostMax, filterNSFWRR ]];
+                                            rows:@[ readThumbnails, readPostMax, filterNSFWRR ]];
 }
 
 // The "Open in App" screen now lives in native General → Open Links — see
@@ -4164,16 +4149,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 - (void)showRecentlyReadThumbnailsSwitchToggled:(UISwitch *)sender {
     sShowRecentlyReadThumbnails = sender.isOn;
     [[NSUserDefaults standardUserDefaults] setBool:sShowRecentlyReadThumbnails forKey:UDKeyShowRecentlyReadThumbnails];
-}
-
-- (void)showSubredditAtTopSwitchToggled:(UISwitch *)sender {
-    sShowSubredditAtTop = sender.isOn;
-    [[NSUserDefaults standardUserDefaults] setBool:sShowSubredditAtTop forKey:UDKeyShowSubredditAtTop];
-}
-
-- (void)alwaysShowUsernamesSwitchToggled:(UISwitch *)sender {
-    sAlwaysShowUsernames = sender.isOn;
-    [[NSUserDefaults standardUserDefaults] setBool:sAlwaysShowUsernames forKey:UDKeyAlwaysShowUsernames];
 }
 
 - (void)collapsePinnedCommentsSwitchToggled:(UISwitch *)sender {
