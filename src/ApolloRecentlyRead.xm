@@ -1809,8 +1809,18 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
+        // Match Apollo's native separator in light mode; preserve existing dark-theme behaviour.
         UIColor *separatorColor = ApolloThemeSeparatorColor();
-        sep.backgroundColor = separatorColor ?: [UIColor separatorColor];
+        sep.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+            if (traits.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                return [separatorColor resolvedColorWithTraitCollection:traits];
+            }
+
+            return [UIColor colorWithRed:(199.0 / 255.0)
+                                green:(199.0 / 255.0)
+                                    blue:(204.0 / 255.0)
+                                alpha:1.0];
+        }];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
 
@@ -1831,7 +1841,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
             [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
             [sep.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
-            [sep.heightAnchor constraintEqualToConstant:(2.0 / UIScreen.mainScreen.scale)]
+            [sep.heightAnchor constraintEqualToConstant:(1.0 / UIScreen.mainScreen.scale)]
         ]];
 
         objc_setAssociatedObject(cell, &kThumbWidthConstraintKey, thumbWidth, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1915,30 +1925,23 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         if (showUsernames && link.author.length > 0) {
             authorTopBtn.hidden = NO;
-            // Keep "by " regular while the username uses the medium metadata font.
+            // Show only the username when the author appears beneath the top subreddit.
             UIFont *authorTopFont = RRMediumSubheadlineFont(self);
-            UIFont *byFont = RRSubheadlineFont(self);
 
-            NSString *authorTopText = [NSString stringWithFormat:@"by %@", link.author];
-
-            NSMutableAttributedString *authorTopTitle =
-                [[NSMutableAttributedString alloc] initWithString:authorTopText
-                                                    attributes:@{
+            NSAttributedString *authorTopTitle =
+                [[NSAttributedString alloc] initWithString:link.author
+                                                attributes:@{
                     NSFontAttributeName: authorTopFont,
                     NSForegroundColorAttributeName: metaColor,
                 }];
 
-            [authorTopTitle addAttribute:NSFontAttributeName
-                                value:byFont
-                                range:NSMakeRange(0, 3)];
-
             [authorTopBtn setAttributedTitle:authorTopTitle
                                     forState:UIControlStateNormal];
             objc_setAssociatedObject(authorTopBtn, &kNavPathKey, authorPath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        } else {
-            authorTopBtn.hidden = YES;
-        }
-    } else {
+            } else {
+                authorTopBtn.hidden = YES;
+            }
+            } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
         // Use the named title → metadata spacing.
         [stack setCustomSpacing:RRTitleMetadataSpacing(self)
