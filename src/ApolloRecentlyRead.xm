@@ -797,10 +797,14 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     }];
 }
 
-// Resolve the cell background from the active custom or stock Apollo theme.
+/// Custom themes provide their own card background. For stock themes, keep
+// UIKit's system background so Apollo's native light/dark appearance is preserved.
 static UIColor *RecentlyReadCellBackgroundColor(void) {
-    UIColor *color = ApolloThemeCardBackgroundColor();
-    return color ?: [UIColor systemBackgroundColor];
+    if (ApolloThemeRuntimeIsActive()) {
+        return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryBackground);
+    }
+
+    return [UIColor systemBackgroundColor];
 }
 
 // Flair text color
@@ -840,10 +844,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        // Resolve the flair badge background from the active custom or stock Apollo theme.
-        UIColor *badgeBackgroundColor = ApolloThemePageBackgroundColor();
-        if (!badgeBackgroundColor) {
-            BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+        // Custom themes use the page/background token for flair badges. For stock
+        // themes, use UIKit's grouped backgrounds to match the native light/dark appearance.
+        UIColor *badgeBackgroundColor;
+
+        BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+
+        if (ApolloThemeRuntimeIsActive()) {
+            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenBackground);
+        } else {
             badgeBackgroundColor = darkMode
                 ? [UIColor secondarySystemBackgroundColor]
                 : [UIColor systemGroupedBackgroundColor];
@@ -1921,9 +1930,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     if (subAtTop) {
         [stack setCustomSpacing:kRecentlyReadExpandedTopGap afterView:subHeaderBtn];
-    // Use the named title → metadata spacing.
-    [stack setCustomSpacing:RRTitleMetadataSpacing(self)
-                afterView:titleLabel];
+        // Use the named title → metadata spacing.
+        [stack setCustomSpacing:RRTitleMetadataSpacing(self)
+                    afterView:titleLabel];
         // Subreddit above title
         subHeaderBtn.hidden = NO;
         subHeaderBtn.titleLabel.font = RRCalloutFont(self);
@@ -1950,7 +1959,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             } else {
                 authorTopBtn.hidden = YES;
             }
-            } else {
+        } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
         // Use the named title → metadata spacing.
         [stack setCustomSpacing:RRTitleMetadataSpacing(self)
