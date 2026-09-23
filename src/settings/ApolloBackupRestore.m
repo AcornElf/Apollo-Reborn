@@ -363,6 +363,8 @@ BOOL ApolloBackupRestoreRestoreFromZipURL(NSURL *zipURL, NSString **outErrorTitl
         [defaults setBool:NO forKey:UDKeyApolloRememberSubredditCommentsSort];
     }
     sShowRecentlyReadThumbnails = [defaults boolForKey:UDKeyShowRecentlyReadThumbnails];
+    sShowSubredditAtTop = [defaults boolForKey:UDKeyShowSubredditAtTop];
+    sAlwaysShowUsernames = [defaults boolForKey:UDKeyAlwaysShowUsernames];
     sEnableFlairColors = [defaults boolForKey:UDKeyEnableFlairColors];
     sPreferredGIFFallbackFormat = ([defaults integerForKey:UDKeyPreferredGIFFallbackFormat] == 0) ? 0 : 1;
     sUnmuteCommentsVideos = [defaults integerForKey:UDKeyUnmuteCommentsVideos];

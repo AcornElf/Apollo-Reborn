@@ -108,8 +108,11 @@ static NSString *const UDKeyEnableFlairColors = @"EnableFlairColors";
 // Titles; default NO. See ApolloBoldPostTitles.xm.
 static NSString *const UDKeyBoldPostTitles = @"BoldPostTitles";
 static NSString *const ApolloFlairColorsChangedNotification = @"ApolloFlairColorsChangedNotification";
+//Recently Read
 static NSString *const UDKeyReadPostMaxCount = @"ReadPostMaxCount";
 static NSString *const UDKeyShowRecentlyReadThumbnails = @"ShowRecentlyReadThumbnails";
+static NSString *const UDKeyShowSubredditAtTop = @"ShowSubredditAtTop";
+static NSString *const UDKeyAlwaysShowUsernames = @"AlwaysShowUsernames";
 static NSString *const UDKeyPreferredGIFFallbackFormat = @"PreferredGIFFallbackFormat";
 static NSString *const UDKeyUnmuteCommentsVideos = @"UnmuteCommentsVideos";
 // "Unmute Videos in Feed": how feed videos behave when they autoplay while

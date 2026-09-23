@@ -37,6 +37,8 @@ extern BOOL sShowDeletedComments;
 extern BOOL sTapToRevealDeletedComments;
 extern BOOL sPassiveDeletedComments;
 extern BOOL sShowRecentlyReadThumbnails;
+extern BOOL sShowSubredditAtTop;
+extern BOOL sAlwaysShowUsernames;
 extern BOOL sFeedTextPostThumbnails;
 // Default-on large-feed carousel for Reddit-native multi-image galleries.
 extern BOOL sFeedGalleryCarousel;
