@@ -797,15 +797,10 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     }];
 }
 
-// Cell background colors
+// Resolve the cell background from the active custom or stock Apollo theme.
 static UIColor *RecentlyReadCellBackgroundColor(void) {
-    ApolloThemeToken token = ApolloThemeTokenSecondaryBackground;
-
-    if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeRuntimeColor(token);
-    }
-
-    return [UIColor systemBackgroundColor];
+    UIColor *color = ApolloThemeCardBackgroundColor();
+    return color ?: [UIColor systemBackgroundColor];
 }
 
 // Flair text color
@@ -845,19 +840,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
             [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                       cornerRadius:cornerRadius];
 
-        UIColor *badgeBackgroundColor;
-
-        // Resolve appearance from the trait environment of the displaying cell.
-        BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-
-        // Resolve the flair badge background from the custom theme or UIKit defaults.
-        if (ApolloThemeRuntimeIsActive()) {
-            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenBackground);
-        } else {
+        // Resolve the flair badge background from the active custom or stock Apollo theme.
+        UIColor *badgeBackgroundColor = ApolloThemePageBackgroundColor();
+        if (!badgeBackgroundColor) {
+            BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
             badgeBackgroundColor = darkMode
                 ? [UIColor secondarySystemBackgroundColor]
                 : [UIColor systemGroupedBackgroundColor];
         }
+
         [badgeBackgroundColor setFill];
         [path fill];
 
@@ -941,6 +932,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     // Reload when either text size or the Recently Read layout preferences changed.
     } else if (textSizeChanged || layoutPreferencesChanged) {
         [self.tableView reloadData];
+
+        // Recalculate self-sizing row heights after layout-affecting changes.
+        [self.tableView beginUpdates];
+        [self.tableView endUpdates];
     } else {
         // Returning to the screen (a nav pop runs the top VC's
         // viewWillDisappear first, so a just-left post is already marked):
@@ -1467,6 +1462,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     }
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+
+    if (previousTraitCollection &&
+        previousTraitCollection.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
+        [self apollo_applyTheme];
+    }
+}
+
 - (void)_navigateToAssociatedPath:(UIButton *)sender {
     NSString *path = objc_getAssociatedObject(sender, &kNavPathKey);
     if (!path.length) return;
@@ -1809,18 +1813,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
         UIView *sep = [[UIView alloc] init];
         sep.tag = kSepTag;
-        // Match Apollo's native separator in light mode; preserve existing dark-theme behaviour.
         UIColor *separatorColor = ApolloThemeSeparatorColor();
-        sep.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-            if (traits.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                return [separatorColor resolvedColorWithTraitCollection:traits];
-            }
-
-            return [UIColor colorWithRed:(199.0 / 255.0)
-                                green:(199.0 / 255.0)
-                                    blue:(204.0 / 255.0)
-                                alpha:1.0];
-        }];
+        sep.backgroundColor = separatorColor ?: [UIColor separatorColor];
         sep.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:sep];
 
