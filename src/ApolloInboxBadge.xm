@@ -13,6 +13,7 @@ static NSHashTable<UITabBarController *> *sInboxBadgeControllers;
 @property (nonatomic, strong) CALayer *originalMask;
 @property (nonatomic, strong) CAShapeLayer *dotMask;
 @property (nonatomic, strong) NSMapTable<UILabel *, NSNumber *> *labelVisibility;
+@property (nonatomic) CATransform3D originalTransform;
 @end
 @implementation ApolloInboxBadgeDotState
 @end
@@ -33,6 +34,7 @@ static void ApolloInboxBadgeSetDot(UIView *badge, BOOL dot) {
     if (!dot) {
         if (!state) return;
         if (badge.layer.mask == state.dotMask) badge.layer.mask = state.originalMask;
+        badge.layer.transform = state.originalTransform;
         for (UILabel *label in state.labelVisibility) {
             label.hidden = [[state.labelVisibility objectForKey:label] boolValue];
         }
@@ -43,6 +45,7 @@ static void ApolloInboxBadgeSetDot(UIView *badge, BOOL dot) {
     if (!state) {
         state = [ApolloInboxBadgeDotState new];
         state.originalMask = badge.layer.mask;
+        state.originalTransform = badge.layer.transform;
         state.dotMask = [CAShapeLayer layer];
         state.dotMask.fillColor = UIColor.blackColor.CGColor;
         state.labelVisibility = [NSMapTable weakToStrongObjectsMapTable];
@@ -62,16 +65,16 @@ static void ApolloInboxBadgeSetDot(UIView *badge, BOOL dot) {
     // the current count's natural geometry through count changes and rotation.
     // Neither badgeValue nor the badge's own hidden/alpha state is changed.
     CGRect bounds = badge.bounds;
-    // Figma placement adjustment: move the dot 12pt left and 13pt down from
-    // UIKit's native badge center while keeping the badge view itself intact.
-    CGPoint center = CGPointMake(CGRectGetMidX(bounds) - 12.0,
-                                  CGRectGetMidY(bounds) + 13.0);
-    CGRect circle = CGRectMake(center.x - 4.0, center.y - 4.0, 8.0, 8.0);
+    // Keep the mask inside the badge bounds. The placement adjustment is
+    // applied to the badge transform below so the mask cannot clip away.
+    CGRect circle = CGRectMake(CGRectGetMidX(bounds) - 4.0,
+                               CGRectGetMidY(bounds) - 4.0, 8.0, 8.0);
     CGPathRef path = [UIBezierPath bezierPathWithOvalInRect:circle].CGPath;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     if (!state.dotMask.path || !CGPathEqualToPath(state.dotMask.path, path)) state.dotMask.path = path;
     if (badge.layer.mask != state.dotMask) badge.layer.mask = state.dotMask;
+    badge.layer.transform = CATransform3DTranslate(state.originalTransform, -12.0, 13.0, 0.0);
     [CATransaction commit];
 }
 
