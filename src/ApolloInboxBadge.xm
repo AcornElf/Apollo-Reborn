@@ -100,7 +100,9 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     for (UIView *badge in badges) ApolloInboxBadgeSetDot(badge, dot);
 }
 
-%hook ApolloTabBarController
+// ApolloTabBarController is Swift, so its runtime name is the mangled class
+// name below. Hooking the unmangled spelling silently matches nothing.
+%hook _TtC6Apollo22ApolloTabBarController
 
 - (void)viewDidLoad {
     %orig;
