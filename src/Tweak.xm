@@ -3762,6 +3762,8 @@ static BOOL ApolloDefaultsKeyChangesNativeFavorites(NSString *key) {
                                     UDKeyShowUserAvatars: @NO,
                                     UDKeyUseProfileAvatarTabIcon: @NO,
                                     UDKeyHideTabBarTitles: @NO,
+                                    UDKeyInboxBadgeShowUnreadCount: @YES,
+                                    UDKeyInboxBadgeUseThemeAccent: @NO,
                                     UDKeyShowDetailedProfiles: @YES,
                                     UDKeyBadgeBookEnabled: @YES,
                                     UDKeyProfileHeaderImmersive: @YES,
