@@ -61,12 +61,14 @@ static void ApolloInboxBadgeSetCustomDot(UIView *button,
 
     CGRect iconFrame = [button convertRect:icon.bounds fromView:icon];
 
-    dot.frame = CGRectMake(CGRectGetMaxX(iconFrame) - 2.0,
-                           CGRectGetMinY(iconFrame) + 2.0,
+    // Move 6pt left and 18pt up from the previous icon-relative placement.
+    dot.frame = CGRectMake(CGRectGetMaxX(iconFrame) - 8.0,
+                           CGRectGetMinY(iconFrame) - 16.0,
                            8.0,
                            8.0);
     dot.backgroundColor = color;
     dot.hidden = NO;
+    [button bringSubviewToFront:dot];
 }
 
 static void ApolloInboxBadgeApply(UITabBarController *controller) {
