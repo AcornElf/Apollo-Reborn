@@ -62,7 +62,11 @@ static void ApolloInboxBadgeSetDot(UIView *badge, BOOL dot) {
     // the current count's natural geometry through count changes and rotation.
     // Neither badgeValue nor the badge's own hidden/alpha state is changed.
     CGRect bounds = badge.bounds;
-    CGRect circle = CGRectMake(CGRectGetMidX(bounds) - 4.0, CGRectGetMidY(bounds) - 4.0, 8.0, 8.0);
+    // Figma placement adjustment: move the dot 12pt left and 13pt down from
+    // UIKit's native badge center while keeping the badge view itself intact.
+    CGPoint center = CGPointMake(CGRectGetMidX(bounds) - 12.0,
+                                  CGRectGetMidY(bounds) + 13.0);
+    CGRect circle = CGRectMake(center.x - 4.0, center.y - 4.0, 8.0, 8.0);
     CGPathRef path = [UIBezierPath bezierPathWithOvalInRect:circle].CGPath;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -97,7 +101,14 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     NSMutableArray<UIView *> *badges = [NSMutableArray array];
     ApolloInboxBadgeCollectViews(buttons[1], NSClassFromString(@"_UIBadgeView"), badges);
     BOOL dot = ![defaults boolForKey:UDKeyInboxBadgeShowUnreadCount];
-    for (UIView *badge in badges) ApolloInboxBadgeSetDot(badge, dot);
+    UIColor *renderedColor = color ?: [UIColor colorWithRed:1.0 green:0.231 blue:0.188 alpha:1.0];
+    for (UIView *badge in badges) {
+        // badgeColor updates the item model, but UIKit's private badge view can
+        // retain its existing red fill after Apollo lays it out. Apply the
+        // effective color to the rendered view as well.
+        badge.backgroundColor = renderedColor;
+        ApolloInboxBadgeSetDot(badge, dot);
+    }
 }
 
 // ApolloTabBarController is Swift, so its runtime name is the mangled class
