@@ -7,6 +7,7 @@
 #import "UserDefaultConstants.h"
 
 static char kInboxBadgeDotViewKey;
+static NSHashTable<UITabBarController *> *sInboxBadgeControllers;
 
 static UIImageView *ApolloInboxBadgeIconView(UIView *root) {
     UIImageView *fallback = nil;
