@@ -1466,9 +1466,40 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
         NSIndexPath *indexPath = [self.tableView indexPathForCell:cell];
         if (!indexPath) continue;
 
+        if ((NSUInteger)indexPath.row >= self.activePosts.count) continue;
         RDKLink *link = self.activePosts[indexPath.row];
         if (link) {
             [self applyTitleAppearanceToLabel:titleLabel forLink:link];
+
+            // Existing cells do not necessarily get reconfigured on a theme change.
+            // Refresh attributed metadata too: setTitleColor alone cannot replace
+            // the foreground colour stored in an attributed button title.
+            UIColor *metaColor = RecentlyReadMetaColor();
+            UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
+            cell.tintColor = metaColor;
+            for (NSNumber *tag in @[@(kSubHeaderTag), @(kSubFooterSubredditTag),
+                                    @(kSubFooterAuthorTag), @(kAuthorTopTag)]) {
+                UIButton *button = (UIButton *)[cell.contentView viewWithTag:tag.integerValue];
+                [button setTitleColor:metaColor forState:UIControlStateNormal];
+                [button setTitleColor:metaHighlight forState:UIControlStateHighlighted];
+                NSMutableAttributedString *title =
+                    [[button attributedTitleForState:UIControlStateNormal] mutableCopy];
+                if (title.length) {
+                    [title addAttribute:NSForegroundColorAttributeName
+                                  value:metaColor
+                                  range:NSMakeRange(0, title.length)];
+                    [button setAttributedTitle:title forState:UIControlStateNormal];
+                }
+            }
+            UILabel *byLabel = (UILabel *)[cell.contentView viewWithTag:kSubFooterByTag];
+            byLabel.textColor = metaColor;
+
+            // The stats icons are rendered images, so regenerate them along with
+            // their attributed text instead of just changing the label colour.
+            UILabel *statsLabel = (UILabel *)[cell.contentView viewWithTag:kBottomTag];
+            statsLabel.attributedText = [self statsAttributedStringForLink:link];
+            UIView *separator = [cell.contentView viewWithTag:kSepTag];
+            separator.backgroundColor = ApolloThemeSeparatorColor() ?: [UIColor separatorColor];
         }
     }
 }
@@ -1956,10 +1987,10 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [authorTopBtn setAttributedTitle:authorTopTitle
                                     forState:UIControlStateNormal];
             objc_setAssociatedObject(authorTopBtn, &kNavPathKey, authorPath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            } else {
-                authorTopBtn.hidden = YES;
-            }
         } else {
+            authorTopBtn.hidden = YES;
+        }
+    } else {
         [stack setCustomSpacing:kRecentlyReadDefaultTopGap afterView:subHeaderBtn];
         // Use the named title → metadata spacing.
         [stack setCustomSpacing:RRTitleMetadataSpacing(self)
