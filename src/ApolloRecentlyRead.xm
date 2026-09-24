@@ -1474,7 +1474,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
             // Existing cells do not necessarily get reconfigured on a theme change.
             // Refresh attributed metadata too: setTitleColor alone cannot replace
             // the foreground colour stored in an attributed button title.
-            UIColor *metaColor = RecentlyReadMetaColor();
+            UIColor *metaColor =
+                [RecentlyReadMetaColor() resolvedColorWithTraitCollection:cell.traitCollection];
             UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
             cell.tintColor = metaColor;
             for (NSNumber *tag in @[@(kSubHeaderTag), @(kSubFooterSubredditTag),
