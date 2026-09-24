@@ -61,9 +61,9 @@ static void ApolloInboxBadgeSetCustomDot(UIView *button,
 
     CGRect iconFrame = [button convertRect:icon.bounds fromView:icon];
 
-    // Move 6pt left and 18pt up from the previous icon-relative placement.
-    dot.frame = CGRectMake(CGRectGetMaxX(iconFrame) - 8.0,
-                           CGRectGetMinY(iconFrame) - 16.0,
+    // Keep the dot anchored to the icon as the tab layout changes.
+    dot.frame = CGRectMake(CGRectGetMaxX(iconFrame) + 4.0,
+                           CGRectGetMinY(iconFrame) + 20.0,
                            8.0,
                            8.0);
     dot.backgroundColor = color;
