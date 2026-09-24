@@ -6,76 +6,55 @@
 #import "ApolloThemeRuntime.h"
 #import "UserDefaultConstants.h"
 
-static char kInboxBadgeDotStateKey;
-static NSHashTable<UITabBarController *> *sInboxBadgeControllers;
+static char kInboxBadgeDotViewKey;
 
-@interface ApolloInboxBadgeDotState : NSObject
-@property (nonatomic, strong) CALayer *originalMask;
-@property (nonatomic, strong) CAShapeLayer *dotMask;
-@property (nonatomic, strong) NSMapTable<UILabel *, NSNumber *> *labelVisibility;
-@property (nonatomic) CATransform3D originalTransform;
-@end
-@implementation ApolloInboxBadgeDotState
-@end
+static UIImageView *ApolloInboxBadgeIconView(UIView *root) {
+    UIImageView *fallback = nil;
 
-static void ApolloInboxBadgeCollectViews(UIView *root, Class cls, NSMutableArray<UIView *> *result) {
-    if (!cls) return;
     for (UIView *view in root.subviews) {
-        if ([view isKindOfClass:cls]) {
-            [result addObject:view];
-        } else {
-            ApolloInboxBadgeCollectViews(view, cls, result);
+        if ([view isKindOfClass:UIImageView.class]) {
+            UIImageView *imageView = (UIImageView *)view;
+            if (imageView.image) return imageView;
+            fallback = imageView;
         }
+
+        UIImageView *nested = ApolloInboxBadgeIconView(view);
+        if (nested) return nested;
     }
+
+    return fallback;
 }
 
-static void ApolloInboxBadgeSetDot(UIView *badge, BOOL dot) {
-    ApolloInboxBadgeDotState *state = objc_getAssociatedObject(badge, &kInboxBadgeDotStateKey);
-    if (!dot) {
-        if (!state) return;
-        if (badge.layer.mask == state.dotMask) badge.layer.mask = state.originalMask;
-        badge.layer.transform = state.originalTransform;
-        for (UILabel *label in state.labelVisibility) {
-            label.hidden = [[state.labelVisibility objectForKey:label] boolValue];
-        }
-        objc_setAssociatedObject(badge, &kInboxBadgeDotStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+static void ApolloInboxBadgeSetCustomDot(UIView *button,
+                                         UIView *icon,
+                                         BOOL visible,
+                                         UIColor *color) {
+    UIView *dot = objc_getAssociatedObject(button, &kInboxBadgeDotViewKey);
+
+    if (!visible || !icon) {
+        dot.hidden = YES;
         return;
     }
 
-    if (!state) {
-        state = [ApolloInboxBadgeDotState new];
-        state.originalMask = badge.layer.mask;
-        state.originalTransform = badge.layer.transform;
-        state.dotMask = [CAShapeLayer layer];
-        state.dotMask.fillColor = UIColor.blackColor.CGColor;
-        state.labelVisibility = [NSMapTable weakToStrongObjectsMapTable];
-        objc_setAssociatedObject(badge, &kInboxBadgeDotStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    NSMutableArray<UIView *> *labels = [NSMutableArray array];
-    ApolloInboxBadgeCollectViews(badge, UILabel.class, labels);
-    for (UILabel *label in labels) {
-        if (![state.labelVisibility objectForKey:label]) {
-            [state.labelVisibility setObject:@(label.hidden) forKey:label];
-        }
-        if (!label.hidden) label.hidden = YES;
+    if (!dot) {
+        dot = [[UIView alloc] initWithFrame:CGRectZero];
+        dot.userInteractionEnabled = NO;
+        dot.layer.cornerRadius = 4.0;
+        objc_setAssociatedObject(button,
+                                 &kInboxBadgeDotViewKey,
+                                 dot,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [button addSubview:dot];
     }
 
-    // Crop the native fill to an 8pt circle instead of changing private UIKit
-    // frames from a layout callback. This avoids layout feedback and preserves
-    // the current count's natural geometry through count changes and rotation.
-    // Neither badgeValue nor the badge's own hidden/alpha state is changed.
-    CGRect bounds = badge.bounds;
-    // Keep the mask inside the badge bounds. The placement adjustment is
-    // applied to the badge transform below so the mask cannot clip away.
-    CGRect circle = CGRectMake(CGRectGetMidX(bounds) - 4.0,
-                               CGRectGetMidY(bounds) - 4.0, 8.0, 8.0);
-    CGPathRef path = [UIBezierPath bezierPathWithOvalInRect:circle].CGPath;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    if (!state.dotMask.path || !CGPathEqualToPath(state.dotMask.path, path)) state.dotMask.path = path;
-    if (badge.layer.mask != state.dotMask) badge.layer.mask = state.dotMask;
-    badge.layer.transform = CATransform3DTranslate(state.originalTransform, -12.0, 13.0, 0.0);
-    [CATransaction commit];
+    CGRect iconFrame = [button convertRect:icon.bounds fromView:icon];
+
+    dot.frame = CGRectMake(CGRectGetMaxX(iconFrame) - 2.0,
+                           CGRectGetMinY(iconFrame) + 2.0,
+                           8.0,
+                           8.0);
+    dot.backgroundColor = color;
+    dot.hidden = NO;
 }
 
 static void ApolloInboxBadgeApply(UITabBarController *controller) {
@@ -103,15 +82,26 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     }];
     NSMutableArray<UIView *> *badges = [NSMutableArray array];
     ApolloInboxBadgeCollectViews(buttons[1], NSClassFromString(@"_UIBadgeView"), badges);
-    BOOL dot = ![defaults boolForKey:UDKeyInboxBadgeShowUnreadCount];
-    UIColor *renderedColor = color ?: [UIColor colorWithRed:1.0 green:0.231 blue:0.188 alpha:1.0];
+    BOOL dotMode = ![defaults boolForKey:UDKeyInboxBadgeShowUnreadCount];
+    UIColor *renderedColor =
+        color ?: [UIColor colorWithRed:1.0
+                                green:0.231
+                                blue:0.188
+                                alpha:1.0];
+
     for (UIView *badge in badges) {
-        // badgeColor updates the item model, but UIKit's private badge view can
-        // retain its existing red fill after Apollo lays it out. Apply the
-        // effective color to the rendered view as well.
+        // Number mode keeps UIKit's native badge geometry and label.
         badge.backgroundColor = renderedColor;
-        ApolloInboxBadgeSetDot(badge, dot);
+        badge.hidden = dotMode;
     }
+
+    UIImageView *icon = ApolloInboxBadgeIconView(buttons[1]);
+    BOOL hasUnreadBadge = badges.count > 0;
+
+    ApolloInboxBadgeSetCustomDot(buttons[1],
+                                icon,
+                                dotMode && hasUnreadBadge,
+                                renderedColor);
 }
 
 // ApolloTabBarController is Swift, so its runtime name is the mangled class
