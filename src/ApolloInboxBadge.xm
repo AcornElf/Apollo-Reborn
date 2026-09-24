@@ -9,6 +9,17 @@
 static char kInboxBadgeDotViewKey;
 static NSHashTable<UITabBarController *> *sInboxBadgeControllers;
 
+static void ApolloInboxBadgeCollectViews(UIView *root, Class cls, NSMutableArray<UIView *> *result) {
+    if (!cls) return;
+    for (UIView *view in root.subviews) {
+        if ([view isKindOfClass:cls]) {
+            [result addObject:view];
+        } else {
+            ApolloInboxBadgeCollectViews(view, cls, result);
+        }
+    }
+}
+
 static UIImageView *ApolloInboxBadgeIconView(UIView *root) {
     UIImageView *fallback = nil;
 
