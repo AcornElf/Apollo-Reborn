@@ -134,6 +134,30 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
 
 %end
 
+// Apollo changes Inbox unread state by updating the tab item's badgeValue.
+// Refresh after UIKit has created or removed the corresponding badge view.
+%hook UITabBarItem
+
+- (void)setBadgeValue:(NSString *)badgeValue {
+    %orig;
+    for (UITabBarController *controller in sInboxBadgeControllers) {
+        if (controller.tabBar.items.count > 1 && controller.tabBar.items[1] == self) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [controller.tabBar layoutIfNeeded];
+                ApolloInboxBadgeApply(controller);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    [controller.tabBar layoutIfNeeded];
+                    ApolloInboxBadgeApply(controller);
+                });
+            });
+            break;
+        }
+    }
+}
+
+%end
+
 %ctor {
     sInboxBadgeControllers = [NSHashTable weakObjectsHashTable];
     for (NSString *name in @[ApolloInboxBadgeChangedNotification,
