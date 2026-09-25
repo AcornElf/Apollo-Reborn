@@ -322,6 +322,7 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, assign) BOOL lastCompactThumbnailsOnLeft;
 @property (nonatomic, assign) BOOL lastCompactThumbnailsHidden;
 @property (nonatomic, assign) BOOL lastShowRecentlyReadThumbnails;
+@property (nonatomic, assign) BOOL lastFilterNSFWRecentlyRead;
 @property (nonatomic, assign) BOOL hasCachedLayoutPreferences;
 @end
 
@@ -997,6 +998,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     BOOL compactThumbnailsOnLeft = compactThumbnailsOnLeftPreference ? compactThumbnailsOnLeftPreference.boolValue : YES;
     BOOL compactThumbnailsHidden = [defaults boolForKey:kCompactModeHideThumbnailsKey];
     BOOL showRecentlyReadThumbnails = [defaults boolForKey:UDKeyShowRecentlyReadThumbnails];
+    BOOL filterNSFWRecentlyRead = [defaults boolForKey:UDKeyFilterNSFWRecentlyRead];
 
     BOOL layoutPreferencesChanged = self.hasCachedLayoutPreferences &&
         (self.lastShowSubredditAtTop != showSubredditAtTop ||
@@ -1005,6 +1007,8 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
         self.lastCompactThumbnailsOnLeft != compactThumbnailsOnLeft ||
         self.lastCompactThumbnailsHidden != compactThumbnailsHidden ||
         self.lastShowRecentlyReadThumbnails != showRecentlyReadThumbnails);
+    BOOL contentFilterChanged = self.hasCachedLayoutPreferences &&
+        self.lastFilterNSFWRecentlyRead != filterNSFWRecentlyRead;
 
     // Cache the current values for the next appearance.
     self.lastShowSubredditAtTop = showSubredditAtTop;
@@ -1013,6 +1017,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     self.lastCompactThumbnailsOnLeft = compactThumbnailsOnLeft;
     self.lastCompactThumbnailsHidden = compactThumbnailsHidden;
     self.lastShowRecentlyReadThumbnails = showRecentlyReadThumbnails;
+    self.lastFilterNSFWRecentlyRead = filterNSFWRecentlyRead;
     self.hasCachedLayoutPreferences = YES;
 
     if (!self.hasLoadedOnce) {
@@ -1021,8 +1026,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     } else {
         // Rebuild cells first when their layout changed, then always reconcile
         // the list with posts read while this screen was away.
-        if (textSizeChanged || layoutPreferencesChanged) {
+        if (contentFilterChanged) {
+            // The NSFW setting changes the active data set, unlike the visual
+            // layout settings above. Rebuild it before UITableView reuses any
+            // row for the post now occupying that index.
+            [self _refilterPosts];
+        }
+        if (textSizeChanged || layoutPreferencesChanged || contentFilterChanged) {
             [self.tableView reloadData];
+            [self _updateBackgroundState];
         }
 
         // Returning to the screen (a nav pop runs the top VC's
