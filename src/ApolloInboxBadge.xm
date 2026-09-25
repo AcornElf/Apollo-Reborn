@@ -137,6 +137,7 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
 %ctor {
     sInboxBadgeControllers = [NSHashTable weakObjectsHashTable];
     for (NSString *name in @[ApolloInboxBadgeChangedNotification,
+                             ApolloTabBarTitlesChangedNotification,
                              @"com.christianselig.ApolloSpecificThemeChanged"]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil
             queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *notification) {
