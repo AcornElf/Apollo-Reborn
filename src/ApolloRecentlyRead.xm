@@ -835,15 +835,17 @@ static UIColor *RecentlyReadNativeNSFWBadgeBackgroundColor(UITraitCollection *tr
     return [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:1.0];
 }
 
-static UIImage *RecentlyReadNSFWBadgeImage(UITraitCollection *traitCollection) {
+static UIImage *RecentlyReadNSFWBadgeImage(CGFloat titleFontSize,
+                                           UITraitCollection *traitCollection) {
     NSString *text = @"NSFW";
-    // Apollo's native badge uses its 12pt Medium font variant.
-    UIFont *badgeFont = [UIFont systemFontOfSize:12.0 weight:UIFontWeightMedium];
+    // Keep Apollo's native Medium weight, while sizing from the Recently Read
+    // title so NSFW and flair badges track Dynamic Type together.
+    UIFont *badgeFont = [UIFont systemFontOfSize:titleFontSize weight:UIFontWeightMedium];
     NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: UIColor.whiteColor};
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
-    CGFloat badgeHeight = textSize.height + vPad * 2;
+    CGFloat badgeHeight = ceil(badgeFont.lineHeight) + vPad * 2;
     CGFloat badgeWidth = textSize.width + hPad * 2;
     CGFloat cornerRadius = badgeHeight * 0.325;
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
@@ -881,7 +883,7 @@ static UIColor *RecentlyReadFlairTextColor(void) {
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
                                             CGFloat fontSize,
                                             UITraitCollection *traits) {
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
+    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize weight:UIFontWeightRegular];
     UIColor *flairTextColor = RecentlyReadFlairTextColor();
 
     NSDictionary *attrs = @{
@@ -892,7 +894,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
-    CGFloat badgeHeight = textSize.height + vPad * 2;
+    CGFloat badgeHeight = ceil(badgeFont.lineHeight) + vPad * 2;
     CGFloat badgeWidth = textSize.width + hPad * 2;
     CGFloat cornerRadius = badgeHeight * 0.325;
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
@@ -1782,7 +1784,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [titleAttr appendAttributedString:
             [[NSAttributedString alloc] initWithString:@" "]];
 
-        UIImage *badge = RecentlyReadNSFWBadgeImage(titleLabel.traitCollection);
+        UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize,
+                                                     titleLabel.traitCollection);
 
         NSTextAttachment *att =
             [[NSTextAttachment alloc] init];
