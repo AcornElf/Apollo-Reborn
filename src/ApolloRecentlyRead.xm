@@ -777,7 +777,7 @@ static UIFont *RRFootnoteFont(id node) {
 static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     NSString *text = @"NSFW";
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: [UIColor redColor]};
+    NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: UIColor.whiteColor};
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
@@ -942,12 +942,13 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     if (!self.hasLoadedOnce) {
         self.hasLoadedOnce = YES;
         [self refreshPosts];
-    // Reload when either text size or the Recently Read layout preferences changed.
-    } else if (textSizeChanged || layoutPreferencesChanged) {
-        [self.tableView reloadData];
-        [self.tableView setNeedsLayout];
-        [self.tableView layoutIfNeeded];
     } else {
+        // Rebuild cells first when their layout changed, then always reconcile
+        // the list with posts read while this screen was away.
+        if (textSizeChanged || layoutPreferencesChanged) {
+            [self.tableView reloadData];
+        }
+
         // Returning to the screen (a nav pop runs the top VC's
         // viewWillDisappear first, so a just-left post is already marked):
         // sync the list with the tracker's current order in place, with no
@@ -1505,6 +1506,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     }
 }
 
+- (UIColor *)apollo_themeCellBackgroundColor {
+    return RecentlyReadCellBackgroundColor();
+}
+
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
     [super traitCollectionDidChange:previousTraitCollection];
 
@@ -1629,8 +1634,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     UIFont *titleFont = titleLabel.font;
     NSInteger textSizeIndex = RRTextSizeIndex(self);
 
-    CGFloat titleLineHeight =
-        kRecentlyReadTitleLineHeight[textSizeIndex];
+    CGFloat titleLineHeight = kRecentlyReadTitleLineHeight[textSizeIndex];
+    if (UIContentSizeCategoryIsAccessibilityCategory(
+            RecentlyReadEffectiveContentSizeCategory(self))) {
+        titleLineHeight = ceil(titleFont.lineHeight);
+    }
 
     NSMutableParagraphStyle *titlePara =
         [[NSMutableParagraphStyle alloc] init];
