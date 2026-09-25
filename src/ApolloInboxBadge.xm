@@ -108,6 +108,8 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     for (UIView *badge in badges) {
         // Number mode keeps UIKit's native badge geometry and label.
         badge.backgroundColor = renderedColor;
+        badge.tintColor = renderedColor;
+        badge.layer.backgroundColor = renderedColor.CGColor;
         // Fail safe: if UIKit changes its icon hierarchy, leave the native
         // badge visible rather than hiding it without a replacement dot.
         badge.hidden = dotMode && icon != nil;
