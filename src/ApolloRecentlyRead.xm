@@ -825,9 +825,20 @@ static UIFont *RRFootnoteFont(id node) {
     );
 }
 
-static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
+static UIColor *RecentlyReadNativeNSFWBadgeBackgroundColor(UITraitCollection *traitCollection) {
+    // Apollo's native PostContentAdvisoryNode chooses #FF0000 in light mode
+    // and #E60000 in dark mode. Keep this separate from the general theme
+    // tokens: the advisory badge has its own native appearance treatment.
+    if (traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+        return [UIColor colorWithRed:(0xE6 / 255.0) green:0.0 blue:0.0 alpha:1.0];
+    }
+    return [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:1.0];
+}
+
+static UIImage *RecentlyReadNSFWBadgeImage(UITraitCollection *traitCollection) {
     NSString *text = @"NSFW";
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
+    // Apollo's native badge uses its 12pt Medium font variant.
+    UIFont *badgeFont = [UIFont systemFontOfSize:12.0 weight:UIFontWeightMedium];
     NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: UIColor.whiteColor};
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
@@ -841,8 +852,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
         UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                                         cornerRadius:cornerRadius];
-        // Apollo's native NSFW badge red (#E60000)
-        [[UIColor colorWithRed:(0xE6 / 255.0) green:0.0 blue:0.0 alpha:1.0] setFill];
+        [RecentlyReadNativeNSFWBadgeBackgroundColor(traitCollection) setFill];
         [path fill];
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
     }];
@@ -1772,8 +1782,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [titleAttr appendAttributedString:
             [[NSAttributedString alloc] initWithString:@" "]];
 
-        UIImage *badge =
-            RecentlyReadNSFWBadgeImage(titleFont.pointSize);
+        UIImage *badge = RecentlyReadNSFWBadgeImage(titleLabel.traitCollection);
 
         NSTextAttachment *att =
             [[NSTextAttachment alloc] init];
