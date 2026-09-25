@@ -135,6 +135,10 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
 - (void)viewDidLayoutSubviews {
     %orig;
     ApolloInboxBadgeApply((UITabBarController *)self);
+    // Theme changes can rebuild the badge after this layout callback returns.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ApolloInboxBadgeApply((UITabBarController *)self);
+    });
 }
 
 - (void)viewDidAppear:(BOOL)animated {
