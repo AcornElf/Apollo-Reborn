@@ -147,6 +147,15 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
                     [controller.tabBar layoutIfNeeded];
                     ApolloInboxBadgeApply(controller);
                 }
+                // Apollo may rebuild the tab bar after the theme notification;
+                // apply once more after that rebuild has settled.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    for (UITabBarController *controller in sInboxBadgeControllers) {
+                        [controller.tabBar layoutIfNeeded];
+                        ApolloInboxBadgeApply(controller);
+                    }
+                });
             });
         }];
     }
