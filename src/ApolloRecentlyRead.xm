@@ -321,6 +321,7 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, copy) NSString *lastCompactThumbnailSize;
 @property (nonatomic, assign) BOOL lastCompactThumbnailsOnLeft;
 @property (nonatomic, assign) BOOL lastCompactThumbnailsHidden;
+@property (nonatomic, assign) BOOL lastShowRecentlyReadThumbnails;
 @property (nonatomic, assign) BOOL hasCachedLayoutPreferences;
 @end
 
@@ -983,13 +984,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     NSNumber *compactThumbnailsOnLeftPreference = [defaults objectForKey:kCompactModeLeftThumbnailsKey];
     BOOL compactThumbnailsOnLeft = compactThumbnailsOnLeftPreference ? compactThumbnailsOnLeftPreference.boolValue : YES;
     BOOL compactThumbnailsHidden = [defaults boolForKey:kCompactModeHideThumbnailsKey];
+    BOOL showRecentlyReadThumbnails = [defaults boolForKey:UDKeyShowRecentlyReadThumbnails];
 
     BOOL layoutPreferencesChanged = self.hasCachedLayoutPreferences &&
         (self.lastShowSubredditAtTop != showSubredditAtTop ||
         self.lastAlwaysShowUsernames != alwaysShowUsernames ||
         ![self.lastCompactThumbnailSize isEqualToString:compactThumbnailSize] ||
         self.lastCompactThumbnailsOnLeft != compactThumbnailsOnLeft ||
-        self.lastCompactThumbnailsHidden != compactThumbnailsHidden);
+        self.lastCompactThumbnailsHidden != compactThumbnailsHidden ||
+        self.lastShowRecentlyReadThumbnails != showRecentlyReadThumbnails);
 
     // Cache the current values for the next appearance.
     self.lastShowSubredditAtTop = showSubredditAtTop;
@@ -997,6 +1000,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     self.lastCompactThumbnailSize = compactThumbnailSize;
     self.lastCompactThumbnailsOnLeft = compactThumbnailsOnLeft;
     self.lastCompactThumbnailsHidden = compactThumbnailsHidden;
+    self.lastShowRecentlyReadThumbnails = showRecentlyReadThumbnails;
     self.hasCachedLayoutPreferences = YES;
 
     if (!self.hasLoadedOnce) {
