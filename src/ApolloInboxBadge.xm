@@ -51,7 +51,7 @@ static void ApolloInboxBadgeSetCustomDot(UIView *button,
     if (!dot) {
         dot = [[UIView alloc] initWithFrame:CGRectZero];
         dot.userInteractionEnabled = NO;
-        dot.layer.cornerRadius = 4.0;
+        dot.layer.cornerRadius = 4.0; dot.layer.zPosition = 1000.0;
         objc_setAssociatedObject(button,
                                  &kInboxBadgeDotViewKey,
                                  dot,
