@@ -4624,7 +4624,14 @@ static NSDictionary *ApolloWidgetAccountCredentials(void) {
     // Icon-Only temporarily supersedes the narrower profile-only choice.
     // Preserve its preference while hiding the redundant row, then restore
     // both when tab labels return.
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    BOOL showUnreadCount = [defaults boolForKey:UDKeyInboxBadgeShowUnreadCount];
     ApolloSetHideTabBarTitlesEnabled(sender.isOn);
+    // Rebuilding the tab bar can cause Apollo/UIKit to re-register its tab
+    // defaults. Icon-Only and Inbox badge presentation are independent, so
+    // preserve the user's badge choice across that rebuild explicitly.
+    [defaults setBool:showUnreadCount forKey:UDKeyInboxBadgeShowUnreadCount];
+    [defaults synchronize];
     [self visibilityDidChange];
 }
 
