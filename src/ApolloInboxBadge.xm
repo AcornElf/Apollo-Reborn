@@ -24,6 +24,7 @@ static UIImageView *ApolloInboxBadgeIconView(UIView *root) {
     UIImageView *fallback = nil;
 
     for (UIView *view in root.subviews) {
+        if ([view isKindOfClass:NSClassFromString(@"_UIBadgeView")]) continue;
         if ([view isKindOfClass:UIImageView.class]) {
             UIImageView *imageView = (UIImageView *)view;
             if (imageView.image) return imageView;
@@ -102,14 +103,16 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
                                 green:0.231
                                 blue:0.188
                                 alpha:1.0];
+    UIImageView *icon = ApolloInboxBadgeIconView(buttons[1]);
 
     for (UIView *badge in badges) {
         // Number mode keeps UIKit's native badge geometry and label.
         badge.backgroundColor = renderedColor;
-        badge.hidden = dotMode;
+        // Fail safe: if UIKit changes its icon hierarchy, leave the native
+        // badge visible rather than hiding it without a replacement dot.
+        badge.hidden = dotMode && icon != nil;
     }
 
-    UIImageView *icon = ApolloInboxBadgeIconView(buttons[1]);
     BOOL hasUnreadBadge = badges.count > 0;
 
     ApolloInboxBadgeSetCustomDot(buttons[1],
