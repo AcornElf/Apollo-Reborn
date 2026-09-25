@@ -318,6 +318,11 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, copy) NSString *lastTextSizeCategory;
 @property (nonatomic, assign) BOOL lastShowSubredditAtTop;
 @property (nonatomic, assign) BOOL lastAlwaysShowUsernames;
+@property (nonatomic, copy) NSString *lastCompactThumbnailSize;
+@property (nonatomic, assign) BOOL lastCompactThumbnailsOnLeft;
+@property (nonatomic, assign) BOOL lastCompactThumbnailsHidden;
+@property (nonatomic, assign) BOOL lastShowRecentlyReadThumbnails;
+@property (nonatomic, assign) BOOL lastFilterNSFWRecentlyRead;
 @property (nonatomic, assign) BOOL hasCachedLayoutPreferences;
 @end
 
@@ -325,11 +330,18 @@ static char kNavPathKey;
 static char kThumbURLKey;
 static char kThumbTaskKey;
 static char kThumbWidthConstraintKey;
+static char kThumbHeightConstraintKey;
+static char kThumbLeadingConstraintKey;
+static char kThumbTrailingConstraintKey;
+static char kThumbSizeKey;
 static char kStackLeadingWithThumbConstraintKey;
 static char kStackLeadingNoThumbConstraintKey;
+static char kStackTrailingWithThumbConstraintKey;
+static char kStackTrailingNoThumbConstraintKey;
 static const NSUInteger kRecentlyReadPageSize = 40;
 static const CGFloat kRecentlyReadThumbnailSmallSize = 55.0;
-static const CGFloat kRecentlyReadThumbnailPlaceholderInset = 15.0;
+static const CGFloat kRecentlyReadThumbnailMediumSize = 75.0;
+static const CGFloat kRecentlyReadThumbnailLargeSize = 100.0;
 static const CGFloat kRecentlyReadCellVerticalInset = 12.0;
 static const CGFloat kRecentlyReadDefaultTopGap = 11.0;
 static const CGFloat kRecentlyReadExpandedTopGap = 11.0;
@@ -344,6 +356,35 @@ static const NSInteger kSubFooterByTag = 208;
 static const NSInteger kSubFooterAuthorTag = 209;
 static const NSInteger kAuthorTopTag = 210;
 static const NSInteger kThumbTag = 211;
+
+// These are Apollo's Appearance → Compact Posts defaults.  They are read
+// directly so Recently Read follows the same size and side as native Compact
+// posts, without adding a parallel Recently Read preference.
+static NSString *const kCompactPostsThumbnailSizeKey = @"CompactPostsThumbnailSize";
+static NSString *const kCompactModeLeftThumbnailsKey = @"CompactModeLeftThumbnails";
+static NSString *const kCompactModeHideThumbnailsKey = @"CompactModeHideThumbnails";
+
+typedef struct {
+    CGFloat size;
+    BOOL placedOnLeft;
+} RecentlyReadThumbnailLayout;
+
+static RecentlyReadThumbnailLayout RecentlyReadCompactThumbnailLayout(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSString *sizePreference = [defaults stringForKey:kCompactPostsThumbnailSizeKey].lowercaseString;
+    CGFloat size = kRecentlyReadThumbnailSmallSize;
+    if ([sizePreference isEqualToString:@"medium"]) {
+        size = kRecentlyReadThumbnailMediumSize;
+    } else if ([sizePreference isEqualToString:@"large"]) {
+        size = kRecentlyReadThumbnailLargeSize;
+    }
+
+    // Apollo registers this as YES.  Keep that native default if this method
+    // runs before Apollo has registered its Defaults.plist.
+    NSNumber *leftPreference = [defaults objectForKey:kCompactModeLeftThumbnailsKey];
+    BOOL placedOnLeft = leftPreference ? leftPreference.boolValue : YES;
+    return (RecentlyReadThumbnailLayout){ size, placedOnLeft };
+}
 
 static NSCache<NSString *, UIImage *> *RecentlyReadThumbnailCache(void) {
     static NSCache<NSString *, UIImage *> *cache = nil;
@@ -378,18 +419,20 @@ static NSURLSession *RecentlyReadThumbnailSession(void) {
     return session;
 }
 
-static UIImage *RecentlyReadPlaceholderImageForAsset(NSString *assetName, CGFloat inset) {
+static UIImage *RecentlyReadPlaceholderImageForAsset(NSString *assetName,
+                                                      CGFloat thumbnailSize,
+                                                      CGFloat inset) {
     UIImage *base = [UIImage imageNamed:assetName];
     if (!base) return nil;
 
     // Match Apollo compact placeholder tone (#76787f) and give
-    // the glyph extra breathing room inside the compact-small thumbnail.
+    // the glyph extra breathing room inside the Compact thumbnail.
     UIColor *tint = [UIColor colorWithRed:(118.0 / 255.0)
                                     green:(120.0 / 255.0)
                                      blue:(127.0 / 255.0)
                                     alpha:1.0];
     UIImage *templated = [base imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-    CGSize canvasSize = CGSizeMake(kRecentlyReadThumbnailSmallSize, kRecentlyReadThumbnailSmallSize);
+    CGSize canvasSize = CGSizeMake(thumbnailSize, thumbnailSize);
     CGRect canvas = (CGRect){CGPointZero, canvasSize};
     CGRect paddedBounds = CGRectInset(canvas, inset, inset);
     CGRect drawRect = RecentlyReadAspectFitRect(base.size, paddedBounds);
@@ -401,18 +444,27 @@ static UIImage *RecentlyReadPlaceholderImageForAsset(NSString *assetName, CGFloa
     }];
 }
 
-static UIImage *RecentlyReadNoThumbnailPlaceholderImage(BOOL isSelfPost) {
-    static UIImage *selfPostPlaceholder = nil;
-    static UIImage *linkPlaceholder = nil;
+static UIImage *RecentlyReadNoThumbnailPlaceholderImage(BOOL isSelfPost, CGFloat thumbnailSize) {
+    static NSCache<NSString *, UIImage *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        selfPostPlaceholder = RecentlyReadPlaceholderImageForAsset(@"self-post-indicator", kRecentlyReadThumbnailPlaceholderInset);
-        linkPlaceholder = RecentlyReadPlaceholderImageForAsset(@"link-button-reddit", 10.0);
-        // Fallbacks
-        if (!selfPostPlaceholder) selfPostPlaceholder = linkPlaceholder;
-        if (!linkPlaceholder) linkPlaceholder = selfPostPlaceholder;
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 6;
     });
-    return isSelfPost ? selfPostPlaceholder : linkPlaceholder;
+
+    NSString *assetName = isSelfPost ? @"self-post-indicator" : @"link-button-reddit";
+    NSString *key = [NSString stringWithFormat:@"%@-%.0f", assetName, thumbnailSize];
+    UIImage *placeholder = [cache objectForKey:key];
+    if (!placeholder) {
+        CGFloat inset = isSelfPost ? thumbnailSize * (15.0 / 55.0) : thumbnailSize * (10.0 / 55.0);
+        placeholder = RecentlyReadPlaceholderImageForAsset(assetName, thumbnailSize, inset);
+        if (!placeholder) {
+            NSString *fallbackAsset = isSelfPost ? @"link-button-reddit" : @"self-post-indicator";
+            placeholder = RecentlyReadPlaceholderImageForAsset(fallbackAsset, thumbnailSize, inset);
+        }
+        if (placeholder) [cache setObject:placeholder forKey:key];
+    }
+    return placeholder;
 }
 
 static UIColor *RecentlyReadMetaColor(void) {
@@ -774,14 +826,27 @@ static UIFont *RRFootnoteFont(id node) {
     );
 }
 
-static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
+static UIColor *RecentlyReadNativeNSFWBadgeBackgroundColor(UITraitCollection *traitCollection) {
+    // Apollo's native PostContentAdvisoryNode chooses #FF0000 in light mode
+    // and #E60000 in dark mode. Keep this separate from the general theme
+    // tokens: the advisory badge has its own native appearance treatment.
+    if (traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+        return [UIColor colorWithRed:(0xE6 / 255.0) green:0.0 blue:0.0 alpha:1.0];
+    }
+    return [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:1.0];
+}
+
+static UIImage *RecentlyReadNSFWBadgeImage(CGFloat titleFontSize,
+                                           UITraitCollection *traitCollection) {
     NSString *text = @"NSFW";
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
-    NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: [UIColor redColor]};
+    // Keep Apollo's native Medium weight, while sizing from the Recently Read
+    // title so NSFW and flair badges track Dynamic Type together.
+    UIFont *badgeFont = [UIFont systemFontOfSize:titleFontSize weight:UIFontWeightMedium];
+    NSDictionary *attrs = @{NSFontAttributeName: badgeFont, NSForegroundColorAttributeName: UIColor.whiteColor};
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
-    CGFloat badgeHeight = textSize.height + vPad * 2;
+    CGFloat badgeHeight = ceil(badgeFont.lineHeight) + vPad * 2;
     CGFloat badgeWidth = textSize.width + hPad * 2;
     CGFloat cornerRadius = badgeHeight * 0.325;
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
@@ -790,8 +855,7 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat fontSize) {
     return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
         UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
                                                         cornerRadius:cornerRadius];
-        // Apollo's native NSFW badge red (#E60000)
-        [[UIColor colorWithRed:(0xE6 / 255.0) green:0.0 blue:0.0 alpha:1.0] setFill];
+        [RecentlyReadNativeNSFWBadgeBackgroundColor(traitCollection) setFill];
         [path fill];
         [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
     }];
@@ -820,7 +884,7 @@ static UIColor *RecentlyReadFlairTextColor(void) {
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
                                             CGFloat fontSize,
                                             UITraitCollection *traits) {
-    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize * 0.9 weight:UIFontWeightRegular];
+    UIFont *badgeFont = [UIFont systemFontOfSize:fontSize weight:UIFontWeightRegular];
     UIColor *flairTextColor = RecentlyReadFlairTextColor();
 
     NSDictionary *attrs = @{
@@ -831,7 +895,7 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
-    CGFloat badgeHeight = textSize.height + vPad * 2;
+    CGFloat badgeHeight = ceil(badgeFont.lineHeight) + vPad * 2;
     CGFloat badgeWidth = textSize.width + hPad * 2;
     CGFloat cornerRadius = badgeHeight * 0.325;
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
@@ -929,25 +993,50 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     BOOL showSubredditAtTop = [defaults boolForKey:@"ShowSubredditAtTop"];
     BOOL alwaysShowUsernames = [defaults boolForKey:@"AlwaysShowUsernames"];
+    NSString *compactThumbnailSize = [defaults stringForKey:kCompactPostsThumbnailSizeKey] ?: @"small";
+    NSNumber *compactThumbnailsOnLeftPreference = [defaults objectForKey:kCompactModeLeftThumbnailsKey];
+    BOOL compactThumbnailsOnLeft = compactThumbnailsOnLeftPreference ? compactThumbnailsOnLeftPreference.boolValue : YES;
+    BOOL compactThumbnailsHidden = [defaults boolForKey:kCompactModeHideThumbnailsKey];
+    BOOL showRecentlyReadThumbnails = [defaults boolForKey:UDKeyShowRecentlyReadThumbnails];
+    BOOL filterNSFWRecentlyRead = [defaults boolForKey:UDKeyFilterNSFWRecentlyRead];
 
     BOOL layoutPreferencesChanged = self.hasCachedLayoutPreferences &&
         (self.lastShowSubredditAtTop != showSubredditAtTop ||
-        self.lastAlwaysShowUsernames != alwaysShowUsernames);
+        self.lastAlwaysShowUsernames != alwaysShowUsernames ||
+        ![self.lastCompactThumbnailSize isEqualToString:compactThumbnailSize] ||
+        self.lastCompactThumbnailsOnLeft != compactThumbnailsOnLeft ||
+        self.lastCompactThumbnailsHidden != compactThumbnailsHidden ||
+        self.lastShowRecentlyReadThumbnails != showRecentlyReadThumbnails);
+    BOOL contentFilterChanged = self.hasCachedLayoutPreferences &&
+        self.lastFilterNSFWRecentlyRead != filterNSFWRecentlyRead;
 
     // Cache the current values for the next appearance.
     self.lastShowSubredditAtTop = showSubredditAtTop;
     self.lastAlwaysShowUsernames = alwaysShowUsernames;
+    self.lastCompactThumbnailSize = compactThumbnailSize;
+    self.lastCompactThumbnailsOnLeft = compactThumbnailsOnLeft;
+    self.lastCompactThumbnailsHidden = compactThumbnailsHidden;
+    self.lastShowRecentlyReadThumbnails = showRecentlyReadThumbnails;
+    self.lastFilterNSFWRecentlyRead = filterNSFWRecentlyRead;
     self.hasCachedLayoutPreferences = YES;
 
     if (!self.hasLoadedOnce) {
         self.hasLoadedOnce = YES;
         [self refreshPosts];
-    // Reload when either text size or the Recently Read layout preferences changed.
-    } else if (textSizeChanged || layoutPreferencesChanged) {
-        [self.tableView reloadData];
-        [self.tableView setNeedsLayout];
-        [self.tableView layoutIfNeeded];
     } else {
+        // Rebuild cells first when their layout changed, then always reconcile
+        // the list with posts read while this screen was away.
+        if (contentFilterChanged) {
+            // The NSFW setting changes the active data set, unlike the visual
+            // layout settings above. Rebuild it before UITableView reuses any
+            // row for the post now occupying that index.
+            [self _refilterPosts];
+        }
+        if (textSizeChanged || layoutPreferencesChanged || contentFilterChanged) {
+            [self.tableView reloadData];
+            [self _updateBackgroundState];
+        }
+
         // Returning to the screen (a nav pop runs the top VC's
         // viewWillDisappear first, so a just-left post is already marked):
         // sync the list with the tracker's current order in place, with no
@@ -1505,6 +1594,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     }
 }
 
+- (UIColor *)apollo_themeCellBackgroundColor {
+    return RecentlyReadCellBackgroundColor();
+}
+
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
     [super traitCollectionDidChange:previousTraitCollection];
 
@@ -1543,6 +1636,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 }
 
 - (void)configureThumbnailImageView:(UIImageView *)thumbnailView forLink:(RDKLink *)link {
+    NSNumber *thumbnailSizeNumber = objc_getAssociatedObject(thumbnailView, &kThumbSizeKey);
+    CGFloat thumbnailSize = thumbnailSizeNumber ? thumbnailSizeNumber.doubleValue
+                                               : kRecentlyReadThumbnailSmallSize;
     NSURL *thumbURL = [self thumbnailURLForLink:link];
     // absoluteString can be nil for edge-case NSURLs; NSCache keys must not be
     NSString *urlString = thumbURL ? (thumbURL.absoluteString ?: @"") : nil;
@@ -1571,7 +1667,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     if (!thumbURL) {
         thumbnailView.contentMode = UIViewContentModeCenter;
-        thumbnailView.image = RecentlyReadNoThumbnailPlaceholderImage(link.isSelfPost);
+        thumbnailView.image = RecentlyReadNoThumbnailPlaceholderImage(link.isSelfPost, thumbnailSize);
         objc_setAssociatedObject(thumbnailView, &kThumbURLKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         return;
     }
@@ -1586,7 +1682,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     }
 
     thumbnailView.contentMode = UIViewContentModeScaleAspectFill;
-    thumbnailView.image = RecentlyReadNoThumbnailPlaceholderImage(NO);
+    thumbnailView.image = RecentlyReadNoThumbnailPlaceholderImage(NO, thumbnailSize);
     __weak UIImageView *weakThumb = thumbnailView;
     __block NSURLSessionDataTask *task = nil;
     // Single delivery path for every outcome (nil image -> placeholder)
@@ -1596,7 +1692,9 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             if (!strongThumb) return;
             NSString *current = objc_getAssociatedObject(strongThumb, &kThumbURLKey);
             if ([current isEqualToString:urlString]) {
-                strongThumb.image = image ?: RecentlyReadNoThumbnailPlaceholderImage(NO);
+                NSNumber *currentSize = objc_getAssociatedObject(strongThumb, &kThumbSizeKey);
+                strongThumb.image = image ?: RecentlyReadNoThumbnailPlaceholderImage(
+                    NO, currentSize ? currentSize.doubleValue : kRecentlyReadThumbnailSmallSize);
             }
             RecentlyReadClearThumbTask(strongThumb, task);
         });
@@ -1629,8 +1727,11 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     UIFont *titleFont = titleLabel.font;
     NSInteger textSizeIndex = RRTextSizeIndex(self);
 
-    CGFloat titleLineHeight =
-        kRecentlyReadTitleLineHeight[textSizeIndex];
+    CGFloat titleLineHeight = kRecentlyReadTitleLineHeight[textSizeIndex];
+    if (UIContentSizeCategoryIsAccessibilityCategory(
+            RecentlyReadEffectiveContentSizeCategory(self))) {
+        titleLineHeight = ceil(titleFont.lineHeight);
+    }
 
     NSMutableParagraphStyle *titlePara =
         [[NSMutableParagraphStyle alloc] init];
@@ -1695,8 +1796,8 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [titleAttr appendAttributedString:
             [[NSAttributedString alloc] initWithString:@" "]];
 
-        UIImage *badge =
-            RecentlyReadNSFWBadgeImage(titleFont.pointSize);
+        UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize,
+                                                     titleLabel.traitCollection);
 
         NSTextAttachment *att =
             [[NSTextAttachment alloc] init];
@@ -1855,18 +1956,23 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         [cell.contentView addSubview:sep];
 
         NSLayoutConstraint *thumbWidth = [thumbnailView.widthAnchor constraintEqualToConstant:kRecentlyReadThumbnailSmallSize];
+        NSLayoutConstraint *thumbHeight = [thumbnailView.heightAnchor constraintEqualToConstant:kRecentlyReadThumbnailSmallSize];
+        NSLayoutConstraint *thumbLeading = [thumbnailView.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:12];
+        NSLayoutConstraint *thumbTrailing = [thumbnailView.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-12];
         NSLayoutConstraint *stackLeadingWithThumb = [stack.leadingAnchor constraintEqualToAnchor:thumbnailView.trailingAnchor constant:12];
         NSLayoutConstraint *stackLeadingNoThumb = [stack.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:12];
+        NSLayoutConstraint *stackTrailingWithThumb = [stack.trailingAnchor constraintEqualToAnchor:thumbnailView.leadingAnchor constant:-12];
+        NSLayoutConstraint *stackTrailingNoThumb = [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16];
         stackLeadingNoThumb.active = YES;
+        stackTrailingNoThumb.active = YES;
 
         [NSLayoutConstraint activateConstraints:@[
-            [thumbnailView.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:12],
+            thumbLeading,
             [thumbnailView.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:kRecentlyReadCellVerticalInset],
-            [thumbnailView.heightAnchor constraintEqualToConstant:kRecentlyReadThumbnailSmallSize],
+            thumbHeight,
             thumbWidth,
             [thumbnailView.bottomAnchor constraintLessThanOrEqualToAnchor:cell.contentView.bottomAnchor constant:-kRecentlyReadCellVerticalInset],
             [stack.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:kRecentlyReadCellVerticalInset],
-            [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16],
             [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-kRecentlyReadCellVerticalInset],
             [sep.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
             [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
@@ -1875,8 +1981,13 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         ]];
 
         objc_setAssociatedObject(cell, &kThumbWidthConstraintKey, thumbWidth, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kThumbHeightConstraintKey, thumbHeight, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kThumbLeadingConstraintKey, thumbLeading, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kThumbTrailingConstraintKey, thumbTrailing, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(cell, &kStackLeadingWithThumbConstraintKey, stackLeadingWithThumb, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(cell, &kStackLeadingNoThumbConstraintKey, stackLeadingNoThumb, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kStackTrailingWithThumbConstraintKey, stackTrailingWithThumb, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kStackTrailingNoThumbConstraintKey, stackTrailingNoThumb, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
     // Read Apollo's shared post display preferences.
@@ -1933,15 +2044,28 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     UIImageView *thumbnailView = (UIImageView *)[cell.contentView viewWithTag:kThumbTag];
 
     NSLayoutConstraint *thumbWidth = objc_getAssociatedObject(cell, &kThumbWidthConstraintKey);
+    NSLayoutConstraint *thumbHeight = objc_getAssociatedObject(cell, &kThumbHeightConstraintKey);
+    NSLayoutConstraint *thumbLeading = objc_getAssociatedObject(cell, &kThumbLeadingConstraintKey);
+    NSLayoutConstraint *thumbTrailing = objc_getAssociatedObject(cell, &kThumbTrailingConstraintKey);
     NSLayoutConstraint *stackLeadingWithThumb = objc_getAssociatedObject(cell, &kStackLeadingWithThumbConstraintKey);
     NSLayoutConstraint *stackLeadingNoThumb = objc_getAssociatedObject(cell, &kStackLeadingNoThumbConstraintKey);
-    BOOL showThumbnails = sShowRecentlyReadThumbnails;
+    NSLayoutConstraint *stackTrailingWithThumb = objc_getAssociatedObject(cell, &kStackTrailingWithThumbConstraintKey);
+    NSLayoutConstraint *stackTrailingNoThumb = objc_getAssociatedObject(cell, &kStackTrailingNoThumbConstraintKey);
+    RecentlyReadThumbnailLayout thumbnailLayout = RecentlyReadCompactThumbnailLayout();
+    BOOL showThumbnails = sShowRecentlyReadThumbnails &&
+                          ![defaults boolForKey:kCompactModeHideThumbnailsKey];
 
     if (showThumbnails) {
         thumbnailView.hidden = NO;
-        thumbWidth.constant = kRecentlyReadThumbnailSmallSize;
-        stackLeadingNoThumb.active = NO;
-        stackLeadingWithThumb.active = YES;
+        thumbWidth.constant = thumbnailLayout.size;
+        thumbHeight.constant = thumbnailLayout.size;
+        objc_setAssociatedObject(thumbnailView, &kThumbSizeKey, @(thumbnailLayout.size), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        thumbLeading.active = thumbnailLayout.placedOnLeft;
+        thumbTrailing.active = !thumbnailLayout.placedOnLeft;
+        stackLeadingWithThumb.active = thumbnailLayout.placedOnLeft;
+        stackLeadingNoThumb.active = !thumbnailLayout.placedOnLeft;
+        stackTrailingWithThumb.active = !thumbnailLayout.placedOnLeft;
+        stackTrailingNoThumb.active = thumbnailLayout.placedOnLeft;
         [self configureThumbnailImageView:thumbnailView forLink:link];
     } else {
         NSURLSessionDataTask *task = objc_getAssociatedObject(thumbnailView, &kThumbTaskKey);
@@ -1953,8 +2077,13 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         thumbnailView.image = nil;
         thumbnailView.hidden = YES;
         thumbWidth.constant = 0;
+        thumbHeight.constant = 0;
+        thumbLeading.active = NO;
+        thumbTrailing.active = NO;
         stackLeadingWithThumb.active = NO;
         stackLeadingNoThumb.active = YES;
+        stackTrailingWithThumb.active = NO;
+        stackTrailingNoThumb.active = YES;
     }
 
     NSString *subPath = link.subreddit.length > 0 ? [NSString stringWithFormat:@"/r/%@", link.subreddit] : nil;
