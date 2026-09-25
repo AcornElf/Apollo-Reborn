@@ -137,6 +137,15 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     ApolloInboxBadgeApply((UITabBarController *)self);
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    // Stock theme changes can finish after the theme notification. Reapply
+    // when Apollo presents the tab controller with its final themed views.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ApolloInboxBadgeApply((UITabBarController *)self);
+    });
+}
+
 %end
 
 // Apollo changes Inbox unread state by updating the tab item's badgeValue.
