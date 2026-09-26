@@ -123,6 +123,17 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
                                 renderedColor);
 }
 
+static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
+    UIResponder *responder = tabBar.nextResponder;
+    while (responder) {
+        if ([responder isKindOfClass:UITabBarController.class]) {
+            return (UITabBarController *)responder;
+        }
+        responder = responder.nextResponder;
+    }
+    return nil;
+}
+
 // ApolloTabBarController is Swift, so its runtime name is the mangled class
 // name below. Hooking the unmangled spelling silently matches nothing.
 %hook _TtC6Apollo22ApolloTabBarController
@@ -147,6 +158,25 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     // when Apollo presents the tab controller with its final themed views.
     dispatch_async(dispatch_get_main_queue(), ^{
         ApolloInboxBadgeApply((UITabBarController *)self);
+    });
+}
+
+%end
+
+// Apollo replaces the tab items while applying a stock theme. Reapply after
+// that replacement so the new item receives the user's badge configuration.
+%hook UITabBar
+
+- (void)setItems:(NSArray<UITabBarItem *> *)items animated:(BOOL)animated {
+    %orig;
+    UITabBarController *controller = ApolloInboxBadgeOwnerOfTabBar(self);
+    if (!controller) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ApolloInboxBadgeApply(controller);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            ApolloInboxBadgeApply(controller);
+        });
     });
 }
 
