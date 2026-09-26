@@ -188,9 +188,9 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
 
 - (void)setBadgeValue:(NSString *)badgeValue {
     %orig;
-    for (UITabBarController *controller in sInboxBadgeControllers) {
-        if (controller.tabBar.items.count > 1 && controller.tabBar.items[1] == self) {
-            dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UITabBarController *controller in sInboxBadgeControllers) {
+            if (controller.tabBar.items.count > 1) {
                 [controller.tabBar layoutIfNeeded];
                 ApolloInboxBadgeApply(controller);
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
@@ -198,10 +198,20 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
                     [controller.tabBar layoutIfNeeded];
                     ApolloInboxBadgeApply(controller);
                 });
-            });
-            break;
+            }
         }
-    }
+    });
+}
+
+- (void)setBadgeColor:(UIColor *)badgeColor {
+    %orig;
+    // Theme code may set the item color before the replacement item is put in
+    // the tab bar. Refresh all tracked controllers after that transaction.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UITabBarController *controller in sInboxBadgeControllers) {
+            ApolloInboxBadgeApply(controller);
+        }
+    });
 }
 
 %end
