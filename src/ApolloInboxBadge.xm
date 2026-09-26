@@ -8,6 +8,7 @@
 
 static char kInboxBadgeDotViewKey;
 static NSHashTable<UITabBarController *> *sInboxBadgeControllers;
+static BOOL sInboxBadgeApplying;
 
 static void ApolloInboxBadgeCollectViews(UIView *root, Class cls, NSMutableArray<UIView *> *result) {
     if (!cls) return;
@@ -82,7 +83,11 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
     UIColor *color = [defaults boolForKey:UDKeyInboxBadgeUseThemeAccent]
         ? [(ApolloThemeAccentColor() ?: tabBar.tintColor) resolvedColorWithTraitCollection:tabBar.traitCollection]
         : nil;
-    if (inbox.badgeColor != color && ![inbox.badgeColor isEqual:color]) inbox.badgeColor = color;
+    if (inbox.badgeColor != color && ![inbox.badgeColor isEqual:color]) {
+        sInboxBadgeApplying = YES;
+        inbox.badgeColor = color;
+        sInboxBadgeApplying = NO;
+    }
 
     NSMutableArray<UIView *> *buttons = [NSMutableArray array];
     ApolloInboxBadgeCollectViews(tabBar, NSClassFromString(@"UITabBarButton"), buttons);
@@ -205,6 +210,7 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
 
 - (void)setBadgeColor:(UIColor *)badgeColor {
     %orig;
+    if (sInboxBadgeApplying) return;
     // Theme code may set the item color before the replacement item is put in
     // the tab bar. Refresh all tracked controllers after that transaction.
     dispatch_async(dispatch_get_main_queue(), ^{
