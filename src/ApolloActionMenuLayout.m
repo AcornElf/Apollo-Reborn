@@ -29,7 +29,7 @@ BOOL ApolloActionMenuContextIsValid(NSString *context) {
 NSString *ApolloActionMenuContextTitle(ApolloActionMenuContext context) {
     if ([context isEqualToString:ApolloActionMenuContextFeed]) return @"Feed";
     if ([context isEqualToString:ApolloActionMenuContextPost]) return @"Post";
-    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"Post (Comments)";
+    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"Post with Comments";
     if ([context isEqualToString:ApolloActionMenuContextComment]) return @"Comment";
     if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"Moderator (Subreddit)";
     if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"Moderator (Post)";
@@ -38,13 +38,13 @@ NSString *ApolloActionMenuContextTitle(ApolloActionMenuContext context) {
 }
 
 NSString *ApolloActionMenuContextDescription(ApolloActionMenuContext context) {
-    if ([context isEqualToString:ApolloActionMenuContextFeed]) return @"The ••• button at the top of a subreddit or feed.";
-    if ([context isEqualToString:ApolloActionMenuContextPost]) return @"The ••• button on a post in a feed.";
-    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"The ••• button at the top of a post's comments.";
-    if ([context isEqualToString:ApolloActionMenuContextComment]) return @"The ••• button on a comment.";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"The moderator shield at the top of a subreddit you moderate.";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"The moderator shield on a post, the Moderator row in a post’s ••• menus, and the shield at the top of its comments.";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"The moderator shield on a comment, and the Moderator row in its ••• menu.";
+    if ([context isEqualToString:ApolloActionMenuContextFeed]) return @"The ••• menu at the top of a subreddit or feed.";
+    if ([context isEqualToString:ApolloActionMenuContextPost]) return @"The ••• menu on a post in a feed.";
+    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"The ••• menu at the top of the full-page post view.";
+    if ([context isEqualToString:ApolloActionMenuContextComment]) return @"The ••• menu on a comment.";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"The shield menu at the top of a subreddit you moderate.";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"The shield menu on a post in a subreddit you moderate.";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"The shield menu on a comment in a subreddit you moderate.";
     return @"";
 }
 
@@ -515,6 +515,15 @@ void ApolloActionMenuSetItemHidden(ApolloActionMenuContext context, NSString *it
     ApolloLog(@"[ActionMenuLayout] %@ %@ -> %@", context, itemID, hidden ? @"hidden" : @"shown");
     ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]),
                                             kApolloActionMenuLayoutHiddenKey: hiddenList });
+}
+
+void ApolloActionMenuResetOrder(ApolloActionMenuContext context) {
+    // Absence of an order restores Apollo's contextual order. Saving the
+    // catalogue order instead would keep runtime sorting enabled.
+    NSMutableDictionary *layout = [ApolloActionMenuStoredLayout(context) mutableCopy];
+    [layout removeObjectForKey:kApolloActionMenuLayoutOrderKey];
+    ApolloLog(@"[ActionMenuLayout] %@ order reset to default", context);
+    ApolloActionMenuWriteLayout(context, layout.count > 0 ? layout : nil);
 }
 
 void ApolloActionMenuResetContext(ApolloActionMenuContext context) {

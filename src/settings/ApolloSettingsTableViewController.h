@@ -17,6 +17,7 @@ void ApolloSettingsApplyCellTypography(UITableViewCell *cell);
 - (UIColor *)apollo_themeAccentColor;
 - (void)apollo_applyPrimaryTextColorToCell:(UITableViewCell *)cell;
 - (void)apollo_applyAccentActionTextColorToCell:(UITableViewCell *)cell;
+- (void)apollo_removeAccentActionTextColorFromCell:(UITableViewCell *)cell;
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell;
 - (void)apollo_applyTheme;
 @end
