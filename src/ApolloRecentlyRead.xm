@@ -469,8 +469,10 @@ static UIImage *RecentlyReadNoThumbnailPlaceholderImage(BOOL isSelfPost, CGFloat
 
 static UIColor *RecentlyReadMetaColor(void) {
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
-        UIColor *secondary = [UIColor secondaryLabelColor];
-        UIColor *primary = [UIColor labelColor];
+        UIColor *secondary = [[UIColor secondaryLabelColor]
+            resolvedColorWithTraitCollection:tc];
+        UIColor *primary = [[UIColor labelColor]
+            resolvedColorWithTraitCollection:tc];
         CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
         [secondary getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
         [primary getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
@@ -852,23 +854,25 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat titleFontSize,
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
 
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
-                                                        cornerRadius:cornerRadius];
-        [RecentlyReadNativeNSFWBadgeBackgroundColor(traitCollection) setFill];
-        [path fill];
-        [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+    __block UIImage *image = nil;
+    UITraitCollection *traits = traitCollection ?: UITraitCollection.currentTraitCollection;
+    [traits performAsCurrentTraitCollection:^{
+        image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+            UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
+                                                            cornerRadius:cornerRadius];
+            [RecentlyReadNativeNSFWBadgeBackgroundColor(traits) setFill];
+            [path fill];
+            [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+        }];
     }];
+    return image;
 }
 
-/// Custom themes provide their own card background. For stock themes, keep
-// UIKit's system background so Apollo's native light/dark appearance is preserved.
+// Apollo's card abstraction carries the stock theme, Pure Black, and custom
+// theme variants. Recently Read rows are cards, so keep this in step with
+// native Apollo instead of resolving a separate UIKit fallback here.
 static UIColor *RecentlyReadCellBackgroundColor(void) {
-    if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryBackground);
-    }
-
-    return [UIColor systemBackgroundColor];
+    return ApolloThemeCardBackgroundColor() ?: [UIColor systemBackgroundColor];
 }
 
 // Flair text color
@@ -880,7 +884,8 @@ static UIColor *RecentlyReadFlairTextColor(void) {
     return [UIColor secondaryLabelColor];
 }
 
-// Create a flair badge using the traits of the cell that will display it.
+// Render with the controller's current traits so a live appearance switch does
+// not retain badge pixels resolved by an outgoing cell trait collection.
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
                                             CGFloat fontSize,
                                             UITraitCollection *traits) {
@@ -903,30 +908,22 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     UIGraphicsImageRenderer *renderer =
         [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
 
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-        UIBezierPath *path =
-            [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
-                                      cornerRadius:cornerRadius];
+    __block UIImage *image = nil;
+    UITraitCollection *effectiveTraits = traits ?: UITraitCollection.currentTraitCollection;
+    [effectiveTraits performAsCurrentTraitCollection:^{
+        image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+            UIBezierPath *path =
+                [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
+                                          cornerRadius:cornerRadius];
+            UIColor *badgeBackgroundColor = ApolloThemePageBackgroundColor()
+                ?: [UIColor systemGroupedBackgroundColor];
+            [badgeBackgroundColor setFill];
+            [path fill];
 
-        // Custom themes use the page/background token for flair badges. For stock
-        // themes, use UIKit's grouped backgrounds to match the native light/dark appearance.
-        UIColor *badgeBackgroundColor;
-
-        BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-
-        if (ApolloThemeRuntimeIsActive()) {
-            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenBackground);
-        } else {
-            badgeBackgroundColor = darkMode
-                ? [UIColor secondarySystemBackgroundColor]
-                : [UIColor systemGroupedBackgroundColor];
-        }
-
-        [badgeBackgroundColor setFill];
-        [path fill];
-
-        [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+            [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+        }];
     }];
+    return image;
 }
 
 @implementation RecentlyReadViewController
@@ -1563,8 +1560,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
             // Existing cells do not necessarily get reconfigured on a theme change.
             // Refresh attributed metadata too: setTitleColor alone cannot replace
             // the foreground colour stored in an attributed button title.
-            UIColor *metaColor =
-                [RecentlyReadMetaColor() resolvedColorWithTraitCollection:cell.traitCollection];
+            // Keep this dynamic.  During a live appearance transition the cell
+            // can still report its outgoing traits while UIKit resolves the
+            // color for the incoming appearance.
+            UIColor *metaColor = RecentlyReadMetaColor();
             UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
             cell.tintColor = metaColor;
             for (NSNumber *tag in @[@(kSubHeaderTag), @(kSubFooterSubredditTag),
@@ -1596,6 +1595,15 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
 
 - (UIColor *)apollo_themeCellBackgroundColor {
     return RecentlyReadCellBackgroundColor();
+}
+
+// Recently Read uses custom post cells, not settings rows.  The settings base
+// class otherwise applies its accent/tint walk to every content subview during
+// willDisplayCell: and theme refreshes, clobbering these cells' own fonts and
+// attributed foreground colours.  Keep its background lifecycle only.
+- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
+    if (!cell) return;
+    cell.backgroundColor = [self apollo_themeCellBackgroundColor];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -1764,11 +1772,12 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     }
 
     if (flairText.length > 0) {
-        // Render the flair badge using the title label's trait environment.
+        // The controller owns the current appearance during a live transition;
+        // a reused label can still carry its outgoing trait collection here.
         UIImage *flairBadge =
             RecentlyReadFlairBadgeImage(flairText,
                                         titleFont.pointSize,
-                                        titleLabel.traitCollection);
+                                        self.traitCollection);
 
         NSTextAttachment *flairAtt =
             [[NSTextAttachment alloc] init];
@@ -1797,7 +1806,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [[NSAttributedString alloc] initWithString:@" "]];
 
         UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize,
-                                                     titleLabel.traitCollection);
+                                                     self.traitCollection);
 
         NSTextAttachment *att =
             [[NSTextAttachment alloc] init];
