@@ -309,11 +309,15 @@ static BOOL ApolloFeedCellHasInlineVideo(id cell) {
         && ApolloFeedVideoPrewarmPlayer(self, asset, keys)) {
         return;
     }
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.prepareToPlayAsset",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 %end
@@ -487,50 +491,74 @@ static void ApolloLogRangeTuningOnce(void) {
 
 - (void)play {
     ApolloInlineVideoNotePlay(self);
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.play",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)pause {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.pause",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (id)constructPlayerNode {
+#if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+#endif
     id r = %orig;
+#if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.constructPlayerNode", (CACurrentMediaTime() - t0) * 1000.0, self);
+#endif
     return r;
 }
 
 - (void)didEnterPreloadState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.didEnterPreloadState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)didExitPreloadState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.didExitPreloadState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)didEnterVisibleState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"ASVideoNode.didEnterVisibleState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 %end
@@ -538,19 +566,27 @@ static void ApolloLogRangeTuningOnce(void) {
 %hook RichMediaNodeTiming
 
 - (void)didEnterPreloadState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"RichMediaNode.didEnterPreloadState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)didExitPreloadState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"RichMediaNode.didExitPreloadState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 %end
@@ -562,27 +598,39 @@ static void ApolloLogRangeTuningOnce(void) {
     NSString *step = ApolloFeedCellHasInlineVideo(self)
         ? @"LargePostCellNode(video).didEnterVisibleState"
         : @"LargePostCellNode(other).didEnterVisibleState";
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(step,
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)didEnterDisplayState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"LargePostCellNode.didEnterDisplayState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
 }
 
 - (void)didEnterPreloadState {
+    #if APOLLO_SIM_BUILD
     CFTimeInterval t0 = CACurrentMediaTime();
+    #endif
     %orig;
+    #if APOLLO_SIM_BUILD
     ApolloVideoTimingRecord(@"LargePostCellNode.didEnterPreloadState",
                             (CACurrentMediaTime() - t0) * 1000.0,
                             self);
+    #endif
     dispatch_async(dispatch_get_main_queue(), ^{ ApolloLogRangeTuningOnce(); });
 }
 
