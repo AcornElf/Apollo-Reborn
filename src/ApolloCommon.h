@@ -297,9 +297,10 @@ BOOL ApolloTextNodeIsTweakUI(id node);
 // first, so a registry those modules pushed into would always be flushed before
 // they filled it. Each function writes its bindings at `out` and returns how
 // many it wrote; ApolloRebornMaxAppendedRebindings bounds the caller's array.
+// swift_allocObject stays out of this batch: ApolloSwiftSingletonCapture is its
+// only owner and rebinds just the image that defines each captured class.
 struct rebinding;
 enum { ApolloRebornMaxAppendedRebindings = 5 };
 size_t ApolloImageUploadHostAppendRebindings(struct rebinding *out);
 size_t ApolloPhotoComposerAppendRebindings(struct rebinding *out);
-size_t ApolloRecentlyReadAppendRebindings(struct rebinding *out);
 __END_DECLS

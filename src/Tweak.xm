@@ -4364,7 +4364,9 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // walks all ~2k loaded images per call, and four separate calls paid that
     // walk four times. The Security bindings have to be installed here, before
     // the Web JSON keychain hydration below, so this is the call the others join.
-    struct rebinding rebindings[5 + 3 * ApolloRebornMaxAppendedRebindings] = {
+    // (ApolloSwiftSingletonCapture and ApolloRedgifsQueuedFetchesLock rebind
+    // only Apollo's own image with rebind_symbols_image, which skips that walk.)
+    struct rebinding rebindings[5 + 2 * ApolloRebornMaxAppendedRebindings] = {
         {"SecItemAdd", (void *)SecItemAdd_replacement, (void **)&SecItemAdd_orig},
         {"SecItemCopyMatching", (void *)SecItemCopyMatching_replacement, (void **)&SecItemCopyMatching_orig},
         {"SecItemUpdate", (void *)SecItemUpdate_replacement, (void **)&SecItemUpdate_orig},
@@ -4374,7 +4376,6 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     size_t rebindingCount = 5;
     rebindingCount += ApolloImageUploadHostAppendRebindings(&rebindings[rebindingCount]);
     rebindingCount += ApolloPhotoComposerAppendRebindings(&rebindings[rebindingCount]);
-    rebindingCount += ApolloRecentlyReadAppendRebindings(&rebindings[rebindingCount]);
     rebind_symbols(rebindings, rebindingCount);
 
     if ([[NSUserDefaults standardUserDefaults] boolForKey:UDKeyEnableFLEX]) {
