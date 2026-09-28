@@ -31,9 +31,9 @@ NSString *ApolloActionMenuContextTitle(ApolloActionMenuContext context) {
     if ([context isEqualToString:ApolloActionMenuContextPost]) return @"Post";
     if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"Post with Comments";
     if ([context isEqualToString:ApolloActionMenuContextComment]) return @"Comment";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"Moderator (Subreddit)";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"Moderator (Post)";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"Moderator (Comment)";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"Subreddit";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"Post";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"Comment";
     return context ?: @"";
 }
 
@@ -495,10 +495,21 @@ void ApolloActionMenuSetOrder(ApolloActionMenuContext context, NSArray<NSString 
         if (![clean containsObject:itemID]) [clean addObject:itemID];
     }
     NSArray<NSString *> *normalized = ApolloActionMenuLockedFirst(context, clean);
+    NSArray<NSString *> *defaultOrder = ApolloActionMenuLockedFirst(context, catalogOrder);
     NSArray<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context).allObjects;
-    ApolloLog(@"[ActionMenuLayout] %@ order -> %@", context, [normalized componentsJoinedByString:@", "]);
-    ApolloActionMenuWriteLayout(context, @{ kApolloActionMenuLayoutOrderKey: normalized,
-                                            kApolloActionMenuLayoutHiddenKey: hidden });
+
+    if ([normalized isEqualToArray:defaultOrder]) {
+        ApolloLog(@"[ActionMenuLayout] %@ order returned to default", context);
+        ApolloActionMenuWriteLayout(context, @{
+            kApolloActionMenuLayoutHiddenKey: hidden
+        });
+    } else {
+        ApolloLog(@"[ActionMenuLayout] %@ order -> %@", context, [normalized componentsJoinedByString:@", "]);
+        ApolloActionMenuWriteLayout(context, @{
+            kApolloActionMenuLayoutOrderKey: normalized,
+            kApolloActionMenuLayoutHiddenKey: hidden
+        });
+    }
 }
 
 void ApolloActionMenuSetItemHidden(ApolloActionMenuContext context, NSString *itemID, BOOL hidden) {

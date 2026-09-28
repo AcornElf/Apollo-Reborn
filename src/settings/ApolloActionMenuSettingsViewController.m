@@ -99,7 +99,22 @@ static UIImage *ApolloAMPreviewButtonImage(ApolloActionMenuContext context) {
                            imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         if (shield) return shield;
     }
-    return [UIImage systemImageNamed:@"ellipsis"];
+
+    // Mirror Apollo's real control: navigation-bar menus use the hollow dots;
+    // inline post/comment menus use the filled dots.
+    BOOL usesFilledMoreIcon =
+        [context isEqualToString:ApolloActionMenuContextPost] ||
+        [context isEqualToString:ApolloActionMenuContextComment];
+
+    NSString *imageName =
+        usesFilledMoreIcon ? @"inline-more-options" : @"option-more";
+
+    UIImage *image = [[UIImage imageNamed:imageName
+                                 inBundle:NSBundle.mainBundle
+            compatibleWithTraitCollection:nil]
+                      imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+
+    return image ?: [UIImage systemImageNamed:@"ellipsis"];
 }
 
 #pragma mark - Legacy preview sheet (pre-Liquid Glass)
@@ -456,6 +471,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     self.title = self.editingAllMenus ? @"All Menus" : ApolloActionMenuContextTitle(self.context);
     ApolloLog(@"[ActionMenuSettings] editing %@", self.context);
 
+
     // Drag & drop powers the item rows' reordering (touch and hold a row, then
     // drag). Scoped hard to that section by the drag delegate + drop proposal;
     // every other row refuses to lift. The rows stay plain tappable rows
@@ -486,18 +502,6 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     // A real ••• opened since (recording what it offered) changes the dimming;
     // the glass menu is built on tap anyway, this keeps the button state right.
     [self refreshPreviewButton];
-}
-
-- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-    CGFloat height = [super tableView:tableView heightForFooterInSection:section];
-
-    // Give the introductory explanation a little more breathing room below.
-    if (!self.editingAllMenus && section == 0 &&
-        height != UITableViewAutomaticDimension) {
-        return height + 16.0;
-    }
-
-    return height;
 }
 
 #pragma mark - The ••• preview
@@ -576,6 +580,17 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         [items sortUsingComparator:^NSComparisonResult(ApolloActionMenuItem *a, ApolloActionMenuItem *b) {
             return [a.title localizedStandardCompare:b.title];
         }];
+    } else if (!ApolloNativeActionMenusActive()) {
+        // Classic always appends Apollo Reborn actions after Apollo's native
+        // actions, regardless of the saved Liquid Glass ordering.
+        NSMutableArray<ApolloActionMenuItem *> *native = [NSMutableArray array];
+        NSMutableArray<ApolloActionMenuItem *> *tweak = [NSMutableArray array];
+
+        for (ApolloActionMenuItem *item in items) {
+            [(item.isTweakRow ? tweak : native) addObject:item];
+        }
+
+        items = [[native arrayByAddingObjectsFromArray:tweak] mutableCopy];
     }
     return items;
 }
@@ -620,32 +635,66 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     NSMutableArray<ApolloSettingsRow *> *itemRows = [NSMutableArray array];
     for (ApolloActionMenuItem *item in [self editableItems]) {
         NSString *itemID = item.itemID;
-        // Hidden state is read live on every configure (a tap restyles the
-        // cell in place), never captured at build time.
+
         ApolloSettingsRow *row =
             [ApolloSettingsRow customRowWithID:[self itemRowIDForItemID:itemID]
-                                          cell:^UITableViewCell *(UITableView *tableView, __unused ApolloSettingsRow *r) {
+                                          cell:^UITableViewCell *(UITableView *tableView,
+                                                                  __unused ApolloSettingsRow *r) {
             return [weakSelf itemCellForItem:item
                                       hidden:[weakSelf itemIsHidden:item.itemID]
                                      inTable:tableView];
         }
-                                      onSelect:^{ [weakSelf toggleItemWithID:itemID]; }];
-        // An exact height, never UIKit's estimate (see itemRowHeightWithSubtitle:).
+                                      onSelect:^{
+            [weakSelf toggleItemWithID:itemID];
+        }];
+
         row.height = ^CGFloat {
             __strong __typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) return UITableViewAutomaticDimension;
-            BOOL subtitle = strongSelf.editingAllMenus || !ApolloActionMenuItemWasOffered(strongSelf.context, itemID);
-            return [strongSelf itemRowHeightWithSubtitle:subtitle];
+
+            BOOL subtitle = strongSelf.editingAllMenus ||
+                !ApolloActionMenuItemWasOffered(strongSelf.context, itemID);
+
+            CGFloat height = [strongSelf itemRowHeightWithSubtitle:subtitle];
+
+            if (strongSelf.editingAllMenus) {
+                UITableViewCell *cell =
+                    [strongSelf cellForRowID:[strongSelf itemRowIDForItemID:itemID]];
+
+                if ([cell isKindOfClass:[ApolloAMItemCell class]] &&
+                    cell.detailTextLabel.text.length > 0) {
+                    CGFloat width = CGRectGetWidth(cell.bounds);
+
+                    [cell setNeedsLayout];
+                    [cell layoutIfNeeded];
+
+                    CGFloat required =
+                        ceil([cell systemLayoutSizeFittingSize:
+                                  CGSizeMake(width, UILayoutFittingCompressedSize.height)
+                              withHorizontalFittingPriority:UILayoutPriorityRequired
+                                    verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+
+                    height = MAX(height, required);
+                }
+            }
+
+            return height;
         };
+
         [itemRows addObject:row];
     }
 
-    // ---- Reset (disabled while this menu matches Apollo's default) ----
+    // ---- Reset ----
 
     ApolloSettingsRow *reset =
         [ApolloSettingsRow buttonRowWithID:kApolloAMRowReset
-                                     title:@"Reset Menu…"
-                                    action:^{ [weakSelf presentResetMenuSheet]; }];
+                                     title:self.editingAllMenus
+                                         ? @"Reset All Menus…"
+                                         : @"Reset Menu…"
+                                    action:^{
+            [weakSelf presentResetMenuSheet];
+        }];
+
     reset.enabled = ^BOOL {
         return weakSelf.editingAllMenus
             ? ApolloActionMenuCustomizedContextCount() > 0
@@ -654,28 +703,77 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 
     NSString *menuFooter;
     NSString *itemsFooter;
+
     if (self.editingAllMenus) {
-        menuFooter = @"Visibility across every menu, the moderator menus included. Open a menu from the previous screen to reorder its actions or preview it.";
-        itemsFooter = @"Tap an action to show or hide it across the menus that support it. Shown in Some Menus means your per-menu choices differ. Select a menu to adjust its choices and order.";
+        menuFooter =
+            @"\nShow or hide actions across all menus, including moderator menus. "
+             "Actions enabled here appear in every menu that supports them.";
+
+        itemsFooter =
+            @"Tap an action to show or hide it across the menus that support it.";
     } else {
-        menuFooter = [ApolloActionMenuContextDescription(context)
-                      stringByAppendingString:ApolloActionMenuContextIsModerator(context)
-                          ? @" Tap the shield above to preview."
-                          : @" Tap ••• above to preview."];
-        itemsFooter = @"Tap an action to show or hide it. Drag to reorder. Some actions are only available in certain contexts.";
+        if (ApolloActionMenuContextIsModerator(context)) {
+            NSString *description = ApolloActionMenuContextDescription(context);
+            description = [description stringByReplacingOccurrencesOfString:@"The shield menu"
+                                                                  withString:@"The \uFFFC menu"];
+            menuFooter = [description stringByAppendingString:@" Tap the \uFFFC above to preview."];
+        } else {
+            menuFooter =
+                [ApolloActionMenuContextDescription(context)
+                    stringByAppendingString:@" Tap ••• above to preview."];
+        }
+
+        itemsFooter =
+            @"Tap an action to show or hide it. Drag to reorder. "
+             "Some actions are only available in certain contexts.";
+
         NSString *lockedNote = [self lockedItemsNote];
-        if (lockedNote) itemsFooter = [itemsFooter stringByAppendingFormat:@" %@", lockedNote];
+        if (lockedNote) {
+            itemsFooter =
+                [itemsFooter stringByAppendingFormat:@" %@", lockedNote];
+        }
+
         if (!ApolloNativeActionMenusActive()) {
-            itemsFooter = [itemsFooter stringByAppendingString:@"\n\nApollo Reborn actions appear below Apollo actions on this iOS version."];
+            NSString *note;
+
+            if (@available(iOS 26.0, *)) {
+                note =
+                    @"Apollo Reborn actions appear below Apollo actions and "
+                     "cannot be hidden in the Classic (non-Liquid Glass) build.";
+            } else {
+                note =
+                    @"Apollo Reborn actions appear below Apollo actions and "
+                     "cannot be hidden on this iOS version.";
+            }
+
+            itemsFooter =
+                [itemsFooter stringByAppendingFormat:@"\n\n%@", note];
         }
     }
 
-    return @[
-        // Where this menu opens from, and how to preview it — text only.
-        [ApolloSettingsSection sectionWithTitle:nil footer:menuFooter rows:@[]],
-        [ApolloSettingsSection sectionWithTitle:@"Items" footer:itemsFooter rows:itemRows],
-        [ApolloSettingsSection sectionWithTitle:nil footer:nil rows:@[ reset ]],
-    ];
+    ApolloSettingsSection *introSection =
+        [ApolloSettingsSection sectionWithTitle:nil
+                                         footer:menuFooter
+                                           rows:@[]];
+
+    ApolloSettingsSection *itemsSection =
+        [ApolloSettingsSection sectionWithTitle:nil
+                                         footer:itemsFooter
+                                           rows:itemRows];
+
+    ApolloSettingsSection *resetSection =
+        [ApolloSettingsSection sectionWithTitle:nil
+                                         footer:self.editingAllMenus ? menuFooter : nil
+                                           rows:@[ reset ]];
+
+    if (self.editingAllMenus) {
+        // The introduction belongs to the Reset section here. Keeping it in a
+        // separate empty section makes inset-grouped tables insert two normal
+        // section gaps between Reset and the introductory text.
+        return @[ resetSection, itemsSection ];
+    }
+
+    return @[ introSection, itemsSection, resetSection ];
 }
 
 - (UITableViewCell *)itemCellForItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden inTable:(UITableView *)tableView {
@@ -685,7 +783,12 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     cell.itemID = item.itemID;
     cell.textLabel.text = item.title;
     cell.imageView.image = [item icon];
-    cell.showsGrip = !self.editingAllMenus;
+    BOOL fixedTweakRow =
+        !self.editingAllMenus &&
+        !ApolloNativeActionMenusActive() &&
+        item.isTweakRow;
+
+    cell.showsGrip = !self.editingAllMenus && !fixedTweakRow;
     [self styleItemCell:cell forItem:item hidden:hidden];
     return cell;
 }
@@ -744,20 +847,71 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     // offered it last time (a moderator's Moderator row, say). Same rule the
     // ••• preview dims by.
     BOOL offered = self.editingAllMenus || ApolloActionMenuItemWasOffered(self.context, item.itemID);
-    cell.detailTextLabel.text = offered ? nil : @"Shown when available";
+    if (offered) {
+        cell.detailTextLabel.text = nil;
+    } else if ([item.itemID isEqualToString:@"moderator"]) {
+        cell.detailTextLabel.text = @"Shown in subreddits you moderate";
+    } else {
+        cell.detailTextLabel.text = @"Shown when available";
+    }
     if (self.editingAllMenus) {
         NSArray *contexts = [self contextsForItem:item.itemID];
+
         NSUInteger hiddenCount = 0;
         for (NSString *context in contexts) {
-            if (ApolloActionMenuIsItemHidden(context, item.itemID)) hiddenCount++;
+            if (ApolloActionMenuIsItemHidden(context, item.itemID)) {
+                hiddenCount++;
+            }
         }
-        cell.detailTextLabel.text = hiddenCount == 0 ? @"Shown in All Supported Menus" :
-            (hiddenCount == contexts.count ? @"Hidden in All Supported Menus" : @"Shown in Some Menus");
+
+        if (hiddenCount == 0) {
+            cell.detailTextLabel.text = nil;
+        } else {
+            NSMutableArray<NSString *> *names = [NSMutableArray array];
+
+            for (NSString *context in contexts) {
+                if (!ApolloActionMenuIsItemHidden(context, item.itemID)) {
+                    continue;
+                }
+
+                NSString *name = ApolloActionMenuContextTitle(context);
+
+                if (ApolloActionMenuContextIsModerator(context)) {
+                    name = [@"Moderator " stringByAppendingString:name];
+                }
+
+                [names addObject:name];
+            }
+
+            NSString *menuList;
+            if (names.count == 1) {
+                menuList = names[0];
+            } else if (names.count == 2) {
+                menuList = [names componentsJoinedByString:@" and "];
+            } else {
+                NSArray<NSString *> *leading =
+                    [names subarrayWithRange:NSMakeRange(0, names.count - 1)];
+
+                menuList = [NSString stringWithFormat:@"%@ and %@",
+                    [leading componentsJoinedByString:@", "],
+                    names.lastObject];
+            }
+
+            cell.detailTextLabel.text =
+                [NSString stringWithFormat:@"Hidden in %@", menuList];
+        }
     }
+    cell.detailTextLabel.numberOfLines = 0;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     UIColor *accent = [self apollo_themeAccentColor] ?: ApolloThemeAccentColor() ?: self.view.tintColor;
+    BOOL fixedTweakRow =
+        !self.editingAllMenus &&
+        !ApolloNativeActionMenusActive() &&
+        item.isTweakRow;
+
     cell.checkmark.tintColor = accent;
-    cell.checkmark.alpha = hidden ? 0.0 : 1.0;
+    cell.checkmark.alpha = fixedTweakRow ? 0.0 : (hidden ? 0.0 : 1.0);
     // Reuse pool: set BOTH states explicitly. A hidden row's label is disabled
     // (the theme pass leaves disabled labels alone, so the dim survives it);
     // a shown row is re-enabled, reset to the plain label colour and marked
@@ -782,6 +936,16 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 // nothing moves under the finger; the checkmark fades in or out.
 - (void)toggleItemWithID:(NSString *)itemID {
     if (itemID.length == 0) return;
+
+    ApolloActionMenuItem *catalogItem =
+        ApolloActionMenuCatalogItem(self.context, itemID);
+
+    if (!self.editingAllMenus &&
+        !ApolloNativeActionMenusActive() &&
+        catalogItem.isTweakRow) {
+        return;
+    }
+
     BOOL hide = ![self itemIsHidden:itemID];
     for (NSString *context in [self contextsForItem:itemID]) {
         ApolloActionMenuSetItemHidden(context, itemID, hide);
@@ -807,6 +971,35 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 
 - (void)presentResetMenuSheet {
     if (self.presentedViewController) return;
+
+    if (self.editingAllMenus) {
+        UIAlertController *sheet =
+            [UIAlertController alertControllerWithTitle:@"Reset All Menus"
+                                                message:@"This restores the default order and visibility in every menu."
+                                         preferredStyle:UIAlertControllerStyleActionSheet];
+
+        __weak __typeof(self) weakSelf = self;
+
+        [sheet addAction:
+            [UIAlertAction actionWithTitle:@"Reset All Menus"
+                                     style:UIAlertActionStyleDestructive
+                                   handler:^(__unused UIAlertAction *action) {
+                [weakSelf resetCurrentMenuOrderOnly:NO];
+            }]];
+
+        [sheet addAction:
+            [UIAlertAction actionWithTitle:@"Cancel"
+                                     style:UIAlertActionStyleCancel
+                                   handler:nil]];
+
+        UITableViewCell *cell = [self cellForRowID:kApolloAMRowReset];
+        sheet.popoverPresentationController.sourceView = cell ?: self.view;
+        sheet.popoverPresentationController.sourceRect =
+            cell ? cell.bounds : CGRectZero;
+
+        [self presentViewController:sheet animated:YES completion:nil];
+        return;
+    }
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Reset Menu"
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
@@ -858,7 +1051,13 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 }
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-    return [self indexPathIsItemRow:indexPath];
+    if (![self indexPathIsItemRow:indexPath]) return NO;
+
+    NSArray<ApolloActionMenuItem *> *items = [self editableItems];
+    if (indexPath.row < 0 || indexPath.row >= (NSInteger)items.count) return NO;
+
+    ApolloActionMenuItem *item = items[(NSUInteger)indexPath.row];
+    return ApolloNativeActionMenusActive() || !item.isTweakRow;
 }
 
 - (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)fromIndexPath toIndexPath:(NSIndexPath *)toIndexPath {
@@ -924,6 +1123,65 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     return [[UITableViewDropProposal alloc] initWithDropOperation:UIDropOperationCancel];
 }
 
+
+
+- (void)tableView:(UITableView *)tableView
+willDisplayFooterView:(UIView *)view
+       forSection:(NSInteger)section {
+    [super tableView:tableView willDisplayFooterView:view forSection:section];
+
+    if (self.editingAllMenus ||
+        !ApolloActionMenuContextIsModerator(self.context) ||
+        section != 0 ||
+        ![view isKindOfClass:UITableViewHeaderFooterView.class]) {
+        return;
+    }
+
+    UITableViewHeaderFooterView *footer = (UITableViewHeaderFooterView *)view;
+    UILabel *label = footer.textLabel;
+    if (!label || [label.text rangeOfString:@"\uFFFC"].location == NSNotFound) return;
+
+    UIImage *shield =
+        [[UIImage imageNamed:@"option-moderator"
+                    inBundle:NSBundle.mainBundle
+   compatibleWithTraitCollection:view.traitCollection]
+            imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+
+    if (!shield) return;
+
+    NSString *source = label.text;
+    NSMutableAttributedString *result = [[NSMutableAttributedString alloc] init];
+
+    NSArray<NSString *> *parts = [source componentsSeparatedByString:@"\uFFFC"];
+
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        [result appendAttributedString:
+            [[NSAttributedString alloc] initWithString:parts[i]]];
+
+        if (i + 1 < parts.count) {
+            NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+            attachment.image = shield;
+
+            CGFloat iconWidth = label.font.capHeight * 1.8;
+            CGFloat aspect = shield.size.width / shield.size.height;
+            CGFloat iconHeight = iconWidth / aspect;
+            CGFloat yOffset = 1.5 - (iconHeight * 0.33);
+
+            attachment.bounds =
+                CGRectMake(0.0, yOffset, iconWidth, iconHeight);
+
+            [result appendAttributedString:
+                [NSAttributedString attributedStringWithAttachment:attachment]];
+        }
+    }
+
+    [result addAttribute:NSForegroundColorAttributeName
+                   value:label.textColor
+                   range:NSMakeRange(0, result.length)];
+
+    label.attributedText = result;
+}
+
 - (void)tableView:(UITableView *)tableView performDropWithCoordinator:(id<UITableViewDropCoordinator>)coordinator {
     // Local same-table reorders with a .move/insertAtDestination proposal are
     // committed by UIKit through tableView:moveRowAtIndexPath:toIndexPath:
@@ -934,19 +1192,64 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 
 #pragma mark - The hub
 
-// "Moderator (Post)" → "Post": the section header already says Moderator.
-static NSString *ApolloAMModeratorShortTitle(ApolloActionMenuContext context) {
-    NSString *title = ApolloActionMenuContextTitle(context);
-    NSRange open = [title rangeOfString:@"("], close = [title rangeOfString:@")" options:NSBackwardsSearch];
-    if (open.location == NSNotFound || close.location == NSNotFound || close.location <= open.location) return title;
-    return [title substringWithRange:NSMakeRange(open.location + 1, close.location - open.location - 1)];
-}
-
 @implementation ApolloActionMenuSettingsViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Customize Action Menus";
+}
+
+
+- (void)tableView:(UITableView *)tableView
+willDisplayHeaderView:(UIView *)view
+       forSection:(NSInteger)section {
+    [super tableView:tableView willDisplayHeaderView:view forSection:section];
+
+    if (![view isKindOfClass:UITableViewHeaderFooterView.class]) return;
+    if (section != 1 && section != 2) return;
+
+    UITableViewHeaderFooterView *header = (UITableViewHeaderFooterView *)view;
+    UILabel *label = header.textLabel;
+
+    NSString *imageName = section == 1 ? @"option-more" : @"option-moderator";
+    NSString *title = section == 1 ? @"Menus" : @"Moderator Menus";
+
+    if (@available(iOS 18.0, *)) {
+        // Modern Settings-style section headings use sentence case.
+    } else {
+        title = title.uppercaseString;
+    }
+
+    UIImage *image = [[UIImage imageNamed:imageName
+                                 inBundle:NSBundle.mainBundle
+            compatibleWithTraitCollection:view.traitCollection]
+        imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+
+    if (!image) return;
+
+    NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+    attachment.image = image;
+
+    // Give both header glyphs the same optical width. Apollo's source PDFs
+    // have quite different proportions and vertical centres.
+    CGFloat iconWidth = label.font.capHeight * 1.8;
+    CGFloat aspectRatio = image.size.width / image.size.height;
+    CGFloat iconHeight = iconWidth / aspectRatio;
+    CGFloat yOffset = section == 1 ? 1.5 : -2.5;
+
+    attachment.bounds = CGRectMake(0.0,
+                                   yOffset,
+                                   iconWidth,
+                                   iconHeight);
+
+    NSMutableAttributedString *text =
+        [[NSMutableAttributedString alloc] initWithAttributedString:
+            [NSAttributedString attributedStringWithAttachment:attachment]];
+
+    [text appendAttributedString:
+        [[NSAttributedString alloc] initWithString:[@"  " stringByAppendingString:title]]];
+
+    label.attributedText = text;
 }
 
 // One menu: its name and editor behind the chevron.
@@ -965,18 +1268,18 @@ static NSString *ApolloAMModeratorShortTitle(ApolloActionMenuContext context) {
     for (ApolloActionMenuContext context in ApolloActionMenuAllContexts()) {
         BOOL mod = ApolloActionMenuContextIsModerator(context);
         [(mod ? moderator : regular) addObject:[self menuRowForContext:context
-                                                                 title:mod ? ApolloAMModeratorShortTitle(context) : ApolloActionMenuContextTitle(context)]];
+                                                                 title:ApolloActionMenuContextTitle(context)]];
     }
     ApolloSettingsRow *all = [self menuRowForContext:ApolloActionMenuEditorAllMenus title:@"All Menus"];
     return @[
         [ApolloSettingsSection sectionWithTitle:nil
                                          footer:@"Show or hide actions across every menu at once."
                                            rows:@[ all ]],
-        [ApolloSettingsSection sectionWithTitle:@"••• Menus"
+        [ApolloSettingsSection sectionWithTitle:@"Menus"
                                          footer:nil
                                            rows:regular],
-        [ApolloSettingsSection sectionWithTitle:@"Moderator Shield Menus"
-                                         footer:@"Shown only in subreddits you moderate."
+        [ApolloSettingsSection sectionWithTitle:@"Moderator Menus"
+                                         footer:@"Shown in subreddits you moderate."
                                            rows:moderator],
     ];
 }
