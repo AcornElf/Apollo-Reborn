@@ -437,8 +437,8 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     self.textLabel.frame = textFrame;
     CGRect detailFrame = self.detailTextLabel.frame;
     detailFrame.origin.x = textFrame.origin.x;
-    detailFrame.size.width = textFrame.size.width;
     self.detailTextLabel.frame = detailFrame;
+
     // The theme pass tints every image view in the cell with the accent; the
     // grip is chrome, not content (the checkmark IS accent-coloured).
     self.grip.tintColor = UIColor.tertiaryLabelColor;
@@ -451,7 +451,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 @interface ApolloActionMenuEditorViewController () <UITableViewDragDelegate, UITableViewDropDelegate>
 @property (nonatomic, copy) ApolloActionMenuContext context;
 @property (nonatomic, strong) UIBarButtonItem *previewButton;
-// Exact item-row heights (see itemRowHeightWithSubtitle:).
+// Exact item-row heights (see itemRowHeightWithSubtitle:itemID:).
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *itemRowHeights;
 @property (nonatomic, strong) ApolloAMItemCell *measuringItemCell;
 @end
@@ -655,7 +655,8 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
             BOOL subtitle = strongSelf.editingAllMenus ||
                 !ApolloActionMenuItemWasOffered(strongSelf.context, itemID);
 
-            CGFloat height = [strongSelf itemRowHeightWithSubtitle:subtitle];
+            CGFloat height = [strongSelf itemRowHeightWithSubtitle:subtitle
+                                                       itemID:itemID];
 
             if (strongSelf.editingAllMenus) {
                 UITableViewCell *cell =
@@ -716,11 +717,13 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
             NSString *description = ApolloActionMenuContextDescription(context);
             description = [description stringByReplacingOccurrencesOfString:@"The shield menu"
                                                                   withString:@"The \uFFFC menu"];
-            menuFooter = [description stringByAppendingString:@" Tap the \uFFFC above to preview."];
+            menuFooter = [description stringByAppendingString:@" Tap \uFFFC above to preview."];
         } else {
+            NSString *description = ApolloActionMenuContextDescription(context);
+            description = [description stringByReplacingOccurrencesOfString:@"•••"
+                                                                  withString:@"\uFFFC"];
             menuFooter =
-                [ApolloActionMenuContextDescription(context)
-                    stringByAppendingString:@" Tap ••• above to preview."];
+                [description stringByAppendingString:@" Tap \uFFFC above to preview."];
         }
 
         itemsFooter =
@@ -734,17 +737,9 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         }
 
         if (!ApolloNativeActionMenusActive()) {
-            NSString *note;
-
-            if (@available(iOS 26.0, *)) {
-                note =
-                    @"Apollo Reborn actions appear below Apollo actions and "
-                     "cannot be hidden in the Classic (non-Liquid Glass) build.";
-            } else {
-                note =
-                    @"Apollo Reborn actions appear below Apollo actions and "
-                     "cannot be hidden on this iOS version.";
-            }
+            NSString *note =
+                @"Apollo Reborn actions stay below Apollo actions and "
+                 "can’t be reordered or hidden.";
 
             itemsFooter =
                 [itemsFooter stringByAppendingFormat:@"\n\n%@", note];
@@ -801,13 +796,17 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 // recording, 2026-09-15). So hand UIKit exact heights: one template cell
 // measured per variant (subtitle or not), cached per cell width and content
 // size category.
-- (CGFloat)itemRowHeightWithSubtitle:(BOOL)subtitle {
+- (CGFloat)itemRowHeightWithSubtitle:(BOOL)subtitle
+                              itemID:(NSString *)itemID {
     UITableView *table = self.tableView;
     CGFloat width = CGRectGetWidth(table.bounds) - table.layoutMargins.left - table.layoutMargins.right;
     UITableViewCell *sample = table.visibleCells.firstObject;
     if (sample && sample.superview) width = CGRectGetWidth([sample.superview convertRect:sample.frame toView:table]);
     if (width <= 0.0) return UITableViewAutomaticDimension;
-    NSString *key = [NSString stringWithFormat:@"%d|%.0f|%@", subtitle, width,
+    NSString *key = [NSString stringWithFormat:@"%d|%@|%.0f|%@",
+                     subtitle,
+                     itemID ?: @"",
+                     width,
                      table.traitCollection.preferredContentSizeCategory ?: @""];
     NSNumber *cached = self.itemRowHeights[key];
     if (cached) return cached.doubleValue;
@@ -817,7 +816,13 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     }
     ApolloAMItemCell *cell = self.measuringItemCell;
     cell.textLabel.text = @"Measure";
-    cell.detailTextLabel.text = subtitle ? @"Shown when available" : nil;
+    if (!subtitle) {
+        cell.detailTextLabel.text = nil;
+    } else if ([itemID isEqualToString:@"moderator"]) {
+        cell.detailTextLabel.text = @"Shown in subreddits you moderate";
+    } else {
+        cell.detailTextLabel.text = @"Shown when relevant";
+    }
     // Representative icon: the catalogue's are 24 pt boxes / 19 pt symbols,
     // which never exceed the label stack, so any such glyph will do.
     cell.imageView.image = [UIImage systemImageNamed:@"square"
@@ -852,7 +857,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     } else if ([item.itemID isEqualToString:@"moderator"]) {
         cell.detailTextLabel.text = @"Shown in subreddits you moderate";
     } else {
-        cell.detailTextLabel.text = @"Shown when available";
+        cell.detailTextLabel.text = @"Shown when relevant";
     }
     if (self.editingAllMenus) {
         NSArray *contexts = [self contextsForItem:item.itemID];
@@ -1131,7 +1136,6 @@ willDisplayFooterView:(UIView *)view
     [super tableView:tableView willDisplayFooterView:view forSection:section];
 
     if (self.editingAllMenus ||
-        !ApolloActionMenuContextIsModerator(self.context) ||
         section != 0 ||
         ![view isKindOfClass:UITableViewHeaderFooterView.class]) {
         return;
@@ -1141,13 +1145,23 @@ willDisplayFooterView:(UIView *)view
     UILabel *label = footer.textLabel;
     if (!label || [label.text rangeOfString:@"\uFFFC"].location == NSNotFound) return;
 
-    UIImage *shield =
-        [[UIImage imageNamed:@"option-moderator"
+    NSString *iconName;
+    if (ApolloActionMenuContextIsModerator(self.context)) {
+        iconName = @"option-moderator";
+    } else if (self.context == ApolloActionMenuContextFeed ||
+               self.context == ApolloActionMenuContextPostDetail) {
+        iconName = @"option-more";
+    } else {
+        iconName = @"inline-more-options";
+    }
+
+    UIImage *icon =
+        [[UIImage imageNamed:iconName
                     inBundle:NSBundle.mainBundle
    compatibleWithTraitCollection:view.traitCollection]
             imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 
-    if (!shield) return;
+    if (!icon) return;
 
     NSString *source = label.text;
     NSMutableAttributedString *result = [[NSMutableAttributedString alloc] init];
@@ -1160,12 +1174,19 @@ willDisplayFooterView:(UIView *)view
 
         if (i + 1 < parts.count) {
             NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
-            attachment.image = shield;
+            attachment.image = icon;
 
             CGFloat iconWidth = label.font.capHeight * 1.8;
-            CGFloat aspect = shield.size.width / shield.size.height;
+            CGFloat aspect = icon.size.width / icon.size.height;
             CGFloat iconHeight = iconWidth / aspect;
-            CGFloat yOffset = 1.5 - (iconHeight * 0.33);
+            CGFloat yOffset;
+            if (ApolloActionMenuContextIsModerator(self.context)) {
+                // Tuned for the taller shield asset.
+                yOffset = 1.5 - (iconHeight * 0.33);
+            } else {
+                // The shallow dots assets need to sit higher on the text baseline.
+                yOffset = 1.5;
+            }
 
             attachment.bounds =
                 CGRectMake(0.0, yOffset, iconWidth, iconHeight);
