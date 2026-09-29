@@ -330,7 +330,7 @@ static const CGFloat kApolloAMSheetTextX = 68.0;
         ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
     cell.contentView.alpha = row.available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
     cell.accessibilityLabel = row.available ? row.item.title
-        : [NSString stringWithFormat:@"%@, shown when available", row.item.title];
+        : [NSString stringWithFormat:@"%@, shown when relevant", row.item.title];
     return cell;
 }
 
@@ -921,10 +921,14 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     if (!hidden) [self apollo_applyPrimaryTextColorToCell:cell];
     cell.textLabel.alpha = 1.0;
     cell.accessibilityTraits = UIAccessibilityTraitButton;
-    cell.accessibilityLabel = offered ? item.title : [NSString stringWithFormat:@"%@, shown when available", item.title];
-    cell.accessibilityValue = hidden ? @"Hidden" : @"Shown";
+    cell.accessibilityLabel = offered ? item.title : [NSString stringWithFormat:@"%@, shown when relevant", item.title];
+    if (self.editingAllMenus) {
+        cell.accessibilityValue = cell.detailTextLabel.text ?: @"Shown";
+    } else {
+        cell.accessibilityValue = hidden ? @"Hidden" : @"Shown";
+    }
     cell.accessibilityHint = self.editingAllMenus
-        ? (hidden ? @"Double tap to show it in the menus that support it." : @"Double tap to hide it from the menus that support it.")
+        ? (hidden ? @"Double tap to show in all menus." : @"Double tap to hide in all menus.")
         : (hidden ? @"Double tap to show it in this menu." : @"Double tap to hide it from this menu.");
 }
 
@@ -1127,14 +1131,25 @@ willDisplayFooterView:(UIView *)view
        forSection:(NSInteger)section {
     [super tableView:tableView willDisplayFooterView:view forSection:section];
 
-    if (self.editingAllMenus ||
-        section != 0 ||
-        ![view isKindOfClass:UITableViewHeaderFooterView.class]) {
+    if (![view isKindOfClass:UITableViewHeaderFooterView.class]) {
         return;
     }
 
     UITableViewHeaderFooterView *footer = (UITableViewHeaderFooterView *)view;
+
     UILabel *label = footer.textLabel;
+
+    if (self.editingAllMenus) {
+        return;
+    }
+
+    if (section != 0) {
+        // Footer views are reused. Give non-intro footers their own current
+        // text so an accessibility label from the intro cannot carry over.
+        footer.isAccessibilityElement = YES;
+        footer.accessibilityLabel = label.text;
+        return;
+    }
     if (!label || [label.text rangeOfString:@"\uFFFC"].location == NSNotFound) return;
 
     NSString *iconName;
@@ -1193,6 +1208,29 @@ willDisplayFooterView:(UIView *)view
                    range:NSMakeRange(0, result.length)];
 
     label.attributedText = result;
+
+    NSString *actionName = ApolloActionMenuContextIsModerator(self.context)
+        ? @"Moderator Actions"
+        : @"More Actions";
+
+    NSString *description = ApolloActionMenuContextDescription(self.context);
+    if (ApolloActionMenuContextIsModerator(self.context)) {
+        description =
+            [description stringByReplacingOccurrencesOfString:@"The shield menu"
+                                                   withString:
+                [NSString stringWithFormat:@"The %@ menu", actionName]];
+    } else {
+        description =
+            [description stringByReplacingOccurrencesOfString:@"•••"
+                                                   withString:actionName];
+    }
+
+    NSString *accessibilityText =
+        [description stringByAppendingString:@" Tap above to preview this menu."];
+
+    label.accessibilityLabel = accessibilityText;
+    footer.isAccessibilityElement = YES;
+    footer.accessibilityLabel = accessibilityText;
 }
 
 - (void)tableView:(UITableView *)tableView performDropWithCoordinator:(id<UITableViewDropCoordinator>)coordinator {
@@ -1263,6 +1301,13 @@ willDisplayHeaderView:(UIView *)view
         [[NSAttributedString alloc] initWithString:[@"  " stringByAppendingString:title]]];
 
     label.attributedText = text;
+
+    NSString *accessibilityTitle =
+        section == 1 ? @"Action Menus" : @"Moderator Action Menus";
+
+    label.accessibilityLabel = accessibilityTitle;
+    header.isAccessibilityElement = YES;
+    header.accessibilityLabel = accessibilityTitle;
 }
 
 // One menu: its name and editor behind the chevron.
