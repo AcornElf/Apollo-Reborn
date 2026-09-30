@@ -1260,13 +1260,71 @@ willDisplayFooterView:(UIView *)view
 
 #pragma mark - The hub
 
-@implementation ApolloActionMenuSettingsViewController
+// A menu row's detail: how the menu has been customized.
+static NSString *ApolloAMMenuSummary(NSString *context) {
+    if ([context isEqualToString:ApolloActionMenuEditorAllMenus]) {
+        NSUInteger customized = ApolloActionMenuCustomizedContextCount();
+        return customized == 0
+            ? nil
+            : [NSString stringWithFormat:@"%lu customized", (unsigned long)customized];
+    }
+
+    BOOL order = ApolloActionMenuHasCustomOrder(context);
+    NSUInteger hidden = ApolloActionMenuHiddenItemIDs(context).count;
+
+    if (!order && hidden == 0) return nil;
+
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    if (order) [parts addObject:@"Custom order"];
+    if (hidden > 0) {
+        [parts addObject:[NSString stringWithFormat:@"%lu hidden", (unsigned long)hidden]];
+    }
+
+    return [parts componentsJoinedByString:@" · "];
+}
+
+@implementation ApolloActionMenuSettingsViewController {
+    BOOL _appeared;
+    NSMutableDictionary<NSString *, NSNumber *> *_menuRowHeights;
+    UITableViewCell *_measuringMenuCell;
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Customize Action Menus";
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+
+    // Back from an editor: the rows' summaries may have changed. Refresh them
+    // in place rather than reloading the form during the navigation transition.
+    if (_appeared) [self refreshSummaries];
+    _appeared = YES;
+}
+
+- (void)refreshSummaries {
+    NSArray<NSString *> *contexts =
+        [@[ ApolloActionMenuEditorAllMenus ]
+            arrayByAddingObjectsFromArray:ApolloActionMenuAllContexts()];
+
+    for (NSString *context in contexts) {
+        UITableViewCell *cell =
+            [self cellForRowID:[@"menu." stringByAppendingString:context]];
+
+        if (cell) {
+            cell.detailTextLabel.text = ApolloAMMenuSummary(context);
+        }
+    }
+
+    // The summary can add or remove a subtitle, so let the table ask each
+    // affected row for its new measured height without reloading the cells.
+    [UIView performWithoutAnimation:^{
+        [self.tableView beginUpdates];
+        [self.tableView endUpdates];
+        [self.tableView layoutIfNeeded];
+    }];
+}
 
 - (void)tableView:(UITableView *)tableView
 willDisplayHeaderView:(UIView *)view
@@ -1327,14 +1385,71 @@ willDisplayHeaderView:(UIView *)view
     header.accessibilityLabel = accessibilityTitle;
 }
 
-// One menu: its name and editor behind the chevron.
+// Measure the two hub-row variants once per width and Dynamic Type size.
+// A customized menu uses a subtitle cell and should grow to fit that second line.
+- (CGFloat)menuRowHeightWithSubtitle:(BOOL)subtitle {
+    UITableView *table = self.tableView;
+    CGFloat width = CGRectGetWidth(table.bounds);
+    if (width <= 0.0) return UITableViewAutomaticDimension;
+
+    NSString *key = [NSString stringWithFormat:@"%d|%.0f|%@",
+                     subtitle,
+                     width,
+                     table.traitCollection.preferredContentSizeCategory ?: @""];
+    NSNumber *cached = _menuRowHeights[key];
+    if (cached) return cached.doubleValue;
+
+    if (!_measuringMenuCell) {
+        _measuringMenuCell =
+            [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                   reuseIdentifier:nil];
+    }
+
+    UITableViewCell *cell = _measuringMenuCell;
+    cell.textLabel.text = @"Post";
+    cell.detailTextLabel.text = subtitle ? @"Custom order · 2 hidden" : nil;
+    cell.bounds = CGRectMake(0.0, 0.0, width, 100.0);
+    ApolloSettingsApplyCellTypography(cell);
+
+    [cell setNeedsLayout];
+    [cell layoutIfNeeded];
+
+    CGFloat height =
+        ceil([cell systemLayoutSizeFittingSize:
+                  CGSizeMake(width, UILayoutFittingCompressedSize.height)
+              withHorizontalFittingPriority:UILayoutPriorityRequired
+                    verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+
+    if (height <= 0.0) return UITableViewAutomaticDimension;
+    if (!_menuRowHeights) _menuRowHeights = [NSMutableDictionary dictionary];
+    _menuRowHeights[key] = @(height);
+    return height;
+}
+
+// One menu: its name, customization status, and editor behind the chevron.
 - (ApolloSettingsRow *)menuRowForContext:(NSString *)context title:(NSString *)title {
-    return [ApolloSettingsRow disclosureRowWithID:[@"menu." stringByAppendingString:context]
-                                            title:title
-                                           detail:nil
-                                             push:^UIViewController * {
+    ApolloSettingsRow *row =
+        [ApolloSettingsRow disclosureRowWithID:[@"menu." stringByAppendingString:context]
+                                         title:title
+                                        detail:^NSString * {
+        return ApolloAMMenuSummary(context);
+    }
+                                          push:^UIViewController * {
         return [[ApolloActionMenuEditorViewController alloc] initWithContext:context];
     }];
+
+    row.detailAsSubtitle = YES;
+
+    __weak __typeof(self) weakSelf = self;
+    row.height = ^CGFloat {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return UITableViewAutomaticDimension;
+
+        return [strongSelf menuRowHeightWithSubtitle:
+            ApolloAMMenuSummary(context).length > 0];
+    };
+
+    return row;
 }
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
