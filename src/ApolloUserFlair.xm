@@ -1,4 +1,5 @@
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloScrapeWebView.h"
 #import "ApolloOwnCommentFlair.h"
 #import "ApolloState.h"
@@ -16,6 +17,7 @@ static char kApolloUserFlairCollapseModelKey;
 static char kApolloUserFlairCurrentFlairKey;
 static char kApolloUserFlairCssByTemplateKey;   // template_id -> css_class (trimmed)
 static char kApolloUserFlairSpriteMapKey;        // css_class -> @{url,x,y,w,h,round}
+static char kApolloUserFlairSpriteCropsKey;      // sprite cache key -> ApolloUserFlairSpriteCrop (owned by the selector)
 static char kApolloUserFlairSpriteFetchedKey;    // @YES once sprite-data fetch started
 static char kApolloUserFlairWebCSSClassKey;      // css_class recovered from old-reddit HTML
 static char kApolloUserFlairWebCurrentOptionKey; // @YES on the option matched to the signed-in user's flair
@@ -40,9 +42,7 @@ static NSMutableSet<NSString *> *sApolloUserFlairPartialEmojiCacheKeys;
 static NSMutableDictionary<NSString *, id> *sApolloUserFlairWebEmojiFetches;
 static NSObject *sApolloUserFlairSpriteCacheLock;
 static NSCache<NSString *, UIImage *> *sApolloUserFlairSheetCache;
-static NSMutableDictionary<NSString *, NSString *> *sApolloUserFlairSpriteFileCache;
-static NSMutableDictionary<NSString *, UIImage *> *sApolloUserFlairSpriteImageByPath;
-static NSMutableArray<NSString *> *sApolloUserFlairSpriteCacheOrder;
+static NSMapTable<NSString *, UIImage *> *sApolloUserFlairSpriteImageByPath;
 
 __attribute__((constructor))
 static void ApolloUserFlairInitializeSharedState(void) {
@@ -53,10 +53,12 @@ static void ApolloUserFlairInitializeSharedState(void) {
     sApolloUserFlairCapturedOptionsLock = [NSObject new];
     sApolloUserFlairSpriteCacheLock = [NSObject new];
     sApolloUserFlairSheetCache = [NSCache new];
-    sApolloUserFlairSheetCache.countLimit = 8;
-    sApolloUserFlairSpriteFileCache = [NSMutableDictionary new];
-    sApolloUserFlairSpriteImageByPath = [NSMutableDictionary new];
-    sApolloUserFlairSpriteCacheOrder = [NSMutableArray new];
+    // Sheets must stay resident while the flair selector crops rows out of
+    // them lazily, and one sheet can be arbitrarily large, so this is bounded
+    // by count and emptied on a memory warning rather than by bytes.
+    sApolloUserFlairSheetCache.countLimit = 6;
+    ApolloMemoryRegisterPurgableCache(@"flair-sprite-sheets", sApolloUserFlairSheetCache);
+    sApolloUserFlairSpriteImageByPath = [NSMapTable strongToWeakObjectsMapTable];
 }
 
 // The flair selector's flair options live in section 1 of its table.
@@ -1070,7 +1072,14 @@ static void ApolloUserFlairFetchEmojis(NSString *subreddit, void (^completion)(N
 static NSCache<NSString *, UIImage *> *ApolloUserFlairEmojiImageCache(void) {
     static NSCache *cache = nil;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ cache = [NSCache new]; cache.countLimit = 800; });
+    dispatch_once(&once, ^{
+        cache = [NSCache new];
+        // Emoji render at ~16pt, but the download can be any size, so the
+        // byte limit is what actually bounds this.
+        cache.countLimit = 400;
+        cache.totalCostLimit = 4 * 1024 * 1024;
+        ApolloMemoryRegisterPurgableCache(@"flair-emoji", cache);
+    });
     return cache;
 }
 
@@ -1082,7 +1091,7 @@ static void ApolloUserFlairLoadEmojiImage(NSString *urlStr, void (^completion)(U
     if (!url) { if (completion) completion(nil); return; }
     [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         UIImage *image = data ? [UIImage imageWithData:data scale:UIScreen.mainScreen.scale] : nil;
-        if (image) [ApolloUserFlairEmojiImageCache() setObject:image forKey:urlStr];
+        if (image) [ApolloUserFlairEmojiImageCache() setObject:image forKey:urlStr cost:ApolloImageByteCost(image)];
         dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(image); });
     }] resume];
 }
@@ -1210,11 +1219,11 @@ static NSDictionary *ApolloUserFlairFetchTemplateLimits(NSURL *url, NSString *be
 // left uncached so it can retry.
 //
 // Two transports, because the endpoint is OAuth-only: Apollo's own bearer works
-// directly for API-key accounts, but on a keyless (web-session) account the WebJSON
-// layer reroutes that first request to cookie auth on www — which user_flair_v2
-// rejects — so we rescue with the session's token_v2 cookie, itself a valid OAuth
-// bearer on oauth.reddit.com (same trick as ApolloWebJSONRescueFlairList). The rescue
-// request is probe-marked so the transport hooks don't reroute it again.
+// directly for API-key accounts, but a keyless (web-session) account has none of its
+// own (ApolloActiveAccountRedditBearerToken returns nil for it) and user_flair_v2
+// rejects cookie auth on www, so we rescue with the session's token_v2 cookie, itself
+// a valid OAuth bearer on oauth.reddit.com (same trick as ApolloWebJSONRescueFlairList).
+// The rescue request is probe-marked so the transport hooks don't reroute it.
 static void ApolloUserFlairEnsureTemplateLimits(NSString *subreddit, void (^completion)(void)) {
     void (^done)(void) = ^{
         if (!completion) return;
@@ -1232,7 +1241,7 @@ static void ApolloUserFlairEnsureTemplateLimits(NSString *subreddit, void (^comp
         NSInteger status = 0;
         BOOL definitive = NO;
         NSDictionary *byTemplate = nil;
-        NSString *apolloBearer = [sLatestRedditBearerToken copy];
+        NSString *apolloBearer = ApolloActiveAccountRedditBearerToken();
         if (apolloBearer.length) {
             byTemplate = ApolloUserFlairFetchTemplateLimits(url, apolloBearer, &status, &definitive);
             if (!byTemplate.count) {
@@ -2139,13 +2148,72 @@ static NSMutableDictionary<NSString *, NSDictionary *> *ApolloUserFlairWebCurren
     return cache;
 }
 
+// Keyed per (account, subreddit) so one account's flair never shows as another's.
+static NSString *ApolloUserFlairWebCurrentKey(NSString *username, NSString *subreddit) {
+    if (username.length == 0 || subreddit.length == 0) return nil;
+    return [NSString stringWithFormat:@"%@|%@", username.lowercaseString, subreddit.lowercaseString];
+}
+
 static NSDictionary *ApolloUserFlairWebCurrentForSubreddit(NSString *subreddit) {
-    if (subreddit.length == 0) return nil;
+    NSString *key = ApolloUserFlairWebCurrentKey(ApolloActiveWebSessionUsername(), subreddit);
+    if (!key) return nil;
     NSDictionary *current = nil;
     @synchronized (ApolloUserFlairWebCurrentCache()) {
-        current = ApolloUserFlairWebCurrentCache()[subreddit.lowercaseString];
+        current = ApolloUserFlairWebCurrentCache()[key];
     }
     return current;
+}
+
+// Old reddit's subreddit page (our only source for the current flair) can keep
+// serving the previous flair briefly after a save; within this window the saved
+// value wins.
+static const NSTimeInterval kApolloUserFlairWebRecentSaveWindow = 180.0;
+
+static NSMutableDictionary<NSString *, NSDictionary *> *ApolloUserFlairWebRecentSaves(void) {
+    static NSMutableDictionary *saves;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ saves = [NSMutableDictionary dictionary]; });
+    return saves;
+}
+
+static NSDictionary *ApolloUserFlairWebRecentSave(NSString *key) {
+    if (!key) return nil;
+    @synchronized (ApolloUserFlairWebRecentSaves()) {
+        NSDictionary *save = ApolloUserFlairWebRecentSaves()[key];
+        NSDate *at = save[@"savedAt"];
+        if ([at isKindOfClass:[NSDate class]] && -[at timeIntervalSinceNow] < kApolloUserFlairWebRecentSaveWindow) return save;
+        [ApolloUserFlairWebRecentSaves() removeObjectForKey:key];
+        return nil;
+    }
+}
+
+// Records a successful keyless /api/selectflair or /api/setflairenabled in the
+// current-flair cache (the API-key path gets this from flairselector `current`).
+static void ApolloUserFlairWebNoteSaved(NSString *subreddit, NSString *text, NSString *templateID, NSNumber *enabled) {
+    NSString *key = ApolloUserFlairWebCurrentKey(ApolloActiveWebSessionUsername(), subreddit);
+    if (!key) return;
+    NSDictionary *previousSave = ApolloUserFlairWebRecentSave(key);
+    NSMutableDictionary *save = [previousSave mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (text) save[@"text"] = text;
+    if (templateID) save[@"templateID"] = templateID;
+    if (enabled) save[@"enabled"] = enabled;
+    save[@"savedAt"] = [NSDate date];
+    @synchronized (ApolloUserFlairWebRecentSaves()) {
+        ApolloUserFlairWebRecentSaves()[key] = [save copy];
+    }
+    @synchronized (ApolloUserFlairWebCurrentCache()) {
+        NSMutableDictionary *current = [ApolloUserFlairWebCurrentCache()[key] mutableCopy] ?: [@{
+            @"known": @YES, @"text": @"", @"cssClass": @"", @"enabled": @YES, @"templateID": @"",
+        } mutableCopy];
+        if (text) { current[@"text"] = text; current[@"cssClass"] = @""; }
+        if (templateID) current[@"templateID"] = templateID;
+        if (enabled) current[@"enabled"] = enabled;
+        ApolloUserFlairWebCurrentCache()[key] = [current copy];
+    }
+    ApolloLog(@"[UserFlair][Web] recorded saved flair for r/%@ (text=%@ template=%@ enabled=%@)", subreddit,
+              text ? (text.length ? @"present" : @"empty") : @"unchanged",
+              templateID ? (templateID.length ? @"set" : @"none") : @"unchanged",
+              enabled ? enabled.stringValue : @"unchanged");
 }
 
 // A signed-in old-Reddit subreddit page renders the user's applied flair in the
@@ -2189,19 +2257,30 @@ static NSDictionary *ApolloUserFlairWebCurrentFromHTML(NSData *data, NSString *u
     if (taglineStart.location == NSNotFound) return nil;
     NSString *taglinePrefix = [beforeUser substringFromIndex:taglineStart.location];
 
+    // old.reddit puts the flair span after the author link, up to the tagline's
+    // </div>; the before-the-link search stays as a fallback.
+    NSString *afterUser = [titlebox substringFromIndex:NSMaxRange(userAnchor.range)];
+    NSRange taglineEnd = [afterUser rangeOfString:@"</div>" options:NSCaseInsensitiveSearch];
+    if (taglineEnd.location != NSNotFound) afterUser = [afterUser substringToIndex:taglineEnd.location];
+
     NSString *currentText = @"";
     NSString *currentCSSClass = @"";
     NSRegularExpression *spanRegex = [NSRegularExpression regularExpressionWithPattern:@"<span\\b([^>]*)>"
         options:NSRegularExpressionCaseInsensitive error:NULL];
-    for (NSTextCheckingResult *match in [spanRegex matchesInString:taglinePrefix options:0
-                                                              range:NSMakeRange(0, taglinePrefix.length)]) {
-        if (match.numberOfRanges < 2) continue;
-        NSString *attrs = [taglinePrefix substringWithRange:[match rangeAtIndex:1]];
-        NSString *classAttribute = ApolloUserFlairHTMLAttribute(attrs, @"class") ?: @"";
-        if (![ApolloUserFlairHTMLClassSet(classAttribute) containsObject:@"flair"]) continue;
-        currentText = ApolloUserFlairDecodeHTML(ApolloUserFlairHTMLAttribute(attrs, @"title")) ?: @"";
-        currentCSSClass = ApolloUserFlairCSSClassFromClassAttribute(classAttribute) ?: @"";
-        break;
+    BOOL foundFlairSpan = NO;
+    for (NSString *segment in @[afterUser, taglinePrefix]) {
+        for (NSTextCheckingResult *match in [spanRegex matchesInString:segment options:0
+                                                                  range:NSMakeRange(0, segment.length)]) {
+            if (match.numberOfRanges < 2) continue;
+            NSString *attrs = [segment substringWithRange:[match rangeAtIndex:1]];
+            NSString *classAttribute = ApolloUserFlairHTMLAttribute(attrs, @"class") ?: @"";
+            if (![ApolloUserFlairHTMLClassSet(classAttribute) containsObject:@"flair"]) continue;
+            currentText = ApolloUserFlairDecodeHTML(ApolloUserFlairHTMLAttribute(attrs, @"title")) ?: @"";
+            currentCSSClass = ApolloUserFlairCSSClassFromClassAttribute(classAttribute) ?: @"";
+            foundFlairSpan = YES;
+            break;
+        }
+        if (foundFlairSpan) break;
     }
 
     BOOL enabled = NO;
@@ -2227,13 +2306,34 @@ static NSDictionary *ApolloUserFlairWebCurrentFromHTML(NSData *data, NSString *u
 }
 
 static NSDictionary *ApolloUserFlairMatchWebCurrent(NSDictionary *current, NSArray *options,
-                                                     NSString *subreddit) {
+                                                     NSString *subreddit, NSString *username) {
     if (![current[@"known"] boolValue]) return current;
+    NSString *cacheKey = ApolloUserFlairWebCurrentKey(username, subreddit);
+    NSDictionary *recentSave = ApolloUserFlairWebRecentSave(cacheKey);
+    if (recentSave) {
+        // A recent save is newer than the page; trust it.
+        NSMutableDictionary *merged = [current mutableCopy];
+        if ([recentSave[@"text"] isKindOfClass:[NSString class]]) {
+            merged[@"text"] = recentSave[@"text"];
+            merged[@"cssClass"] = @"";
+        }
+        if ([recentSave[@"enabled"] isKindOfClass:[NSNumber class]]) merged[@"enabled"] = recentSave[@"enabled"];
+        current = merged;
+    }
+    NSString *savedTemplateID = [recentSave[@"templateID"] isKindOfClass:[NSString class]] ? recentSave[@"templateID"] : nil;
     NSString *currentText = [current[@"text"] isKindOfClass:[NSString class]] ? current[@"text"] : @"";
     NSString *currentCSS = [current[@"cssClass"] isKindOfClass:[NSString class]] ? current[@"cssClass"] : @"";
     id matchedOption = nil;
 
-    if (currentCSS.length > 0) {
+    if (savedTemplateID.length > 0) {
+        for (id option in options) {
+            if ([ApolloUserFlairOptionIdentifier(option) isEqualToString:savedTemplateID]) {
+                matchedOption = option;
+                break;
+            }
+        }
+    }
+    if (!matchedOption && currentCSS.length > 0) {
         for (id option in options) {
             NSString *css = objc_getAssociatedObject(option, &kApolloUserFlairWebCSSClassKey);
             if ([css isKindOfClass:[NSString class]] && [css caseInsensitiveCompare:currentCSS] == NSOrderedSame) {
@@ -2252,6 +2352,41 @@ static NSDictionary *ApolloUserFlairMatchWebCurrent(NSDictionary *current, NSArr
             }
         }
     }
+    // An editable template's text is a placeholder ("SW:xxx Dose: xxmg") but the page
+    // has the filled-in text. Treat runs of 2+ x's in editable templates as wildcards;
+    // match only when exactly one template fits.
+    if (!matchedOption && currentText.length > 0) {
+        NSRegularExpression *placeholderRun = [NSRegularExpression regularExpressionWithPattern:@"[xX]{2,}" options:0 error:NULL];
+        id candidate = nil;
+        NSUInteger candidateCount = 0;
+        for (id option in options) {
+            BOOL editableKnown = NO;
+            if (!ApolloUserFlairOptionIsEditable(option, &editableKnown) || !editableKnown) continue;
+            NSString *templateText = ApolloUserFlairObjectString(option,
+                @[@"textRepresentation", @"text", @"flairText", @"flair_text", @"plainText"]);
+            if (![templateText isKindOfClass:[NSString class]] || templateText.length == 0) continue;
+            NSArray<NSTextCheckingResult *> *runs = [placeholderRun matchesInString:templateText options:0
+                                                                              range:NSMakeRange(0, templateText.length)];
+            if (runs.count == 0) continue;
+            NSMutableString *pattern = [NSMutableString stringWithString:@"^"];
+            NSUInteger cursor = 0;
+            for (NSTextCheckingResult *run in runs) {
+                NSString *literal = [templateText substringWithRange:NSMakeRange(cursor, run.range.location - cursor)];
+                [pattern appendString:[NSRegularExpression escapedPatternForString:literal]];
+                [pattern appendString:@".+?"];
+                cursor = NSMaxRange(run.range);
+            }
+            [pattern appendString:[NSRegularExpression escapedPatternForString:[templateText substringFromIndex:cursor]]];
+            [pattern appendString:@"$"];
+            NSRegularExpression *fit = [NSRegularExpression regularExpressionWithPattern:pattern
+                options:NSRegularExpressionCaseInsensitive error:NULL];
+            if (fit && [fit firstMatchInString:currentText options:0 range:NSMakeRange(0, currentText.length)]) {
+                candidate = option;
+                candidateCount++;
+            }
+        }
+        if (candidateCount == 1) matchedOption = candidate;
+    }
     // Some communities expose a single editable template whose selector text is
     // the template default while the sidebar contains the user's customized text.
     // With only one possible template, that is still an unambiguous match.
@@ -2265,10 +2400,9 @@ static NSDictionary *ApolloUserFlairMatchWebCurrent(NSDictionary *current, NSArr
 
     NSMutableDictionary *resolved = [current mutableCopy];
     resolved[@"templateID"] = templateID;
-    NSString *key = subreddit.lowercaseString;
-    if (key.length > 0) {
+    if (cacheKey) {
         @synchronized (ApolloUserFlairWebCurrentCache()) {
-            ApolloUserFlairWebCurrentCache()[key] = resolved;
+            ApolloUserFlairWebCurrentCache()[cacheKey] = resolved;
         }
     }
     ApolloLog(@"[UserFlair][Web] current r/%@ present=%@ matched=%@ visible=%@",
@@ -2432,6 +2566,15 @@ static id ApolloUserFlairFetchWebOptions(NSString *subreddit, id completion) {
         return nil;
     }
 
+    // Drop what the last open learned: numberOfRows runs before this response lands
+    // and would otherwise stamp the previous flair on. Recent saves are kept separately.
+    NSString *currentKey = ApolloUserFlairWebCurrentKey(username, subreddit);
+    if (currentKey) {
+        @synchronized (ApolloUserFlairWebCurrentCache()) {
+            [ApolloUserFlairWebCurrentCache() removeObjectForKey:currentKey];
+        }
+    }
+
     NSDictionary *fields = @{
         @"api_type": @"json",
         @"r": subreddit,
@@ -2446,6 +2589,7 @@ static id ApolloUserFlairFetchWebOptions(NSString *subreddit, id completion) {
         [NSString stringWithFormat:@"https://old.reddit.com/r/%@/", encodedSubreddit]]];
     currentRequest.HTTPMethod = @"GET";
     currentRequest.HTTPShouldHandleCookies = NO;
+    currentRequest.cachePolicy = NSURLRequestReloadIgnoringLocalAndRemoteCacheData;
     currentRequest.timeoutInterval = 25.0;
     [currentRequest setValue:webSession.cookieHeader forHTTPHeaderField:@"Cookie"];
     [currentRequest setValue:(sUserAgent.length > 0 ? sUserAgent : @"Apollo iOS") forHTTPHeaderField:@"User-Agent"];
@@ -2486,7 +2630,11 @@ static id ApolloUserFlairFetchWebOptions(NSString *subreddit, id completion) {
             }
             NSDictionary *current = (!currentError && currentHTTP.statusCode == 200)
                 ? ApolloUserFlairWebCurrentFromHTML(currentData, username) : nil;
-            if (choices && current) ApolloUserFlairMatchWebCurrent(current, choices, subreddit);
+            // A page that fails to parse shouldn't erase a recent save.
+            if (!current && choices && ApolloUserFlairWebRecentSave(currentKey)) {
+                current = @{ @"known": @YES, @"text": @"", @"cssClass": @"", @"enabled": @YES, @"templateID": @"" };
+            }
+            if (choices && current) ApolloUserFlairMatchWebCurrent(current, choices, subreddit, username);
             ApolloLog(@"[UserFlair][Web] selector r/%@ HTTP %ld choices=%lu error=%@",
                       subreddit, (long)selectorHTTP.statusCode, (unsigned long)choices.count, error ? @"yes" : @"no");
             ApolloLog(@"[UserFlair][Web] current-page r/%@ HTTP %ld parsed=%@ error=%@",
@@ -2698,30 +2846,35 @@ static NSCache<NSString *, UIImage *> *ApolloUserFlairSheetCache(void) {
     return sApolloUserFlairSheetCache;
 }
 
-// sheet/region identity -> synthetic file:// URL. These URLs are identifiers
-// consumed by our ASNetworkImageNode hook; no filesystem access is required.
-static NSMutableDictionary<NSString *, NSString *> *ApolloUserFlairSpriteFileCache(void) {
-    return sApolloUserFlairSpriteFileCache;
-}
-
 // Filename prefix that marks our synthetic sprite identifiers, recognised by
 // the ASNetworkImageNode hook below (its HTTP-only downloader cannot load them,
 // so we intercept and install the in-memory crop directly).
 static NSString *const kApolloUserFlairSpriteFilePrefix = @"apolloflair_";
-static const NSUInteger kApolloUserFlairSpriteCacheLimit = 256;
 
-// Synthetic file path -> cropped UIImage, so the image-node hook serves the
-// exact crop without encoding or touching the filesystem.
-static NSMutableDictionary<NSString *, UIImage *> *ApolloUserFlairSpriteImageByPath(void) {
+// One cropped sprite and the synthetic file:// URL its row hands to the image
+// node. These URLs are identifiers only; nothing is written to disk.
+//
+// The flair selector that built a crop owns it (kApolloUserFlairSpriteCropsKey),
+// so a crop lives exactly as long as the rows that can still ask for it and is
+// freed when the selector closes. Don't move these behind a shared size cap:
+// Texture requests the node block of EVERY row on each reload (346 at once on
+// r/nintendo) long before the image nodes of the on-screen rows call setURL:,
+// so any cap smaller than the list evicts the very rows being looked at, and
+// they draw an empty gap instead of their sprite.
+@interface ApolloUserFlairSpriteCrop : NSObject
+@property (nonatomic, copy) NSString *identifier;
+@property (nonatomic, strong) UIImage *image;
+@end
+
+@implementation ApolloUserFlairSpriteCrop
+@end
+
+// Synthetic file path -> crop, so the image-node hook can serve the exact crop
+// without encoding or touching the filesystem. Values are WEAK: this is only an
+// index into the crops the open selectors own, never an owner itself (entries
+// of freed crops stop resolving, and their slots are reused by later crops).
+static NSMapTable<NSString *, UIImage *> *ApolloUserFlairSpriteImageByPath(void) {
     return sApolloUserFlairSpriteImageByPath;
-}
-
-// FIFO is sufficient here: selector rows rebuild their synthetic identifier on
-// demand, and already-visible image nodes retain the UIImage they display.
-// The cap prevents browsing several flair-heavy communities from pinning every
-// crop for the rest of the process.
-static NSMutableArray<NSString *> *ApolloUserFlairSpriteCacheOrder(void) {
-    return sApolloUserFlairSpriteCacheOrder;
 }
 
 static NSString *ApolloUserFlairSpriteCacheKey(NSDictionary *region, NSString *cssClass) {
@@ -2731,16 +2884,6 @@ static NSString *ApolloUserFlairSpriteCacheKey(NSDictionary *region, NSString *c
     return [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@",
         sheetURL, cssClass, region[@"x"] ?: @0, region[@"y"] ?: @0,
         region[@"w"] ?: @0, region[@"h"] ?: @0];
-}
-
-static NSString *ApolloUserFlairCachedSpriteIdentifier(NSDictionary *spriteMap, NSString *cssClass) {
-    NSDictionary *region = [spriteMap[cssClass] isKindOfClass:[NSDictionary class]]
-        ? spriteMap[cssClass] : nil;
-    NSString *cacheKey = ApolloUserFlairSpriteCacheKey(region, cssClass);
-    if (cacheKey.length == 0) return nil;
-    @synchronized (sApolloUserFlairSpriteCacheLock) {
-        return ApolloUserFlairSpriteFileCache()[cacheKey];
-    }
 }
 
 static NSString *ApolloUserFlairFirstGroup(NSString *str, NSString *pattern) {
@@ -2817,17 +2960,26 @@ static NSDictionary *ApolloUserFlairParseSpriteCSS(NSString *css, NSArray *image
     return map.count ? map : nil;
 }
 
-// Lazily crop a row's sprite from its already-downloaded sheet. These are tiny
-// legacy flair icons, so doing one crop when a row is actually requested is
-// cheaper than pre-rendering hundreds the user may never scroll to.
-static NSString *ApolloUserFlairBuildSpriteIdentifier(NSDictionary *spriteMap, NSString *cssClass) {
-    if (cssClass.length == 0) return nil;
-    NSString *cached = ApolloUserFlairCachedSpriteIdentifier(spriteMap, cssClass);
-    if (cached) return cached;
+// Crop a row's sprite from its already-downloaded sheet, once per selector: a
+// reload reuses the crop (and identifier) the row already has. The selector
+// keeps every crop it hands out until it closes — see ApolloUserFlairSpriteCrop
+// for why that can't be a shared cap. Main thread only: node blocks are
+// requested on main, and the per-selector crop map is not locked.
+static NSString *ApolloUserFlairBuildSpriteIdentifier(UIViewController *controller, NSDictionary *spriteMap, NSString *cssClass) {
+    if (!controller || cssClass.length == 0) return nil;
+    if (![NSThread isMainThread]) {
+        // Texture's contract says this can't happen; a name-only row beats a race.
+        ApolloLog(@"[UserFlair] sprite for %@ requested off the main thread; showing its name only", cssClass);
+        return nil;
+    }
     NSDictionary *region = spriteMap[cssClass];
     if (![region isKindOfClass:[NSDictionary class]]) return nil;
     NSString *cacheKey = ApolloUserFlairSpriteCacheKey(region, cssClass);
     if (cacheKey.length == 0) return nil;
+    NSMutableDictionary<NSString *, ApolloUserFlairSpriteCrop *> *crops =
+        objc_getAssociatedObject(controller, &kApolloUserFlairSpriteCropsKey);
+    ApolloUserFlairSpriteCrop *owned = crops[cacheKey];
+    if (owned) return owned.identifier;
     UIImage *sheet = [ApolloUserFlairSheetCache() objectForKey:region[@"url"]];
     if (!sheet || !sheet.CGImage) return nil;
     CGFloat scale = sheet.scale > 0 ? sheet.scale : 1.0;
@@ -2845,27 +2997,20 @@ static NSString *ApolloUserFlairBuildSpriteIdentifier(NSDictionary *spriteMap, N
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
         [NSString stringWithFormat:@"%@%@-%@.png", kApolloUserFlairSpriteFilePrefix, safe, [NSUUID UUID].UUIDString]];
     NSString *fileURL = [[NSURL fileURLWithPath:path isDirectory:NO] absoluteString];
-    NS_VALID_UNTIL_END_OF_SCOPE NSString *retiredIdentifier = nil;
-    NS_VALID_UNTIL_END_OF_SCOPE UIImage *retiredImage = nil;
+
+    // Own the crop before publishing its identifier: an exposed URL always has
+    // an image, for as long as this selector (and so any row of it) is alive.
+    ApolloUserFlairSpriteCrop *spriteCrop = [ApolloUserFlairSpriteCrop new];
+    spriteCrop.identifier = fileURL;
+    spriteCrop.image = img;
+    if (!crops) {
+        crops = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(controller, &kApolloUserFlairSpriteCropsKey, crops, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    crops[cacheKey] = spriteCrop;
+    // Texture can read the index from any thread, so publish under the lock.
     @synchronized (sApolloUserFlairSpriteCacheLock) {
-        // Render work is serial, but keep the publication transaction coherent
-        // with arbitrary Texture readers: an exposed URL always has an image.
-        NSString *existing = ApolloUserFlairSpriteFileCache()[cacheKey];
-        if (existing) return existing;
-        ApolloUserFlairSpriteImageByPath()[path] = img;
-        ApolloUserFlairSpriteFileCache()[cacheKey] = fileURL;
-        [ApolloUserFlairSpriteCacheOrder() addObject:cacheKey];
-        if (ApolloUserFlairSpriteCacheOrder().count > kApolloUserFlairSpriteCacheLimit) {
-            NSString *evictedKey = ApolloUserFlairSpriteCacheOrder().firstObject;
-            [ApolloUserFlairSpriteCacheOrder() removeObjectAtIndex:0];
-            retiredIdentifier = ApolloUserFlairSpriteFileCache()[evictedKey];
-            [ApolloUserFlairSpriteFileCache() removeObjectForKey:evictedKey];
-            NSString *evictedPath = [NSURL URLWithString:retiredIdentifier].path;
-            if (evictedPath.length > 0) {
-                retiredImage = ApolloUserFlairSpriteImageByPath()[evictedPath];
-                [ApolloUserFlairSpriteImageByPath() removeObjectForKey:evictedPath];
-            }
-        }
+        [ApolloUserFlairSpriteImageByPath() setObject:img forKey:path];
     }
     return fileURL;
 }
@@ -2948,14 +3093,18 @@ static void ApolloUserFlairFetchSpriteData(UIViewController *controller, NSStrin
                     dispatch_group_enter(grp);
                     [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *id_, NSURLResponse *ir, NSError *ie) {
                         UIImage *im = id_ ? [UIImage imageWithData:id_] : nil;
-                        if (im) [ApolloUserFlairSheetCache() setObject:im forKey:u];
+                        if (im) [ApolloUserFlairSheetCache() setObject:im forKey:u cost:ApolloImageByteCost(im)];
                         dispatch_group_leave(grp);
                     }] resume];
                 }
                 dispatch_group_notify(grp, dispatch_get_main_queue(), ^{
                     UIViewController *c2 = wc; if (!c2) return;
                     objc_setAssociatedObject(c2, &kApolloUserFlairSpriteMapKey, spriteMap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    reload(); // visible row builds lazily create only their own crops
+                    // Texture requests EVERY row's node block during reloadData,
+                    // so each css row crops its sprite here, not just visible ones.
+                    reload();
+                    ApolloLog(@"[UserFlair] sprite crops owned by the selector after reload: %lu",
+                              (unsigned long)[objc_getAssociatedObject(c2, &kApolloUserFlairSpriteCropsKey) count]);
                 });
             }] resume];
         });
@@ -3015,10 +3164,16 @@ static BOOL ApolloUserFlairPresenterHasFlairSelector(UIViewController *presenter
         if (originalCompletion) originalCompletion(error);
     };
     if (!ApolloWebJSONHasUsableSession()) return %orig(subreddit, text, templateID, wrapped);
+    NSString *savedText = [text copy] ?: @"";
+    NSString *savedTemplateID = [templateID copy] ?: @"";
+    id webWrapped = ^(NSError *error) {
+        if (!error) ApolloUserFlairWebNoteSaved(subreddit, savedText, savedTemplateID, nil);
+        ((void (^)(NSError *))wrapped)(error);
+    };
     return ApolloUserFlairPerformWebUpdate(@"/api/selectflair", subreddit, @{
         @"flair_template_id": templateID ?: @"",
         @"text": text ?: @"",
-    }, wrapped);
+    }, webWrapped);
 }
 
 - (id)setShowUserFlair:(BOOL)show subredditName:(NSString *)subreddit completion:(id)completion {
@@ -3028,9 +3183,13 @@ static BOOL ApolloUserFlairPresenterHasFlairSelector(UIViewController *presenter
         if (originalCompletion) originalCompletion(error);
     };
     if (!ApolloWebJSONHasUsableSession()) return %orig(show, subreddit, wrapped);
+    id webWrapped = ^(NSError *error) {
+        if (!error) ApolloUserFlairWebNoteSaved(subreddit, nil, nil, @(show));
+        ((void (^)(NSError *))wrapped)(error);
+    };
     return ApolloUserFlairPerformWebUpdate(@"/api/setflairenabled", subreddit, @{
         @"flair_enabled": show ? @"true" : @"false",
-    }, wrapped);
+    }, webWrapped);
 }
 
 %end
@@ -3140,7 +3299,7 @@ static BOOL ApolloUserFlairPresenterHasFlairSelector(UIViewController *presenter
             if (cssClass) {
                 NSString *name = ApolloUserFlairPrettifyClass(cssClass);
                 NSDictionary *spriteMap = objc_getAssociatedObject((UIViewController *)self, &kApolloUserFlairSpriteMapKey);
-                NSString *spriteFile = ApolloUserFlairBuildSpriteIdentifier(spriteMap, cssClass);
+                NSString *spriteFile = ApolloUserFlairBuildSpriteIdentifier((UIViewController *)self, spriteMap, cssClass);
                 // The selector cell renders an option's `flairs` pieces (it ignores
                 // textRepresentation), so build the row from pieces: the real cropped
                 // sprite (when the stylesheet parsed) followed by the prettified class
@@ -3354,8 +3513,13 @@ static BOOL ApolloUserFlairTrySetSpriteImage(id imageNode, NSURL *url) {
     NSString *path = url.path;
     if (![[path lastPathComponent] hasPrefix:kApolloUserFlairSpriteFilePrefix]) return NO;
     UIImage *img = nil;
-    @synchronized (sApolloUserFlairSpriteCacheLock) { img = ApolloUserFlairSpriteImageByPath()[path]; }
-    if (!img) return NO;
+    @synchronized (sApolloUserFlairSpriteCacheLock) { img = [ApolloUserFlairSpriteImageByPath() objectForKey:path]; }
+    if (!img) {
+        // Only possible if the selector that owned this crop is gone, so the row
+        // is on its way out. Anything else is a regression of the crop lifetime.
+        ApolloLog(@"[UserFlair] no crop for sprite %@; its row draws without the image", path.lastPathComponent);
+        return NO;
+    }
     if ([imageNode respondsToSelector:@selector(setImage:)]) {
         ((void (*)(id, SEL, UIImage *))objc_msgSend)(imageNode, @selector(setImage:), img);
         return YES;

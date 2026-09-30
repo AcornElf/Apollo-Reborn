@@ -27,7 +27,8 @@
     },
     {
       "role": "maintainer",
-      "github": "IllIIllIllIllII"
+      "github": "IllIIllIllIllII",
+      "buyMeACoffeeUrl": "https://buymeacoffee.com/illiillillillii"
     },
     {
       "role": "code",
@@ -112,6 +113,10 @@
     {
       "role": "code",
       "github": "jaredrossberg"
+    },
+    {
+      "role": "code",
+      "github": "paradoxally"
     },
     {
       "role": "design",

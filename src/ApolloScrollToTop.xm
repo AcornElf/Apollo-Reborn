@@ -5,6 +5,7 @@
 #import "ApolloAutoHideTabBar.h"
 #import "ApolloTopBarScrollPresentation.h"
 #import "ApolloScrollToTop.h"
+#import "ApolloSearchNativeBar.h"
 #import "ApolloState.h"
 
 // Apollo's status-bar proxy calls ASTableViewController rather than scrolling
@@ -340,6 +341,9 @@ static NSString *ApolloReturnItemID(id node) {
     UIScrollView *scroll = self.scrollView;
     // Stop existing deceleration/scroll animation before installing our driver.
     [scroll setContentOffset:scroll.contentOffset animated:NO];
+    // This driver writes the offset frame by frame, so the native search bar
+    // cannot tell it from a finger; say so, and its bar comes up with the top.
+    ApolloNativeFeedSearchWillScrollToTop(scroll);
     self.observedScroll = scroll;
     [scroll addObserver:self forKeyPath:@"contentOffset" options:0 context:&kApolloScrollReturnGeometryContext];
     [scroll addObserver:self forKeyPath:@"contentSize" options:0 context:&kApolloScrollReturnGeometryContext];
@@ -736,6 +740,16 @@ static UIScrollView *ApolloPostsTabContentScrollView(UIView *view, CGRect viewpo
     if (scroll && scroll.contentOffset.y > top + 1) {
         // A tab tap must never enter the status-bar undo path.
         [objc_getAssociatedObject(owner, &kApolloScrollReturn) clearAnimated:NO];
+        // The user asked for the top of the list, so a managed feed's native
+        // search bar comes down with it (#1138); the call is a no-op for lists
+        // native search does not manage. Stop any momentum first, as the
+        // status-bar jump does: a list still coasting from a flick reports
+        // isDragging and would refuse the reveal as the user's own scroll (the
+        // write below would stop it anyway, only too late for the arm). Arm
+        // before the write: the Reduce Motion jump is not animated, and a
+        // non-animated offset write never arms the reveal on its own.
+        [scroll setContentOffset:scroll.contentOffset animated:NO];
+        ApolloNativeFeedSearchWillScrollToTop(scroll);
         [scroll setContentOffset:CGPointMake(scroll.contentOffset.x, top)
                        animated:!UIAccessibilityIsReduceMotionEnabled()];
         ApolloLog(@"[PostsTab] Scrolled %@ to top", NSStringFromClass(owner.class));

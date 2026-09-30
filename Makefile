@@ -20,6 +20,7 @@ THEME_GALLERY_GEN_M := $(THEOS_PROJECT_DIR)/$(THEME_GALLERY_DIR)/generated/Apoll
 WHATS_NEW_DIR := whats-new
 WHATS_NEW_GEN_H := $(THEOS_PROJECT_DIR)/$(WHATS_NEW_DIR)/generated/ApolloWhatsNewCatalog.gen.h
 WHATS_NEW_GEN_M := $(THEOS_PROJECT_DIR)/$(WHATS_NEW_DIR)/generated/ApolloWhatsNewCatalog.gen.m
+BARK_ICON_NAMES_H := $(THEOS_PROJECT_DIR)/$(SRC_DIR)/generated/ApolloBarkIconNames.gen.h
 
 SSZIPARCHIVE_FILES = $(wildcard $(SSZIPARCHIVE_DIR)/*.m) \
     $(wildcard $(SSZIPARCHIVE_DIR)/minizip/*.c) \
@@ -40,6 +41,8 @@ KSCRASH_FILES := \
     $(shell find $(KSCRASH_CORE_DIR) $(KSCRASH_RECORDING_CORE_DIR) $(KSCRASH_RECORDING_DIR) \
         -type f \( -name '*.c' -o -name '*.m' -o -name '*.mm' -o -name '*.cpp' \) | sort)
 
+# ApolloFavoriteConfirm.xm must stay after ApolloSubredditIndexPolish.xm and
+# ApolloFollowingSection.xm so its favoriteSubredditButtonTapped: hook is outermost.
 ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloFoundationModels.swift \
     $(SRC_DIR)/ApolloAISummary.xm \
@@ -50,6 +53,7 @@ ApolloReborn_FILES = \
     $(WHATS_NEW_GEN_M) \
     $(SRC_DIR)/Tweak.xm \
     $(SRC_DIR)/ApolloCommon.m \
+    $(SRC_DIR)/ApolloInlineImageMetadata.m \
     $(SRC_DIR)/ApolloProfilePagination.xm \
     $(SRC_DIR)/ApolloWebTextDecoding.m \
     $(SRC_DIR)/ApolloMemoryDiagnostics.m \
@@ -74,6 +78,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloToast.m \
     $(SRC_DIR)/ApolloRedditMediaUpload.m \
     $(SRC_DIR)/ApolloNotificationBackend.m \
+    $(SRC_DIR)/ApolloBarkIconResolver.m \
     $(SRC_DIR)/ApolloUsageHeartbeat.m \
     $(SRC_DIR)/ApolloPushNotifications.m \
     $(SRC_DIR)/ApolloLiquidGlassIconIDs.m \
@@ -109,6 +114,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSaveAllMediaBridge.swift \
     $(SRC_DIR)/ApolloSaveAllMediaMenus.xm \
     $(SRC_DIR)/ApolloGIFSaveActivity.xm \
+    $(SRC_DIR)/ApolloShareMediaHandoff.xm \
     $(SRC_DIR)/ApolloMediaDownloadActions.xm \
     $(SRC_DIR)/ApolloLinkedAlbumPostControls.xm \
     $(SRC_DIR)/ApolloFeedAlbumMenus.xm \
@@ -137,11 +143,14 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloMediaMetadata.m \
     $(SRC_DIR)/ApolloMediaAutoplay.m \
     $(SRC_DIR)/ApolloCommentsCollapse.xm \
+    $(SRC_DIR)/ApolloCommentHeaderLayout.xm \
     $(SRC_DIR)/ApolloInboxCommentScroll.xm \
     $(SRC_DIR)/ApolloFindInComments.xm \
     $(SRC_DIR)/ApolloFindInCommentsGlass.xm \
     $(SRC_DIR)/ApolloStatsRowTouch.xm \
     $(SRC_DIR)/ApolloCommentVoteFlicker.xm \
+    $(SRC_DIR)/ApolloPostedCommentInsert.xm \
+    $(SRC_DIR)/ApolloCommentSubmitFailure.xm \
     $(SRC_DIR)/ApolloLiveCommentsFollow.xm \
     $(SRC_DIR)/settings/ApolloSettingsGeneralTable.xm \
     $(SRC_DIR)/settings/ApolloSettingsNativeInjections.xm \
@@ -156,6 +165,8 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloLiquidGlassIconPicker.xm \
     $(SRC_DIR)/ApolloModmailLayout.xm \
     $(SRC_DIR)/ApolloModmailSubjectCounter.xm \
+    $(SRC_DIR)/ApolloCrosspostTitle.xm \
+    $(SRC_DIR)/ApolloMessagesKeyboardInset.xm \
     $(SRC_DIR)/ApolloAutoHideTabBar.xm \
     $(SRC_DIR)/ApolloTopBarScrollPresentation.m \
     $(SRC_DIR)/ApolloListBottomInsetGuard.xm \
@@ -185,12 +196,18 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloBoldPostTitles.xm \
     $(SRC_DIR)/ApolloNativeActionMenus.xm \
     $(SRC_DIR)/ApolloContextMenuPreviewTheme.xm \
+    $(SRC_DIR)/ApolloPostPreviewWindowGuard.xm \
     $(SRC_DIR)/ApolloActionMenu.xm \
+    $(SRC_DIR)/ApolloActionMenuLayout.m \
     $(SRC_DIR)/ApolloHostedVideo.m \
+    $(SRC_DIR)/ApolloRedgifsTokenRefresh.m \
     $(SRC_DIR)/ApolloSportsClipResolver.m \
     $(SRC_DIR)/ApolloSportsClips.xm \
     $(SRC_DIR)/ApolloRedgifsSubdomainFix.xm \
+    $(SRC_DIR)/ApolloRedgifsQueuedFetchesLock.m \
+    $(SRC_DIR)/ApolloSwiftSingletonCapture.m \
     $(SRC_DIR)/ApolloShareAsImageGallery.xm \
+    $(SRC_DIR)/ApolloShareAsImageLinkMode.m \
     $(SRC_DIR)/ApolloShareAsImageLink.xm \
     $(SRC_DIR)/ApolloShareAsVideo.xm \
     $(SRC_DIR)/ApolloShareAsImagePreviewFix.xm \
@@ -200,6 +217,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloAppleTranslateSheet.xm \
     $(SRC_DIR)/ApolloVideoUnmute.xm \
     $(SRC_DIR)/ApolloFeedVideoScrubber.xm \
+    $(SRC_DIR)/ApolloFeedVideoScrolling.xm \
     $(SRC_DIR)/ApolloForwardSwipeExpiry.xm \
     $(SRC_DIR)/ApolloForwardSwipeCancellation.xm \
     $(SRC_DIR)/ApolloVideoSwipeFix.xm \
@@ -210,6 +228,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloFloatingTabs.xm \
     $(SRC_DIR)/ApolloFloatingTabsCrests.m \
     $(SRC_DIR)/ApolloMediaPreviewErrorFix.xm \
+    $(SRC_DIR)/ApolloRedgifsMissingDuration.m \
     $(SRC_DIR)/ApolloFeedShortcutsAppearance.m \
     $(SRC_DIR)/ApolloSubredditIndexPolish.xm \
     $(SRC_DIR)/ApolloSubredditListEditing.xm \
@@ -218,6 +237,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloHideModSubreddits.xm \
     $(SRC_DIR)/ApolloMultiredditEdit.xm \
     $(SRC_DIR)/ApolloFollowingSection.xm \
+    $(SRC_DIR)/ApolloFavoriteConfirm.xm \
     $(SRC_DIR)/ApolloSubredditSidebar.xm \
     $(SRC_DIR)/ApolloTagFilters.xm \
     $(SRC_DIR)/ApolloThemeTokens.m \
@@ -241,8 +261,12 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSearchNativeBar.xm \
     $(SRC_DIR)/ApolloSearchObserverCleanup.xm \
     $(SRC_DIR)/ApolloJumpBarSuggestionTint.xm \
+    $(SRC_DIR)/ApolloSubredditSwitcherSheet.xm \
     $(SRC_DIR)/ApolloSearchHeaderOverlapFix.xm \
     $(SRC_DIR)/ApolloSearchTabFixes.xm \
+    $(SRC_DIR)/ApolloGoogleSearch.m \
+    $(SRC_DIR)/ApolloGoogleSearchViewController.m \
+    $(SRC_DIR)/ApolloGoogleSearchTab.m \
     $(SRC_DIR)/ApolloImageChestResolver.m \
     $(SRC_DIR)/ApolloImgChestUpload.m \
     $(SRC_DIR)/ApolloLinkPreviewModel.m \
@@ -253,6 +277,8 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloInlineLinkPreviews.xm \
     $(SRC_DIR)/ApolloChatInlineImages.xm \
     $(SRC_DIR)/ApolloChatComposer.xm \
+    $(SRC_DIR)/ApolloMessageDraftStore.m \
+    $(SRC_DIR)/ApolloMessagesReplyBarRestore.xm \
     $(SRC_DIR)/ApolloChatsFilter.xm \
     $(SRC_DIR)/ApolloDirectChatWeb.xm \
     $(SRC_DIR)/ApolloLinkCardTitleFallback.xm \
@@ -263,6 +289,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloVisionOSMultiwindow.xm \
     $(SRC_DIR)/ApolloWebAuthViewController.m \
     $(SRC_DIR)/ApolloWebJSON.m \
+    $(SRC_DIR)/ApolloWebJSONWriteRepair.m \
     $(SRC_DIR)/ApolloWebJSONIdentity.xm \
     $(SRC_DIR)/ApolloWebSessionLoginViewController.m \
     $(SRC_DIR)/ApolloWebSessionStore.m \
@@ -272,15 +299,18 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSimDebugTap.xm \
     $(SRC_DIR)/ApolloManualSignInViewController.m \
     $(SRC_DIR)/ApolloAccountCredentials.m \
+    $(SRC_DIR)/ApolloAccountSubscriptions.m \
     $(SRC_DIR)/ApolloPerAccountFavorites.m \
     $(SRC_DIR)/ApolloFavoritesSorting.m \
     $(SRC_DIR)/ApolloAccountSwitcherViewController.xm \
     $(SRC_DIR)/ApolloSignInSplash.xm \
     $(SRC_DIR)/ApolloHideSubscribePrompt.xm \
+    $(SRC_DIR)/ApolloPixelPals.xm \
     $(SRC_DIR)/settings/CustomAPIViewController.m \
     $(SRC_DIR)/settings/ApolloSubredditLayoutPreview.m \
     $(SRC_DIR)/settings/ApolloSubredditLayoutViewController.m \
     $(SRC_DIR)/settings/ApolloSubredditSectionsViewController.m \
+    $(SRC_DIR)/settings/ApolloActionMenuSettingsViewController.m \
     $(SRC_DIR)/settings/ApolloAISettingsViewController.m \
     $(SRC_DIR)/settings/ApolloDeletedCommentsSettingsViewController.m \
     $(SRC_DIR)/settings/ApolloProfileLayoutViewController.m \
@@ -364,7 +394,7 @@ ApolloReborn_CFLAGS += \
 # the Swift module-interface build, where a C++ -std flag is a hard error.
 ApolloReborn_LIBRARIES += c++
 
-ApolloReborn_BUNDLE_RESOURCE_DIRS = resources
+ApolloReborn_BUNDLE_RESOURCE_DIRS = Resources
 ApolloReborn_BUNDLE_RESOURCES = \
     assets/bark-icons/low-battery.png \
     assets/bark-icons/palette.png \
@@ -403,6 +433,12 @@ ApolloReborn_CFLAGS += -Wno-deprecated-declarations
 # screenshots. Only ever compiled into the simulator build, never the device/
 # release build (this branch is under the APOLLO_SIM_BUILD ifeq).
 ApolloReborn_FILES += $(SRC_DIR)/ApolloSimOpenRoute.m
+# Sim-only: runs +[ASDisplayNode initialize] from +load, ahead of every Logos
+# %init, so the internal generator can find the Texture lifecycle callbacks a
+# node class inherits (didEnterVisibleState etc.) and those %hooks install.
+# Device builds hook through Substrate, which runs +initialize on its own. See
+# src/ApolloSimTextureInit.m.
+ApolloReborn_FILES += $(SRC_DIR)/ApolloSimTextureInit.m
 # Opt-in /api/comment write diagnostics + legacy-response-shape simulator
 # (APOLLO_COMMENT_DEBUG=1 scripts/run-in-sim.sh). Used to reproduce Reddit's
 # 2026-08 legacy write-response regression against the OAuth path on demand —
@@ -423,8 +459,8 @@ endif
 
 CONTROL_FILE = $(THEOS_PROJECT_DIR)/control
 
-# Generate Version.h, the theme gallery catalog, and the What's New catalog.
-before-all:: generate_version_h generate_theme_gallery_catalog generate_whats_new_catalog
+# Generate Version.h and the checked-in catalogs/asset manifests.
+before-all:: generate_version_h generate_theme_gallery_catalog generate_whats_new_catalog generate_bark_icon_names
 
 generate_version_h:
 	@echo "Generating Version.h from control file"
@@ -453,6 +489,15 @@ $(WHATS_NEW_GEN_H) $(WHATS_NEW_GEN_M): $(THEOS_PROJECT_DIR)/$(WHATS_NEW_DIR)/scr
 		$(THEOS_PROJECT_DIR)/$(WHATS_NEW_DIR)/releases \
 		$(WHATS_NEW_GEN_H) \
 		$(WHATS_NEW_GEN_M)
+
+BARK_ICON_PNGS := $(wildcard $(THEOS_PROJECT_DIR)/assets/bark-icons/*.png)
+
+generate_bark_icon_names: $(BARK_ICON_NAMES_H)
+
+$(BARK_ICON_NAMES_H): $(THEOS_PROJECT_DIR)/scripts/generate-bark-icon-names.py $(BARK_ICON_PNGS)
+	@python3 $(THEOS_PROJECT_DIR)/scripts/generate-bark-icon-names.py \
+		$(THEOS_PROJECT_DIR)/assets/bark-icons \
+		$(BARK_ICON_NAMES_H)
 
 # Liquid Glass icon metadata header is generated explicitly by running 'make lg-previews'
 LG_DIR = $(THEOS_PROJECT_DIR)/liquid-glass

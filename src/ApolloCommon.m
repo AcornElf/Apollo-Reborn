@@ -1222,6 +1222,23 @@ void ApolloPresentWebURLFromViewController(UIViewController *presenter, NSURL *u
     NSURL *normalizedURL = ApolloNormalizedWebURL(url);
     if (!normalizedURL) return;
 
+    // The in-app browser is an SFSafariViewController, which throws
+    // NSInvalidArgumentException for any scheme but http(s) (#1179: a
+    // recovered comment's apollo-translation://toggle marker crashed here).
+    // Hand other schemes (mailto:, tel:, app links) to the system; a URL with
+    // no scheme at all has nowhere to go.
+    // Only the scheme is logged: a mailto:/tel: URL is an address or number.
+    NSString *scheme = normalizedURL.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        if (scheme.length == 0) {
+            ApolloLog(@"[Browser] skip present: URL has no scheme");
+            return;
+        }
+        ApolloLog(@"[Browser] %@: is not a web scheme, handing it to the system", scheme);
+        [[UIApplication sharedApplication] openURL:normalizedURL options:@{} completionHandler:nil];
+        return;
+    }
+
     if (ApolloShouldSkipDuplicateBrowserPresent(normalizedURL)) {
         ApolloLog(@"[Browser] skip duplicate present url=%@", normalizedURL.absoluteString);
         return;
@@ -1399,6 +1416,22 @@ double ApolloPerfNowMs(void) {
     return CACurrentMediaTime() * 1000.0;
 }
 
+NSUInteger ApolloImageByteCost(UIImage *image) {
+    if (![image isKindOfClass:[UIImage class]]) return 0;
+    CGImageRef cgImage = image.CGImage;
+    if (cgImage) {
+        size_t bytesPerRow = CGImageGetBytesPerRow(cgImage);
+        size_t height = CGImageGetHeight(cgImage);
+        if (height == 0 || bytesPerRow == 0) return 0;
+        if (bytesPerRow > NSUIntegerMax / height) return NSUIntegerMax;
+        return (NSUInteger)(bytesPerRow * height);
+    }
+    CGFloat scale = image.scale > 0.0 ? image.scale : 1.0;
+    double pixels = (double)image.size.width * scale * (double)image.size.height * scale * 4.0;
+    if (pixels <= 0.0) return 0;
+    return pixels >= (double)NSUIntegerMax ? NSUIntegerMax : (NSUInteger)pixels;
+}
+
 // --- Tweak-UI text node marker -------------------------------------------
 // Content scans (translation's post-body candidate walk, etc.) must never
 // treat tweak-drawn text as user content. One shared assoc key, set at node
@@ -1413,4 +1446,24 @@ void ApolloMarkTweakUITextNode(id node) {
 BOOL ApolloTextNodeIsTweakUI(id node) {
     if (!node) return NO;
     return [objc_getAssociatedObject(node, &kApolloTweakUITextNodeKey) boolValue];
+}
+
+// Runtime-checked UIKit preview feedback shared by profile menus and their viewer.
+id ApolloPlayPreviewOpenedFeedback(UIView *sourceView) {
+    Class configurationClass = NSClassFromString(@"_UIStatesFeedbackGeneratorPreviewConfiguration");
+    Class generatorClass = NSClassFromString(@"_UIStatesFeedbackGenerator");
+    SEL configurationSelector = NSSelectorFromString(@"defaultConfiguration");
+    SEL stateSelector = NSSelectorFromString(@"previewState");
+    SEL initializer = NSSelectorFromString(@"initWithConfiguration:coordinateSpace:");
+    SEL transition = NSSelectorFromString(@"transitionToState:ended:");
+    if (![configurationClass respondsToSelector:configurationSelector] ||
+        ![configurationClass respondsToSelector:stateSelector] ||
+        ![generatorClass instancesRespondToSelector:initializer] ||
+        ![generatorClass instancesRespondToSelector:transition]) return nil;
+    id configuration = ((id (*)(id, SEL))objc_msgSend)(configurationClass, configurationSelector);
+    id state = ((id (*)(id, SEL))objc_msgSend)(configurationClass, stateSelector);
+    if (!configuration || !state) return nil;
+    id generator = ((id (*)(id, SEL, id, id))objc_msgSend)([generatorClass alloc], initializer, configuration, sourceView);
+    ((void (*)(id, SEL, id, BOOL))objc_msgSend)(generator, transition, state, YES);
+    return generator;
 }

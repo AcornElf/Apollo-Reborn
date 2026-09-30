@@ -27,6 +27,8 @@
 #import "ApolloCommon.h"
 #import "ApolloScrapeWebView.h"
 #import "ApolloState.h"
+#import "ApolloWebJSON.h"          // keyless widgets: token_v2 bearer + probe marker
+#import "ApolloWebSessionStore.h"  // ApolloActiveWebSessionUsername
 
 // Section builders / keys here are wired up incrementally; tolerate not-yet-used
 // ones under the project's -Werror without per-symbol annotations.
@@ -448,6 +450,35 @@ static NSCache<NSString *, NSDictionary *> *ApolloSBWidgetsCache(void) {
     return cache;
 }
 
+// Sends one widgets request; returns the parsed root (nil on failure) and whether
+// the answer is cacheable (a 200 JSON reply). Synchronous — background queues only.
+static NSDictionary *ApolloSBPerformWidgetsRequest(NSURLRequest *request, NSString *subredditName,
+                                                   NSString *label, NSInteger *outStatus, BOOL *outDefinitive) {
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+    __block NSData *body = nil;
+    __block NSInteger status = -1;
+    __block NSError *networkError = nil;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        body = data;
+        networkError = error;
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) status = ((NSHTTPURLResponse *)response).statusCode;
+        dispatch_semaphore_signal(sema);
+    }] resume];
+    if (dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)((request.timeoutInterval + 3.0) * NSEC_PER_SEC))) != 0) {
+        status = -1;
+    }
+    id json = body.length > 0 ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
+    NSDictionary *root = [json isKindOfClass:[NSDictionary class]] ? json : nil;
+    ApolloLog(@"[Sidebar] widgets fetch r/%@ (%@) status=%ld items=%lu err=%@",
+              subredditName, label, (long)status, (unsigned long)[root[@"items"] count],
+              networkError.localizedDescription ?: @"nil");
+    if (outStatus) *outStatus = status;
+    // Only JSON is definitive: a 200 HTML page (login wall, block page) must not
+    // be cached as "no widgets".
+    if (outDefinitive) *outDefinitive = (status == 200 && root != nil);
+    return (status == 200 && [root[@"items"] isKindOfClass:[NSDictionary class]]) ? root : nil;
+}
+
 static void ApolloSBFetchWidgets(NSString *subredditName, void (^completion)(NSDictionary *root)) {
     if (subredditName.length == 0) { completion(nil); return; }
     NSString *cacheKey = subredditName.lowercaseString;
@@ -455,29 +486,72 @@ static void ApolloSBFetchWidgets(NSString *subredditName, void (^completion)(NSD
     if (cached) { completion(cached.count ? cached : nil); return; }
 
     NSString *escaped = ApolloSBEscapedSubreddit(subredditName);
-    NSString *token = [sLatestRedditBearerToken copy];
-    NSString *urlString = token.length > 0
-        ? [NSString stringWithFormat:@"https://oauth.reddit.com/r/%@/api/widgets?raw_json=1", escaped]
-        : [NSString stringWithFormat:@"https://www.reddit.com/r/%@/api/widgets.json?raw_json=1", escaped];
+    NSString *userAgent = sUserAgent.length > 0 ? sUserAgent : @"ApolloSidebar/1.0";
 
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlString]];
-    request.timeoutInterval = 15.0;
-    if (token.length > 0) [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
-    [request setValue:(sUserAgent.length > 0 ? sUserAgent : @"ApolloSidebar/1.0") forHTTPHeaderField:@"User-Agent"];
+    // /api/widgets is OAuth-only: www refuses the session cookie. An API-key
+    // account sends its own bearer; an API-Key-Free one has none
+    // (sLatestRedditBearerToken is empty or another account's), so it uses its web
+    // session's token_v2 bearer. The mint can block, so this runs off the main
+    // thread; completion is delivered on main.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary *root = nil;
+        BOOL definitive = NO;
+        NSInteger status = -1;
+        NSURL *oauthURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://oauth.reddit.com/r/%@/api/widgets?raw_json=1", escaped]];
 
-    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)response).statusCode : -1;
-        id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        NSDictionary *root = [json isKindOfClass:[NSDictionary class]] ? json : nil;
-        ApolloLog(@"[Sidebar] widgets fetch r/%@ status=%ld items=%lu err=%@",
-                  subredditName, (long)status, (unsigned long)[root[@"items"] count], error.localizedDescription ?: @"nil");
+        if (ApolloWebJSONHasUsableSession()) {
+            NSString *username = ApolloActiveWebSessionUsername();
+            if (ApolloWebJSONOptionalReadBackoff(username) > 0) {
+                ApolloLog(@"[Sidebar] widgets fetch r/%@ held while Reddit rate-limits u/%@", subredditName, username);
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(nil); });
+                return;
+            }
+            NSString *webBearer = username.length > 0 ? ApolloWebJSONKeylessOAuthBearer(username) : nil;
+            if (webBearer.length > 0 && oauthURL) {
+                // Probe-marked so the transport doesn't reroute it or treat this
+                // bearer as Apollo's own.
+                NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:ApolloWebJSONProbeURL(oauthURL)];
+                request.timeoutInterval = 15.0;
+                request.HTTPShouldHandleCookies = NO;
+                [request setValue:[@"Bearer " stringByAppendingString:webBearer] forHTTPHeaderField:@"Authorization"];
+                [request setValue:userAgent forHTTPHeaderField:@"User-Agent"];
+                root = ApolloSBPerformWidgetsRequest(request, subredditName, @"keyless token_v2", &status, &definitive);
+                if (status == 401 || status == 403) {
+                    // A failing minted bearer is a dead session's token: drop it so
+                    // the next open re-mints.
+                    ApolloWebJSONInvalidateOAuthBearerForAccount(username, webBearer);
+                }
+            }
+            if (!root && !definitive) {
+                // Last resort: a bearer-less www request signed with the session cookie.
+                NSURL *wwwURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://www.reddit.com/r/%@/api/widgets.json?raw_json=1", escaped]];
+                if (wwwURL) {
+                    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:wwwURL];
+                    request.timeoutInterval = 15.0;
+                    [request setValue:userAgent forHTTPHeaderField:@"User-Agent"];
+                    root = ApolloSBPerformWidgetsRequest(request, subredditName, @"keyless cookie", &status, &definitive);
+                }
+            }
+        } else {
+            NSString *token = ApolloActiveAccountRedditBearerToken();
+            NSURL *url = token.length > 0 ? oauthURL
+                : [NSURL URLWithString:[NSString stringWithFormat:@"https://www.reddit.com/r/%@/api/widgets.json?raw_json=1", escaped]];
+            if (url) {
+                NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+                request.timeoutInterval = 15.0;
+                if (token.length > 0) [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+                [request setValue:userAgent forHTTPHeaderField:@"User-Agent"];
+                root = ApolloSBPerformWidgetsRequest(request, subredditName, token.length > 0 ? @"OAuth" : @"anonymous", &status, &definitive);
+            }
+        }
+
         if (root.count) {
             [ApolloSBWidgetsCache() setObject:root forKey:cacheKey];
-        } else if (status == 200) {
-            [ApolloSBWidgetsCache() setObject:@{} forKey:cacheKey]; // cache the miss
+        } else if (definitive) {
+            [ApolloSBWidgetsCache() setObject:@{} forKey:cacheKey]; // cache a real "no widgets" answer only
         }
         dispatch_async(dispatch_get_main_queue(), ^{ completion(root); });
-    }] resume];
+    });
 }
 
 #pragma mark - Section node builders
@@ -940,6 +1014,26 @@ static char kApolloSBCoverKey;        // strong UIView: opaque anti-flash cover 
 static char kApolloSBCollapseHeaderKey; // BOOL on the header node
 static char kApolloSBWidgetTitlesKey;   // NSSet<NSString*> (normalized) on the sidebar markdown node, for bio dedup
 static char kApolloSBMarkdownBlocksKey; // NSMutableArray<@[node, attrText]> on a markdown node — blocks that rendered before titles were ready
+static char kApolloSBScopeKey;          // @YES on a sidebar VC counted into sApolloSBLiveSidebarVCs
+
+// Non-zero while a subreddit sidebar screen exists. The bio-dedup hook below sits
+// on ASTextNode.setAttributedText:, which every comment and post body in the app
+// walks, and only a live sidebar can ever produce a match — so off a sidebar the
+// hook is one atomic load. Without this it retained a copy of every markdown body
+// over 150 characters, app-wide, for a de-duplication that could never run.
+static int32_t sApolloSBLiveSidebarVCs = 0;
+
+// A subreddit bio is a handful of markdown blocks. The cap is there for the case
+// where a markdown node is rebound repeatedly while its widget fetch is still in
+// flight, so the stash cannot grow without bound.
+static const NSUInteger kApolloSBMaxStashedBlocks = 32;
+
+static Class ApolloSBMarkdownNodeClass(void) {
+    static Class cls = Nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ cls = objc_getClass("_TtC6Apollo12MarkdownNode"); });
+    return cls;
+}
 
 // Apollo's original spec (collapsed stats header + description/bio markdown) is
 // spliced into the section stack at this order — just under our stats (order 0),
@@ -1299,6 +1393,12 @@ static void ApolloSBTryBuild(UIViewController *vc, NSDictionary *root, NSString 
 %hook _TtC6Apollo30SubredditSidebarViewController
 
 - (void)viewDidLoad {
+    // Opened before %orig: Apollo renders the bio inside its own viewDidLoad, and
+    // the dedup hook has to be live by then.
+    if (![objc_getAssociatedObject(self, &kApolloSBScopeKey) boolValue]) {
+        objc_setAssociatedObject(self, &kApolloSBScopeKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        __atomic_fetch_add(&sApolloSBLiveSidebarVCs, 1, __ATOMIC_RELEASE);
+    }
     %orig;
     if ([objc_getAssociatedObject(self, &kApolloSBInstalledKey) boolValue]) return;
     objc_setAssociatedObject(self, &kApolloSBInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1341,6 +1441,13 @@ static void ApolloSBTryBuild(UIViewController *vc, NSDictionary *root, NSString 
     ApolloSBFetchWidgets(subredditName, ^(NSDictionary *root) {
         ApolloSBTryBuild(weakSelf, root, subredditName, tapTargets, 0);
     });
+}
+
+- (void)dealloc {
+    if ([objc_getAssociatedObject(self, &kApolloSBScopeKey) boolValue]) {
+        __atomic_fetch_sub(&sApolloSBLiveSidebarVCs, 1, __ATOMIC_RELEASE);
+    }
+    %orig;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -1422,7 +1529,11 @@ static NSAttributedString *ApolloSBTrimDuplicateSections(NSAttributedString *att
 %hook ASTextNode
 
 - (void)setAttributedText:(NSAttributedString *)attributedText {
-    Class mdc = objc_getClass("_TtC6Apollo12MarkdownNode");
+    if (__atomic_load_n(&sApolloSBLiveSidebarVCs, __ATOMIC_ACQUIRE) == 0) {
+        %orig;
+        return;
+    }
+    Class mdc = ApolloSBMarkdownNodeClass();
     if (mdc && [(id)self respondsToSelector:@selector(delegate)]) {
         id del = ((id (*)(id, SEL))objc_msgSend)((id)self, @selector(delegate));
         if ([del isKindOfClass:mdc]) {
@@ -1437,7 +1548,7 @@ static NSAttributedString *ApolloSBTrimDuplicateSections(NSAttributedString *att
             if (attributedText.length > 150) {
                 NSMutableArray *blocks = objc_getAssociatedObject(del, &kApolloSBMarkdownBlocksKey);
                 if (!blocks) { blocks = [NSMutableArray array]; objc_setAssociatedObject(del, &kApolloSBMarkdownBlocksKey, blocks, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
-                [blocks addObject:@[(id)self, attributedText]];
+                if (blocks.count < kApolloSBMaxStashedBlocks) [blocks addObject:@[(id)self, attributedText]];
             }
         }
     }

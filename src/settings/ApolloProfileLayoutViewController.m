@@ -6,6 +6,7 @@
 
 #import "ApolloCommon.h"
 #import "ApolloImmersiveHeaderBackground.h"
+#import "ApolloIdentityHeaderLayout.h"
 #import "ApolloState.h"
 #import "ApolloThemeRuntime.h"
 #import "ApolloUserProfileCache.h"
@@ -241,6 +242,7 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
         [self addSubview:_renderContainerView];
 
         _ambientView = [[ApolloImmersiveHeaderBackgroundView alloc] initWithFrame:CGRectZero];
+        _ambientView.usesProfileHero = YES;
         _ambientView.userInteractionEnabled = NO;
         _ambientView.accessibilityElementsHidden = YES;
         [_renderContainerView addSubview:_ambientView];
@@ -338,6 +340,9 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
         self.ambientView.hidden = NO;
         self.ambientView.frame = self.renderContainerView.bounds;
         CGFloat bannerHeight = CGRectGetHeight(self.productionHeaderView.bannerImageView.frame);
+        // Match the real profile's continuation behind the avatar. The preview
+        // omits navigation chrome, but must retain this part of the fade region.
+        if (sProfileShowBanner) bannerHeight += ApolloIdentityHeaderAvatarOverlap() + 8.0;
         [self.ambientView applyBanner:self.productionHeaderView.bannerImageView.image
                            pageColor:pageColor
                         regionHeight:bannerHeight
@@ -421,7 +426,7 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
     if (tableView != self.tableView) return UITableViewAutomaticDimension;
     NSString *footer = [self tableView:tableView titleForFooterInSection:section];
-    return footer.length > 0 ? UITableViewAutomaticDimension : 12.0;
+    return footer.length > 0 ? [super tableView:tableView heightForFooterInSection:section] : 12.0;
 }
 
 - (void)apollo_applyTheme {
@@ -430,6 +435,7 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
         ?: ApolloThemePageBackgroundColor() ?: UIColor.systemGroupedBackgroundColor;
     self.pinnedPreviewTitleLabel.textColor = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel)
         ?: UIColor.secondaryLabelColor;
+    ApolloSettingsApplySectionHeaderTypography(self.pinnedPreviewTitleLabel);
     [self.pinnedPreviewCard apollo_applyCurrentAppearance];
 }
 
@@ -443,12 +449,17 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayHeaderView:(UIView *)view forSection:(NSInteger)section {
-    if (tableView != self.tableView || ![view isKindOfClass:UITableViewHeaderFooterView.class]) return;
-    UIFont *font = ((UITableViewHeaderFooterView *)view).textLabel.font;
-    if (font && ![self.pinnedPreviewTitleLabel.font isEqual:font]) {
-        // Match the real settings section headings, including Apollo fonts.
-        self.pinnedPreviewTitleLabel.font = font;
-        [self apollo_updatePinnedPreviewLayoutPreservingScroll:YES];
+    if (@available(iOS 26.0, *)) {
+        [super tableView:tableView willDisplayHeaderView:view forSection:section];
+        ApolloSettingsApplySectionHeaderTypography(self.pinnedPreviewTitleLabel);
+    } else {
+        if (tableView != self.tableView || ![view isKindOfClass:UITableViewHeaderFooterView.class]) return;
+        UIFont *font = ((UITableViewHeaderFooterView *)view).textLabel.font;
+        if (font && ![self.pinnedPreviewTitleLabel.font isEqual:font]) {
+            // Match the real settings section headings, including Apollo fonts.
+            self.pinnedPreviewTitleLabel.font = font;
+            [self apollo_updatePinnedPreviewLayoutPreservingScroll:YES];
+        }
     }
 }
 
@@ -665,6 +676,7 @@ static UIImage *ApolloProfilePreviewBanner(UITraitCollection *traits) {
     self.pinnedPreviewTitleLabel.text = @"Preview";
     self.pinnedPreviewTitleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle3];
     self.pinnedPreviewTitleLabel.adjustsFontForContentSizeCategory = YES;
+    ApolloSettingsApplySectionHeaderTypography(self.pinnedPreviewTitleLabel);
     self.pinnedPreviewTitleLabel.accessibilityTraits = UIAccessibilityTraitHeader;
     [self.pinnedPreviewHost addSubview:self.pinnedPreviewTitleLabel];
 

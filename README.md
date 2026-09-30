@@ -123,7 +123,7 @@ Finally, **don't copy these examples verbatim**. If everyone adopts the same "sa
 
 ### Self-hosted notifications (advanced)
 
-The legacy Apollo push backends went dark in June 2023 and are otherwise blocked by the tweak. If you run your own instance of [apollo-backend](https://github.com/Apollo-Reborn/apollo-backend), you can set the URL under **Settings > Custom API > Notification Backend** and the tweak will route all `apollopushserver.xyz`, `beta.apollonotifications.com`, and `apolloreq.com` traffic to that host instead. Leave the field empty to keep the current "silently dropped" behavior.
+The legacy Apollo push backends went dark in June 2023 and are otherwise blocked by the tweak. If you run your own instance of [apollo-backend](https://github.com/Apollo-Reborn/apollo-backend), you can set the URL under **Settings > Custom API > Notification Backend** and the tweak will route all `apollopushserver.xyz`, `apollonotifications.com`, and `beta.apollonotifications.com` traffic to that host instead. Leave the field empty to keep the current "silently dropped" behavior.
 
 Notifications can be delivered two ways — pick the one that matches your Apple account:
 
@@ -164,16 +164,18 @@ the Companion extension. The fallback is included in the **standard** and
 
 Those IPAs also retain the former automatic implementation as **Open in Apollo
 (Legacy)**. It is an opt-in alternative for people who prefer Apollo's bundled
-extension and do not want to install Link Companion. Enable either **Legacy** or
-**Companion**, never both: two automatic extensions can compete for the same
-navigation. The manual fallback is passive and is safe to leave enabled with
-either choice.
+extension and do not want to install Link Companion. Legacy opens the validated
+Reddit destination through Apollo's `apollo://` URL scheme, so iOS may ask for
+confirmation before switching apps. Enable either **Legacy** or **Companion**,
+never both: two automatic extensions can compete for the same navigation. The
+manual fallback is passive and is safe to leave enabled with either choice.
 
 > [!IMPORTANT]
 > Install and launch the project-signed Link Companion before enabling its
 > automatic extension. Apollo itself can keep any sideloaded bundle ID and
 > signing team; it does not need an Associated Domains entitlement. Without the
-> companion, the Worker safely returns to Reddit instead of looping.
+> companion, the Universal Link used by Companion and Manual Fallback safely
+> returns to Reddit instead of looping. Legacy does not use that Universal Link.
 
 Supported link families include canonical post/comment/subreddit/profile/wiki
 URLs on `reddit.com`, `www`, `old`, `new`, `np`, `m`, and language subdomains;
@@ -320,12 +322,12 @@ Thank you to these wonderful people:
 <table>
   <tbody>
     <tr>
-      <td align="center" valign="top" width="14.29%"><a href="https://github.com/JeffreyCA"><img src="https://avatars.githubusercontent.com/u/9157833?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="JeffreyCA"/></a><br /><sub><b>JeffreyCA</b></sub><br /><a href="#maintainer-JeffreyCA" title="Maintainer">Maintainer</a><br /><a href="https://buymeacoffee.com/jeffreyca" title="Buy Me a Coffee">☕</a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/JeffreyCA"><img src="https://avatars.githubusercontent.com/u/9157833?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="JeffreyCA"/></a><br /><sub><b>JeffreyCA</b></sub><br /><a href="#maintainer-JeffreyCA" title="Maintainer">Maintainer</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/icpryde"><img src="https://avatars.githubusercontent.com/u/29389746?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="icpryde"/></a><br /><sub><b>icpryde</b></sub><br /><a href="#maintainer-icpryde" title="Maintainer">Maintainer</a><br /><a href="https://buymeacoffee.com/icpryde" title="Buy Me a Coffee">☕</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/jordanearle"><img src="https://avatars.githubusercontent.com/u/1413231?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="jordanearle"/></a><br /><sub><b>jordanearle</b></sub><br /><a href="#maintainer-jordanearle" title="Maintainer">Maintainer</a><br /><a href="https://buymeacoffee.com/jordanearle" title="Buy Me a Coffee">☕</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/nickclyde"><img src="https://avatars.githubusercontent.com/u/9121162?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="nickclyde"/></a><br /><sub><b>nickclyde</b></sub><br /><a href="#maintainer-nickclyde" title="Maintainer">Maintainer</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/DeltAndy123"><img src="https://avatars.githubusercontent.com/u/105518328?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="DeltAndy123"/></a><br /><sub><b>DeltAndy123</b></sub><br /><a href="#maintainer-DeltAndy123" title="Maintainer">Maintainer</a></td>
-      <td align="center" valign="top" width="14.29%"><a href="https://github.com/IllIIllIllIllII"><img src="https://avatars.githubusercontent.com/u/132845378?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="IllIIllIllIllII"/></a><br /><sub><b>IllIIllIllIllII</b></sub><br /><a href="#maintainer-IllIIllIllIllII" title="Maintainer">Maintainer</a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/IllIIllIllIllII"><img src="https://avatars.githubusercontent.com/u/132845378?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="IllIIllIllIllII"/></a><br /><sub><b>IllIIllIllIllII</b></sub><br /><a href="#maintainer-IllIIllIllIllII" title="Maintainer">Maintainer</a><br /><a href="https://buymeacoffee.com/illiillillillii" title="Buy Me a Coffee">☕</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/EthanArbuckle"><img src="https://avatars.githubusercontent.com/u/4250718?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="EthanArbuckle"/></a><br /><sub><b>EthanArbuckle</b></sub><br /><a href="https://github.com/Apollo-Reborn/Apollo-Reborn/commits?author=EthanArbuckle" title="Code">Code</a></td>
     </tr>
     <tr>
@@ -353,6 +355,7 @@ Thank you to these wonderful people:
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/JamesLautner"><img src="https://avatars.githubusercontent.com/u/198249797?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="JamesLautner"/></a><br /><sub><b>JamesLautner</b></sub><br /><a href="https://github.com/Apollo-Reborn/Apollo-Reborn/commits?author=JamesLautner" title="Code">Code</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/Thetromboneman1"><img src="https://avatars.githubusercontent.com/u/38571121?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="Thetromboneman1"/></a><br /><sub><b>Thetromboneman1</b></sub><br /><a href="https://github.com/Apollo-Reborn/Apollo-Reborn/commits?author=Thetromboneman1" title="Code">Code</a></td>
       <td align="center" valign="top" width="14.29%"><a href="https://github.com/jaredrossberg"><img src="https://avatars.githubusercontent.com/u/45674604?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="jaredrossberg"/></a><br /><sub><b>jaredrossberg</b></sub><br /><a href="https://github.com/Apollo-Reborn/Apollo-Reborn/commits?author=jaredrossberg" title="Code">Code</a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/paradoxally"><img src="https://avatars.githubusercontent.com/u/1304041?v=4&amp;s=100" width="100px;" height="100px;" style="object-fit: cover;" alt="paradoxally"/></a><br /><sub><b>paradoxally</b></sub><br /><a href="https://github.com/Apollo-Reborn/Apollo-Reborn/commits?author=paradoxally" title="Code">Code</a></td>
     </tr>
   </tbody>
 </table>

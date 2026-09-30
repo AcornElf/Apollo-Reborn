@@ -205,9 +205,18 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     // table's counts and our answers must agree for the whole layout pass.
     NSArray<ApolloSettingsSection *> *_visibleSections;
     NSArray<NSArray<ApolloSettingsRow *> *> *_visibleRows;
-    // A footer-height re-check is already queued for the next runloop turn
+    // A footer-height check is already queued for the next runloop turn
     // (see -tableView:willDisplayFooterView:forSection:).
     BOOL _footerHeightCheckPending;
+    // The height each plain-string footer's own view asked for, keyed by
+    // "table width|footer text" and served from
+    // -tableView:heightForFooterInSection:. See "section footer heights".
+    NSMutableDictionary<NSString *, NSNumber *> *_footerMeasuredHeights;
+    // How often each footer's measurement has changed, keyed by
+    // "label point size|width|text" — the bound on the adopting pass.
+    NSMutableDictionary<NSString *, NSNumber *> *_footerMeasureChanges;
+    // A check is parked on the running navigation transition's completion.
+    BOOL _footerHeightCheckDeferred;
 }
 
 - (NSArray<ApolloSettingsSection *> *)buildForm {
@@ -231,10 +240,69 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
 }
 
 - (void)rebuildForm {
+    // Measured footer heights stay (they are keyed by text and width, so the
+    // reload below gets them straight away); only the change budget restarts.
+    [_footerMeasureChanges removeAllObjects];
     _sections = [self buildForm] ?: @[];
     _visibleSections = [self computeVisibleSections];
     _visibleRows = [self computeVisibleRowsForSections:_visibleSections];
     [self.tableView reloadData];
+}
+
+// A reload or batch update runs UIKit's post-update scroll restore, which saves
+// the position against one row and puts it back against another when the top
+// edge of the screen sits inside a section footer (see "section footer
+// heights"): on Apollo AI, saving a custom header with the list scrolled down
+// to it moved the list ~210pt. So note where every row on screen sits, run the
+// update, let UIKit's restore happen, then put the first of those rows that is
+// still in the form back in its place. Rows only, by identity: the edit may
+// have removed the row that was first on screen, and the next one then holds
+// the list. Anything that comes on screen while the list is put back is
+// measured as it is laid out and can push that row down again (after a
+// reloadData every height is an estimate until then), so correct until the row
+// holds.
+- (void)performUpdateKeepingVisibleRowsInPlace:(void (NS_NOESCAPE ^)(void))update {
+    UITableView *tableView = self.tableView;
+    if (!tableView.window) {
+        update();
+        return;
+    }
+    CGFloat offsetY = tableView.contentOffset.y;
+    CGFloat visibleTop = offsetY + tableView.adjustedContentInset.top;
+    NSMutableArray<NSString *> *anchorIDs = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *anchorOffsets = [NSMutableArray array];
+    NSArray<NSIndexPath *> *visible = [tableView.indexPathsForVisibleRows sortedArrayUsingSelector:@selector(compare:)];
+    for (NSIndexPath *indexPath in visible) {
+        NSString *rowID = [self apollo_sf_rowAtIndexPath:indexPath].rowID;
+        CGRect rect = [tableView rectForRowAtIndexPath:indexPath];
+        if (rowID.length == 0 || CGRectGetMaxY(rect) <= visibleTop) continue;   // under the bars
+        [anchorIDs addObject:rowID];
+        [anchorOffsets addObject:@(CGRectGetMinY(rect) - offsetY)];
+    }
+
+    [UIView performWithoutAnimation:^{
+        update();
+        [tableView layoutIfNeeded];   // the update, and UIKit's restore, happen here
+        CGFloat restored = tableView.contentOffset.y;
+        for (NSUInteger i = 0; i < anchorIDs.count; i++) {
+            if (![self indexPathForRowID:anchorIDs[i]]) continue;
+            NSInteger passes = 0;
+            for (; passes < 4; passes++) {
+                NSIndexPath *indexPath = [self indexPathForRowID:anchorIDs[i]];
+                UIEdgeInsets insets = tableView.adjustedContentInset;
+                CGFloat minY = -insets.top;
+                CGFloat maxY = MAX(minY, tableView.contentSize.height + insets.bottom - CGRectGetHeight(tableView.bounds));
+                CGFloat target = CGRectGetMinY([tableView rectForRowAtIndexPath:indexPath]) - anchorOffsets[i].doubleValue;
+                target = MIN(MAX(target, minY), maxY);
+                if (fabs(target - tableView.contentOffset.y) < 0.5) break;
+                tableView.contentOffset = CGPointMake(tableView.contentOffset.x, target);
+                [tableView layoutIfNeeded];
+            }
+            ApolloLog(@"[SettingsForm] update kept visible rows in place: offset was %.1f, UIKit restored %.1f, put back to %.1f in %ld pass(es)",
+                      offsetY, restored, tableView.contentOffset.y, (long)passes);
+            break;
+        }
+    }];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -246,6 +314,12 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
     // to re-render them for the new appearance.
     if (previousTraitCollection.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
         [self.tableView reloadData];
+    }
+    // Footer heights were measured at the previous text size.
+    if (previousTraitCollection &&
+        ![previousTraitCollection.preferredContentSizeCategory isEqualToString:self.traitCollection.preferredContentSizeCategory]) {
+        [_footerMeasuredHeights removeAllObjects];
+        [_footerMeasureChanges removeAllObjects];
     }
 }
 
@@ -377,6 +451,32 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
     [self.tableView reloadData];
 }
 
+- (void)noteRowMovedFromIndexPath:(NSIndexPath *)fromIndexPath toIndexPath:(NSIndexPath *)toIndexPath {
+    if (!_visibleRows || !_visibleSections) return;
+    if (fromIndexPath.section != toIndexPath.section) return;
+    NSUInteger s = (NSUInteger)fromIndexPath.section;
+    if (s >= _visibleRows.count || s >= _visibleSections.count) return;
+    NSMutableArray<ApolloSettingsRow *> *visible = [_visibleRows[s] mutableCopy];
+    NSUInteger from = (NSUInteger)fromIndexPath.row, to = (NSUInteger)toIndexPath.row;
+    if (from >= visible.count || to >= visible.count || from == to) return;
+    ApolloSettingsRow *moved = visible[from];
+    [visible removeObjectAtIndex:from];
+    [visible insertObject:moved atIndex:to];
+    NSMutableArray *rowsBySection = [_visibleRows mutableCopy];
+    rowsBySection[s] = [visible copy];
+    _visibleRows = [rowsBySection copy];
+    // The section's full row list (hidden rows included) follows: the moved
+    // row goes right before the row that now follows it on screen, or last.
+    ApolloSettingsSection *section = _visibleSections[s];
+    NSMutableArray<ApolloSettingsRow *> *all = [section.rows mutableCopy];
+    [all removeObjectIdenticalTo:moved];
+    ApolloSettingsRow *next = to + 1 < visible.count ? visible[to + 1] : nil;
+    NSUInteger insertAt = next ? [all indexOfObjectIdenticalTo:next] : NSNotFound;
+    if (insertAt == NSNotFound) insertAt = all.count;
+    [all insertObject:moved atIndex:insertAt];
+    section.rows = all;
+}
+
 #pragma mark identity lookups
 
 - (ApolloSettingsRow *)rowWithID:(NSString *)rowID {
@@ -484,14 +584,20 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
         }
         case ApolloSFRowKindValue:
         case ApolloSFRowKindDisclosure: {
-            static NSString *const reuseID = @"ApolloSFValue";
+            // A disclosure row may carry its detail as a subtitle under the
+            // title (wraps, never truncates) rather than as a trailing value;
+            // that variant gets its own reuse pool since the cell style differs.
+            BOOL subtitle = row.kind == ApolloSFRowKindDisclosure && row.detailAsSubtitle;
+            NSString *reuseID = subtitle ? @"ApolloSFDisclosureSubtitle" : @"ApolloSFValue";
             cell = [tableView dequeueReusableCellWithIdentifier:reuseID];
-            if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:reuseID];
+            if (!cell) cell = [[UITableViewCell alloc] initWithStyle:subtitle ? UITableViewCellStyleSubtitle : UITableViewCellStyleValue1
+                                                  reuseIdentifier:reuseID];
             BOOL enabled = row.enabled ? row.enabled() : YES;
             cell.textLabel.text = row.title;
             cell.textLabel.numberOfLines = 0;
             cell.textLabel.enabled = enabled;
             cell.detailTextLabel.text = row.detail ? row.detail() : nil;
+            cell.detailTextLabel.numberOfLines = subtitle ? 0 : 1;
             cell.detailTextLabel.textColor = enabled
                 ? [UIColor secondaryLabelColor] : [UIColor tertiaryLabelColor];
             cell.accessoryType = (enabled && row.kind == ApolloSFRowKindDisclosure)
@@ -565,27 +671,47 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
 
 #pragma mark section footer heights
 
-// UITableView never re-measures a plain-string section footer once it has a
-// height for it. Footers on screen at first layout are measured from their
-// real view; footers that start off-screen get UIKit's classic title-height
-// estimate, and that estimate stays even after the footer's view exists. For
-// most strings the two agree closely enough, but the estimate under-measures
-// long multi-paragraph text — seen with the Apollo AI Summaries footer on iOS
-// 26: estimated 254pt where the footer view's own sizeThatFits: says 258.7 —
-// and UITableViewHeaderFooterView anchors its label to the BOTTOM of the view,
-// so a footer that was sized short pushes its first line up against the
-// section box above it instead of leaving the usual gap.
+// The form owns the height of its plain-string section footers, because
+// UITableView's own number for them cannot be trusted:
 //
-// An empty beginUpdates/endUpdates pass makes the table re-measure the footers
-// that are on screen from their real views and leaves header heights alone
-// (checked: 45.3pt before and after). So: after a footer comes on screen, look
-// at the visible footers on the next runloop turn — by then the label has its
-// final font — and run that pass, without animation, when one disagrees with
-// its view. Footers that were sized right come back at exactly their current
-// height, so nothing else moves. Deliberately NOT done through
-// heightForFooterInSection:: merely implementing that delegate method switches
-// the whole table from estimated to exact section sizing, which also changes
-// every header height (55/38pt instead of 45.3) on every form screen.
+//  - A footer that is off screen is sized by UIKit from the title alone, on a
+//    private sizing view with UIKit's default footer font. That under-measures
+//    long multi-paragraph text (the Apollo AI Summaries footer on iOS 26: 254pt
+//    where the real view's sizeThatFits: says 258.7), and it is far off as soon
+//    as anything gives the real label another font (62pt for a footer whose
+//    view needs 96pt, measured with a settings-wide text-size pass that
+//    re-fonts footers in willDisplayFooterView:).
+//  - UITableViewHeaderFooterView anchors its label to the BOTTOM of the view,
+//    so a footer that is sized short does not clip: its text rides UP, over the
+//    rows of the section above it.
+//  - An empty beginUpdates/endUpdates pass re-measures the footers that are ON
+//    screen from their real views, and puts every footer that is OFF screen
+//    back on the title estimate. So a pass alone can never settle a table
+//    taller than the screen: healing the footers at the bottom un-heals the
+//    ones at the top, which then come back short when the user scrolls up.
+//  - UIKit only takes a new footer height from an updates pass, not when the
+//    footer scrolls in, and a pass run while the list is scrolled can move it.
+//    After a batch update UIKit puts the first visible row back where it was,
+//    but when the top edge of the screen is inside a section footer it saves
+//    that position against one row (the footer's own section's last row, from
+//    -_indexPathsForVisibleRowsUsingPresentationValues:) and restores it
+//    against another (the next row, _visibleRows): the list jumps by the
+//    distance between the two, 187pt and 275pt mid-fling on Apollo AI, whose
+//    footers run to 250pt.
+//
+// So: once a footer's view has been displayed, take the height that view asks
+// for (on the next runloop turn — by then the label has its final font),
+// remember it by table width and text, and answer heightForFooterInSection:
+// with it from then on. Whatever the table rebuilds later, that footer keeps
+// the measured height whether it is on screen or not, and one updates pass is
+// enough for the table to adopt a new measurement. The footers that are not on
+// screen yet are measured at the same time, on a footer view the table has
+// already styled, so the first check after the screen appears (still at the
+// top of the list, where UIKit skips that restore) adopts every footer on the
+// screen in one pass, and none needs a pass of its own as it scrolls in.
+//
+// Subclasses that override heightForFooterInSection: call super for their
+// plain-string footers.
 - (CGFloat)apollo_sf_fittedHeightForFooterView:(UIView *)view inTableView:(UITableView *)tableView {
     if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return 0.0;
     if (((UITableViewHeaderFooterView *)view).textLabel.text.length == 0) return 0.0;
@@ -594,9 +720,83 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
     return [view sizeThatFits:CGSizeMake(width, 0.0)].height;
 }
 
+- (NSString *)apollo_sf_footerHeightKeyForText:(NSString *)text inTableView:(UITableView *)tableView {
+    CGFloat width = CGRectGetWidth(tableView.bounds);
+    if (text.length == 0 || width <= 0.0) return nil;
+    return [NSString stringWithFormat:@"%.0f|%@", width, text];
+}
+
+// Measures the plain footers that are not on screen, so the pass that adopts
+// them runs now rather than one by one as each scrolls in (see "section footer
+// heights"). The measuring view is a footer the table built and
+// willDisplayFooterView: styled: same font, width and insets as every other
+// plain footer here, so only the text differs. Its label gets each text in
+// turn and is put back within this runloop turn, so none of it is drawn.
+// Returns YES when a footer the table sizes from the form got a new height.
+- (BOOL)apollo_sf_measureFootersAheadInTableView:(UITableView *)tableView sections:(NSInteger)sections {
+    NSMutableIndexSet *pending = nil;
+    UITableViewHeaderFooterView *template = nil;
+    for (NSInteger section = 0; section < sections; section++) {
+        NSString *text = [self tableView:tableView titleForFooterInSection:section];
+        NSString *key = [self apollo_sf_footerHeightKeyForText:text inTableView:tableView];
+        if (text.length == 0 || !key) continue;
+        UITableViewHeaderFooterView *footer = [tableView footerViewForSection:section];
+        if (footer) {
+            // UIKit's own footer for the section's title, not a screen's own view.
+            if (!template && [footer.textLabel.text isEqualToString:text]) template = footer;
+            continue;   // on screen: the caller measures it from its own view
+        }
+        if (_footerMeasuredHeights[key]) continue;
+        if (!pending) pending = [NSMutableIndexSet indexSet];
+        [pending addIndex:(NSUInteger)section];
+    }
+    if (!pending || !template) return NO;
+
+    UILabel *label = template.textLabel;
+    NSString *ownText = label.text;
+    BOOL adopted = NO;
+    for (NSInteger section = 0; section < sections; section++) {
+        if (![pending containsIndex:(NSUInteger)section]) continue;
+        NSString *text = [self tableView:tableView titleForFooterInSection:section];
+        label.text = text;
+        // sizeThatFits: subtracts the label's baseline offsets, and UILabel
+        // reads those against its current frame: a text shorter than the frame
+        // the previous text left sits centered in it and measures short (52pt
+        // for a 96pt footer). sizeThatFits: lays the view out first, so ask.
+        [template setNeedsLayout];
+        CGFloat fitted = [self apollo_sf_fittedHeightForFooterView:template inTableView:tableView];
+        if (fitted <= 0.0) continue;
+        if (!_footerMeasuredHeights) _footerMeasuredHeights = [NSMutableDictionary dictionary];
+        _footerMeasuredHeights[[self apollo_sf_footerHeightKeyForText:text inTableView:tableView]] = @(fitted);
+        // A section whose footer a subclass sizes itself (its own view) keeps
+        // its own height; the measurement is simply unused there.
+        if (fabs([self tableView:tableView heightForFooterInSection:section] - fitted) >= 0.5) continue;
+        adopted = YES;
+        ApolloLog(@"[SettingsForm] footer %ld is not on screen yet — measured it ahead at %.1fpt", (long)section, fitted);
+    }
+    label.text = ownText;
+    [template setNeedsLayout];
+    [template layoutIfNeeded];
+    return adopted;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+    NSString *text = [self tableView:tableView titleForFooterInSection:section];
+    // No footer text: answer what the table would have used had this method
+    // not existed (a subclass may have set a fixed sectionFooterHeight).
+    if (text.length == 0) return tableView.sectionFooterHeight;
+    NSString *key = [self apollo_sf_footerHeightKeyForText:text inTableView:tableView];
+    NSNumber *measured = key ? _footerMeasuredHeights[key] : nil;
+    return measured ? (CGFloat)measured.doubleValue : UITableViewAutomaticDimension;
+}
+
 - (void)tableView:(UITableView *)tableView willDisplayFooterView:(UIView *)view forSection:(NSInteger)section {
     [super tableView:tableView willDisplayFooterView:view forSection:section];
     if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return;
+    [self apollo_sf_scheduleFooterHeightCheck];
+}
+
+- (void)apollo_sf_scheduleFooterHeightCheck {
     if (_footerHeightCheckPending) return;
     _footerHeightCheckPending = YES;
     __weak typeof(self) weakSelf = self;
@@ -604,26 +804,85 @@ static void ApolloSFAddPath(NSMutableDictionary<NSNumber *, NSMutableArray<NSInd
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf->_footerHeightCheckPending = NO;
-        [strongSelf apollo_sf_remeasureMismatchedFooters];
+        [strongSelf apollo_sf_adoptMeasuredFooterHeights];
     });
 }
 
-- (void)apollo_sf_remeasureMismatchedFooters {
+// The adopting pass runs ONLY when a footer's measurement is new or changed,
+// never merely because the table and a footer's view disagree: endUpdates puts
+// the footers on screen again, which calls willDisplayFooterView: again, so a
+// pass keyed on disagreement re-runs on every runloop turn for as long as the
+// two cannot be reconciled (2,293 passes in ~10s in a device log), and an
+// updates pass per frame stalls a scroll. A measurement that keeps changing is
+// capped per label font, so a label whose font flips cannot drive a loop either.
+static const NSUInteger kApolloSFMaxFooterMeasureChanges = 4;
+
+- (void)apollo_sf_adoptMeasuredFooterHeights {
     UITableView *tableView = self.tableView;
     if (!tableView.window) return;
-    NSInteger sections = tableView.numberOfSections;
+
+    // Not inside a navigation transition: an updates pass run while the
+    // transition's animations are open gets its settle captured, so the rows
+    // visibly slide into place as the screen comes back. Look again once the
+    // transition is over.
+    // Footers keep appearing while the transition runs, so park one check,
+    // not one per appearance. The completion also fires for a cancelled
+    // interactive pop; the screen that stays then simply gets its check late.
+    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (coordinator) {
+        if (_footerHeightCheckDeferred) return;
+        __weak typeof(self) weakSelf = self;
+        BOOL queued = [coordinator animateAlongsideTransition:nil
+                                                   completion:^(__unused id<UIViewControllerTransitionCoordinatorContext> context) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf->_footerHeightCheckDeferred = NO;
+            [strongSelf apollo_sf_scheduleFooterHeightCheck];
+        }];
+        if (queued) {
+            _footerHeightCheckDeferred = YES;
+            return;
+        }
+    }
+
+    NSInteger sections = MIN(tableView.numberOfSections, (NSInteger)_visibleSections.count);
+    BOOL needsPass = [self apollo_sf_measureFootersAheadInTableView:tableView sections:sections];
     for (NSInteger section = 0; section < sections; section++) {
         UITableViewHeaderFooterView *footer = [tableView footerViewForSection:section];
         CGFloat fitted = [self apollo_sf_fittedHeightForFooterView:footer inTableView:tableView];
-        if (fitted <= 0.0 || fabs(fitted - CGRectGetHeight(footer.bounds)) < 0.5) continue;
-        ApolloLog(@"[SettingsForm] footer %ld is %.1fpt tall but its view fits %.1fpt — re-measuring visible footers",
-                  (long)section, CGRectGetHeight(footer.bounds), fitted);
-        [UIView performWithoutAnimation:^{
-            [tableView beginUpdates];
-            [tableView endUpdates];
-        }];
-        return;
+        if (fitted <= 0.0) continue;
+        NSString *key = [self apollo_sf_footerHeightKeyForText:footer.textLabel.text inTableView:tableView];
+        if (!key) continue;
+        NSNumber *known = _footerMeasuredHeights[key];
+        if (known && fabs(known.doubleValue - fitted) < 0.5) continue;
+
+        NSString *budgetKey = [NSString stringWithFormat:@"%.1f|%@", footer.textLabel.font.pointSize, key];
+        NSUInteger changes = _footerMeasureChanges[budgetKey].unsignedIntegerValue;
+        if (changes >= kApolloSFMaxFooterMeasureChanges) {
+            if (changes == kApolloSFMaxFooterMeasureChanges) {
+                if (!_footerMeasureChanges) _footerMeasureChanges = [NSMutableDictionary dictionary];
+                _footerMeasureChanges[budgetKey] = @(changes + 1);
+                ApolloLog(@"[SettingsForm] footer %ld keeps changing its fitted height (%.1fpt, now %.1fpt) — leaving it at %.1fpt",
+                          (long)section, known.doubleValue, fitted, known.doubleValue);
+            }
+            continue;
+        }
+        if (!_footerMeasuredHeights) _footerMeasuredHeights = [NSMutableDictionary dictionary];
+        if (!_footerMeasureChanges) _footerMeasureChanges = [NSMutableDictionary dictionary];
+        _footerMeasuredHeights[key] = @(fitted);
+        _footerMeasureChanges[budgetKey] = @(changes + 1);
+
+        CGFloat height = CGRectGetHeight(footer.bounds);
+        if (fabs(fitted - height) < 0.5) continue;
+        needsPass = YES;
+        ApolloLog(@"[SettingsForm] footer %ld is %.1fpt tall but its view fits %.1fpt — adopting the measured height",
+                  (long)section, height, fitted);
     }
+    if (!needsPass) return;
+    [UIView performWithoutAnimation:^{
+        [tableView beginUpdates];
+        [tableView endUpdates];
+    }];
 }
 
 @end

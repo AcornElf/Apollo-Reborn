@@ -15,6 +15,7 @@
 //      the real Messages row as a legacy fallback.
 //   4. In that fallback, filter the IGListKit objects to chat-subject messages.
 
+#import "ApolloAccountCredentials.h"
 #import "ApolloChatRoomDirectory.h"
 #import "ApolloChatUnreadPoller.h"
 #import "ApolloCommon.h"
@@ -1976,6 +1977,7 @@ static void ApolloWarnIfUnhandledRowDelegates(id vc) {
     // stale coordinates from the previous account cannot route the wrong row —
     // paired with a reload, never on its own (#865).
     ApolloBoxesResetRowStateAndReload(self, @"account switch");
+    // Safe unretained capture: these blocks only compare self's address with the __weak static, never message it.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (sLatestBoxesController == self) ApolloRefreshBoxesForModeratorState(@"account switch +0.75s");
     });
@@ -2188,11 +2190,31 @@ static BOOL sChatFilterActive = NO;
                                                      name:ApolloModernChatStatusDidChangeNotification
                                                    object:nil];
         objc_setAssociatedObject(self, &kInboxAllStatusObserverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        dispatch_async(dispatch_get_main_queue(), ^{ ApolloInstallInboxModeSwitcher(self); });
+        // Logos hands hooked methods an __unsafe_unretained self, so a block
+        // that names self does not keep this controller alive: popping All
+        // right after opening it can free it before these blocks run (the
+        // crash class behind #893/#943). Capture it weakly and skip once it
+        // is gone; a popped Inbox needs neither the switcher nor a WebKit
+        // Chat hub. Reload into a concretely typed local: __typeof__(self)
+        // would carry the __unsafe_unretained along and own nothing.
+        __weak UIViewController *weakInbox = (UIViewController *)self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *inbox = weakInbox;
+            if (!inbox) {
+                ChatsFilterLog(@"Inbox (All) freed before its switcher install ran; skipped");
+                return;
+            }
+            ApolloInstallInboxModeSwitcher(inbox);
+        });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            if (ApolloInboxControllerIsAll(self) && ApolloModernChatShouldOpen()) {
-                ApolloEnsureInboxChatHub((UIViewController *)self);
+            UIViewController *inbox = weakInbox;
+            if (!inbox) {
+                ChatsFilterLog(@"Inbox (All) freed before its Chat hub preload ran; skipped");
+                return;
+            }
+            if (ApolloInboxControllerIsAll(inbox) && ApolloModernChatShouldOpen()) {
+                ApolloEnsureInboxChatHub(inbox);
             }
         });
     }
@@ -2208,9 +2230,17 @@ static BOOL sChatFilterActive = NO;
     ApolloChatRoomDirectoryPrefetch();
     if (ApolloInboxControllerIsAll(self) && ApolloModernChatShouldOpen() &&
         !objc_getAssociatedObject(self, &kInboxAllChatHubKey)) {
+        // Weak for the same reason as in viewDidLoad (#893/#943): a quick pop
+        // can free this controller inside the 0.35 s delay.
+        __weak UIViewController *weakInbox = (UIViewController *)self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            ApolloEnsureInboxChatHub((UIViewController *)self);
+            UIViewController *inbox = weakInbox;
+            if (!inbox) {
+                ChatsFilterLog(@"Inbox (All) freed before its appearance Chat hub preload ran; skipped");
+                return;
+            }
+            ApolloEnsureInboxChatHub(inbox);
         });
     }
 }
@@ -2242,10 +2272,18 @@ static BOOL sChatFilterActive = NO;
     %orig;
     if (!ApolloInboxControllerIsAll(self)) return;
     ApolloDismantleInboxChatHub((UIViewController *)self, @"account changed");
+    // Weak for the same reason as in viewDidLoad (#893/#943): the Inbox can
+    // be popped and freed before the main queue reaches this block.
+    __weak UIViewController *weakInbox = (UIViewController *)self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        ApolloInstallInboxModeSwitcher(self);
+        UIViewController *inbox = weakInbox;
+        if (!inbox) {
+            ChatsFilterLog(@"Inbox (All) freed before its account-change reinstall ran; skipped");
+            return;
+        }
+        ApolloInstallInboxModeSwitcher(inbox);
         if (ApolloModernChatShouldOpen()) {
-            ApolloEnsureInboxChatHub((UIViewController *)self);
+            ApolloEnsureInboxChatHub(inbox);
         }
     });
 }
@@ -2832,6 +2870,16 @@ static id ApolloInboxSectionControllerForCellNode(id node) {
 // observes to swap its own model. The broadcast alone updates the counts but
 // leaves the tapped row's cell painted unread — its cell is rebuilt through
 // Apollo's own cell builder by reloading the row.
+//
+// The read mark must reach Reddit through the SIGNED-IN account's client.
+// RDKClient.sharedClient is Apollo's application-only bootstrap client (see
+// ApolloAccountCredentials.h): its /api/read_message POST carries no user, so
+// Reddit answered it with nothing done while the local copy above still
+// flipped — the row and the Inbox badge cleared on the way back, and the next
+// refresh painted the mirror unread again. Same trap the subreddit Join
+// button hit with /api/subscribe (ApolloSubredditHeaders.xm). Main thread
+// only: ApolloActiveAccountClient() walks AccountManager's live array, and
+// the room-directory completion that calls this already runs on main.
 static void ApolloInboxMarkMessageRead(id message, id cellNode, id tableNode, NSIndexPath *indexPath) {
     if (![message respondsToSelector:@selector(isUnread)] ||
         !((BOOL (*)(id, SEL))objc_msgSend)(message, @selector(isUnread))) return;
@@ -2839,11 +2887,27 @@ static void ApolloInboxMarkMessageRead(id message, id cellNode, id tableNode, NS
     id updated = [message copy];
     if (![updated respondsToSelector:@selector(setUnread:)]) return;
     ((void (*)(id, SEL, BOOL))objc_msgSend)(updated, @selector(setUnread:), NO);
-    Class clientClass = objc_getClass("RDKClient");
-    id client = clientClass && [clientClass respondsToSelector:@selector(sharedClient)]
-        ? ((id (*)(id, SEL))objc_msgSend)(clientClass, @selector(sharedClient)) : nil;
+    NSString *fullName = ApolloInboxStringProp(message, @selector(fullName));
+    id client = ApolloActiveAccountClient();
     if ([client respondsToSelector:@selector(markMessageAsRead:completion:)]) {
-        ((id (*)(id, SEL, id, id))objc_msgSend)(client, @selector(markMessageAsRead:completion:), updated, nil);
+        // RDKClient mutation completions are `^(NSError *error)` (forwarded to
+        // basicPostTaskWithPath:'s wrappers — verified for subscribe in
+        // ApolloSubredditHeaders.xm; read_message takes the same path).
+        void (^completion)(NSError *) = ^(NSError *error) {
+            if (error) {
+                ApolloLog(@"[ChatsFilter] chat mirror %@ read mark failed on Reddit: %@",
+                          fullName ?: @"(no fullname)", error.localizedDescription ?: error);
+            } else {
+                ApolloLog(@"[ChatsFilter] chat mirror %@ marked read on Reddit", fullName ?: @"(no fullname)");
+            }
+        };
+        ((id (*)(id, SEL, id, id))objc_msgSend)(client, @selector(markMessageAsRead:completion:), updated, completion);
+    } else {
+        // No signed-in account client (signed out mid-tap, or off-main): keep
+        // the local flip — the user did read it — but say why Reddit was not
+        // told, so a mirror that comes back unread on refresh is explainable.
+        ApolloLog(@"[ChatsFilter] chat mirror %@ read locally only; no active account client to tell Reddit",
+                  fullName ?: @"(no fullname)");
     }
     id sectionController = ApolloInboxSectionControllerForCellNode(cellNode);
     BOOL swapped = ApolloInboxSwapObjectIvar(sectionController, "message", updated);

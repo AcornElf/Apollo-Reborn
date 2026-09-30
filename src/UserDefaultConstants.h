@@ -29,6 +29,13 @@ static NSString *const UDKeyAutomaticBackupsEnabled = @"AutomaticBackupsEnabled"
 static NSString *const UDKeyAutomaticBackupIntervalDays = @"AutomaticBackupIntervalDays";
 // Legacy destination value retained for compatibility with older builds.
 static NSString *const UDKeyAutomaticBackupDestination = @"AutomaticBackupDestination";
+// Version stamps for Apollo's own sideload-unlock flags, which the constructor
+// writes into two preference domains. Each stamp lives in the SAME domain as
+// the flags it guards, so anything that resets a domain (fresh install, a
+// settings restore, Apollo wiping the group container) takes the stamp with it
+// and the flags are rewritten on the next launch.
+static NSString *const UDKeySideloadFlagsStamp = @"ApolloRebornSideloadFlagsStamp";
+static NSString *const UDKeyGroupUnlockFlagsStamp = @"ApolloRebornGroupUnlockFlagsStamp";
 // Local crash recording (src/crash/). Default ON: reports only ever live on
 // device and are shared exclusively through the user-driven review flow.
 // KSCrash handlers install once per process, so flipping this takes effect on
@@ -45,6 +52,14 @@ static NSString *const UDKeyCrashPromptedReportIDs = @"CrashPromptedReportIDs";
 static NSString *const UDKeyDebugForceAccountReadMiss = @"ApolloDebugForceAccountReadMiss";
 static NSString *const UDKeyDebugDisableKeychainRecovery = @"ApolloDebugDisableKeychainRecovery";
 static NSString *const UDKeyShowRandNsfw = @"ShowRandNsfwButton";
+// Search tab engine (ApolloGoogleSearchTab.m): 0 = Reddit (Apollo's own
+// search), 1 = Google (Reddit results found through Google). Remembered across
+// launches; picked from the search field's magnifier, not in Settings.
+static NSString *const UDKeySearchEngine = @"SearchEngine";
+// Google mode filters, set from the chips above the Google results: an
+// ApolloGoogleSearchTimeRange raw value, and Google's "Verbatim" mode.
+static NSString *const UDKeyGoogleSearchTimeRange = @"GoogleSearchTimeRange";
+static NSString *const UDKeyGoogleSearchExactWords = @"GoogleSearchExactWords";
 static NSString *const UDKeyRandomSubredditsSource = @"RandomSubredditsSource";
 static NSString *const UDKeyRandNsfwSubredditsSource = @"RandNsfwSubredditsSource";
 static NSString *const UDKeyTrendingSubredditsSource = @"TrendingSubredditsSource";
@@ -69,6 +84,9 @@ static NSString *const ApolloFeedShortcutsChangedNotification = @"ApolloFeedShor
 static NSString *const UDKeyPerAccountFavoritesEnabled = @"PerAccountFavoritesEnabled";
 // Alphabetize shared favorites and disable manual reordering. Default NO.
 static NSString *const UDKeySortFavoritesAlphabetically = @"SortFavoritesAlphabetically";
+// Ask before adding or removing a favorite via the Subreddits-list star.
+// Opt-in; default OFF. See ApolloFavoriteConfirm.xm.
+static NSString *const UDKeyConfirmFavoriteToggle = @"ConfirmFavoriteToggle";
 // Per-account sorting preferences, keyed by the per-account favorites identity
 // (u:name / anonymous). Missing entries default OFF; shared preference is above.
 static NSString *const UDKeyFavoriteSortingByAccount = @"FavoriteSortingByAccount";
@@ -141,6 +159,11 @@ static NSString *const UDKeyFeedVideosUnmutedMemory = @"FeedVideosUnmutedMemory"
 // the video (bar included) still opens it fullscreen as stock. Default NO.
 // See ApolloFeedVideoScrubber.xm.
 static NSString *const UDKeyFeedVideoScrubber = @"FeedVideoScrubber";
+// "Smoother Video Scrolling": build feed video players on a background queue
+// and let video posts finish drawing asynchronously after they scroll in
+// instead of holding the frame for them. Default YES. See
+// ApolloFeedVideoScrolling.xm.
+static NSString *const UDKeyFeedVideoScrollSmoothing = @"FeedVideoScrollSmoothing";
 // "Hold for Video Speed": press-and-hold the right side of a fullscreen video to
 // play at a chosen speed while held. Master toggle (default YES via
 // registerDefaults — preserves the original always-on behaviour) and the speed
@@ -468,6 +491,12 @@ static NSString *const UDKeyGeminiAIModel     = @"GeminiAIModel";
 static NSString *const UDKeyCustomAIAPIKey    = @"CustomAIAPIKey";
 static NSString *const UDKeyCustomAIModel     = @"CustomAIModel";
 static NSString *const UDKeyCustomAIBaseURL   = @"CustomAIBaseURL"; // OpenAI-compatible base URL, e.g. https://api.example.com/v1
+// Extra HTTP headers sent with every "custom" provider request, for services
+// that need more than the Bearer key (OpenCode Go rejects requests without
+// x-opencode-session since 2026-09-06). An ordered array of
+// @{@"name": NSString, @"value": NSString}; unset = none. Validated on load and
+// on save by ApolloAICloudSanitizedCustomHeaders (ApolloAICloudBridge.h).
+static NSString *const UDKeyCustomAIHeaders   = @"CustomAIHeaders";
 
 // Picture-in-Picture: floating in-app mini-player for comments-page videos.
 static NSString *const UDKeyPictureInPictureEnabled = @"PictureInPictureEnabled";       // master switch
@@ -733,6 +762,19 @@ static NSString *const ApolloLinkPreviewModeDidChangeNotification = @"ApolloLink
 // Posted by the Inline Media settings screen when size/alignment changes so
 // visible comments re-measure their inline media immediately.
 static NSString *const ApolloInlineMediaLayoutDidChangeNotification = @"ApolloInlineMediaLayoutDidChangeNotification";
+
+// Per-menu ••• layouts (Apollo Reborn → Interface → Action Menus): a dictionary
+// keyed by ApolloActionMenuContext id → { "order": [itemID…], "hidden": [itemID…] }.
+// An absent context means Apollo's own order with nothing hidden, and that
+// sheet is never touched. Model and item vocabulary: ApolloActionMenuLayout.h.
+static NSString *const UDKeyActionMenuLayouts = @"ActionMenuLayouts";
+// Which catalogue items each ••• menu offered the last time it was opened
+// (context id → [itemID…]); written by the menu owner, read by the settings
+// screen's ••• preview so it mirrors this user's menus rather than the whole
+// catalogue.
+static NSString *const UDKeyActionMenuLastPresented = @"ActionMenuLastPresented";
+// Posted (object = the context id) whenever a menu's order or hidden set changes.
+static NSString *const ApolloActionMenuLayoutsChangedNotification = @"ApolloActionMenuLayoutsChangedNotification";
 
 // The last TWEAK_VERSION (without the leading "v") the What's New sheet was
 // shown for (or silently advanced past, when a version has no catalog entry).

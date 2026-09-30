@@ -17,6 +17,7 @@
 // `messageContainerSize` (so MessageKit positions/aligns the bubble itself).
 
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloUserProfileCache.h"
 #import "ApolloState.h"
 #import "ApolloImageChestResolver.h"
@@ -222,21 +223,19 @@ static Class ApolloFLAnimatedImageViewClass(void) {
 
 // URL -> loaded media (an FLAnimatedImage for animated GIFs, else UIImage).
 // NSCache makes decoded residency pressure-aware and bounds the normal case.
+// Entries are charged their decoded bytes, and a still is decoded at up to
+// kApolloChatStaticDecodeMaximumPixelSize on the long side, so one photo can be
+// several MB. This holds a handful of them; a pathological 4096px source
+// exceeds the whole budget on its own and is deliberately not kept.
 static NSCache<NSString *, id> *ApolloChatMediaCache(void) {
     static NSCache<NSString *, id> *cache; static dispatch_once_t once;
     dispatch_once(&once, ^{
         cache = [NSCache new];
-        cache.totalCostLimit = 64 * 1024 * 1024;
-        cache.countLimit = 60;
+        cache.totalCostLimit = 20 * 1024 * 1024;
+        cache.countLimit = 40;
+        ApolloMemoryRegisterPurgableCache(@"chat-media", cache);
     });
     return cache;
-}
-
-static NSUInteger ApolloChatApproximateBitmapCost(UIImage *image) {
-    CGImageRef cgImage = image.CGImage;
-    if (cgImage) return CGImageGetBytesPerRow(cgImage) * CGImageGetHeight(cgImage);
-    CGFloat scale = image.scale > 0 ? image.scale : UIScreen.mainScreen.scale;
-    return (NSUInteger)ceil(image.size.width * scale) * (NSUInteger)ceil(image.size.height * scale) * 4;
 }
 
 static NSUInteger ApolloChatSaturatingAdd(NSUInteger left, NSUInteger right) {
@@ -249,7 +248,7 @@ static NSUInteger ApolloChatSaturatingAdd(NSUInteger left, NSUInteger right) {
 // animated image object. Static images are charged by decoded bitmap bytes.
 static NSUInteger ApolloChatDecodedMediaCost(id media, NSUInteger sourceBytes) {
     if ([media isKindOfClass:[UIImage class]]) {
-        return ApolloChatApproximateBitmapCost((UIImage *)media);
+        return ApolloImageByteCost((UIImage *)media);
     }
     Class animatedClass = ApolloFLAnimatedImageClass();
     if (!animatedClass || ![media isKindOfClass:animatedClass]) return sourceBytes;
@@ -258,7 +257,7 @@ static NSUInteger ApolloChatDecodedMediaCost(id media, NSUInteger sourceBytes) {
         ? ((NSUInteger (*)(id, SEL))objc_msgSend)(media, @selector(frameCount)) : 1;
     UIImage *firstFrame = [media respondsToSelector:@selector(imageLazilyCachedAtIndex:)]
         ? ((id (*)(id, SEL, NSUInteger))objc_msgSend)(media, @selector(imageLazilyCachedAtIndex:), (NSUInteger)0) : nil;
-    NSUInteger frameBytes = firstFrame ? ApolloChatApproximateBitmapCost(firstFrame) : sourceBytes;
+    NSUInteger frameBytes = firstFrame ? ApolloImageByteCost(firstFrame) : sourceBytes;
     NSUInteger residentFrames = MAX((NSUInteger)1, MIN(frameCount, (NSUInteger)10));
     NSUInteger decodedBytes = frameBytes > NSUIntegerMax / residentFrames
         ? NSUIntegerMax : frameBytes * residentFrames;
@@ -350,7 +349,7 @@ static NSURL *ApolloChatEmojiStickerURL(NSString *emoji) {
     if (![ApolloChatMediaCache() objectForKey:key]) {
         UIImage *img = ApolloChatRasterizeEmoji(emoji);
         if (!img) return nil;
-        [ApolloChatMediaCache() setObject:img forKey:key cost:ApolloChatApproximateBitmapCost(img)];
+        [ApolloChatMediaCache() setObject:img forKey:key cost:ApolloImageByteCost(img)];
     }
     return url;
 }
@@ -1081,16 +1080,34 @@ static NSString *ApolloChatAuthorFromLabel(UILabel *label) {
 }
 
 static const CGFloat kApolloChatAvatarDiameter = 18.0;
+// How much wider the flow-layout hooks below make a text bubble for the avatar prefix.
+static const CGFloat kApolloChatAvatarBubbleWidening = kApolloChatAvatarDiameter + 6.0;
 
-// Build the "[avatar] " prefix attributed string for a given avatar image.
-static NSAttributedString *ApolloChatAvatarPrefix(UIImage *avatar) {
-    NSTextAttachment *att = [NSTextAttachment new];
-    att.image = ApolloChatCircularAvatar(avatar, kApolloChatAvatarDiameter);
-    att.bounds = CGRectMake(0, -4, kApolloChatAvatarDiameter, kApolloChatAvatarDiameter);
+// "[avatar] " for a message's attributed text. The prefix carries the message's own paragraph
+// style and font from its first character: MessageLabel applies the paragraph style it finds at
+// index 0 to the whole string, so a prefix without one dropped Apollo's line spacing from the
+// entire message. Pass the same style object; MessageLabel only keeps an NSMutableParagraphStyle.
+static NSAttributedString *ApolloChatAvatarPrefixWithAttachment(NSTextAttachment *att, NSAttributedString *text) {
     NSMutableAttributedString *m = [[NSMutableAttributedString alloc] init];
     [m appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
     [m appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
+    if (text.length > 0) {
+        NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+        id style = [text attribute:NSParagraphStyleAttributeName atIndex:0 effectiveRange:NULL];
+        id font = [text attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
+        if (style) attributes[NSParagraphStyleAttributeName] = style;
+        if (font) attributes[NSFontAttributeName] = font;
+        if (attributes.count) [m addAttributes:attributes range:NSMakeRange(0, m.length)];
+    }
     return m;
+}
+
+// Build the "[avatar] " prefix attributed string for a given avatar image.
+static NSAttributedString *ApolloChatAvatarPrefix(UIImage *avatar, NSAttributedString *text) {
+    NSTextAttachment *att = [NSTextAttachment new];
+    att.image = ApolloChatCircularAvatar(avatar, kApolloChatAvatarDiameter);
+    att.bounds = CGRectMake(0, -4, kApolloChatAvatarDiameter, kApolloChatAvatarDiameter);
+    return ApolloChatAvatarPrefixWithAttachment(att, text);
 }
 
 // Stamp the sender's avatar into the bubble header (next to the username).
@@ -1109,7 +1126,7 @@ static void ApolloChatApplyAvatarToCell(id cell) {
 
     // Prepend the avatar (real if cached, neutral placeholder otherwise).
     NSMutableAttributedString *m = [[NSMutableAttributedString alloc] init];
-    [m appendAttributedString:ApolloChatAvatarPrefix(cachedImg)];
+    [m appendAttributedString:ApolloChatAvatarPrefix(cachedImg, label.attributedText)];
     [m appendAttributedString:label.attributedText];
     label.attributedText = m;
     if (cachedImg) return;
@@ -1311,6 +1328,96 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
 }
 %end
 
+#pragma mark - bubble height = the text MessageLabel draws
+
+// Apollo sizes a text bubble (TextMessageSizeCalculator.messageContainerSize) with
+// -[NSAttributedString boundingRectWithSize:options:context:], but MessageLabel draws the text
+// with its own TextKit 1 NSLayoutManager. On iOS 16+ boundingRect lays out with TextKit 2, which
+// adds the font's leading on top of Apollo's 3 pt markdown line spacing where TextKit 1 folds it
+// in, so each line is measured ~1.5 pt taller than it is drawn and a long message ends in a band
+// of empty bubble (95 pt on a 64-line modmail). With avatars on it grows: the flow-layout hooks
+// below widen the bubble after it was measured, so the text rewraps into fewer lines than were
+// counted. While a message list sizes its cells, answer the calculator's measurement with the
+// height MessageLabel will actually draw.
+static __thread NSUInteger sApolloChatBubbleSizingDepth = 0;   // > 0 inside a message list's sizing pass (main thread)
+
+// Apollo hands the calculator a new attributed string on every pass, so key by content
+// (NSAttributedString equality covers the attributes too) -> "width|avatars" -> drawn height.
+static NSCache<NSAttributedString *, NSMutableDictionary<NSString *, NSNumber *> *> *ApolloChatDrawnHeightCache(void) {
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [NSCache new];
+        cache.countLimit = 128;
+    });
+    return cache;
+}
+
+// MessageLabel's layout: the paragraph style at index 0 (only if mutable, else a fresh one) with
+// word wrapping, applied to the whole string (-[MessageLabel setAttributedText:]); a TextKit 1
+// container with no line limit and zero line-fragment padding.
+static CGFloat ApolloChatBubbleDrawnTextHeight(NSAttributedString *text, CGFloat width, BOOL avatarPrefix,
+                                               CGFloat measuredHeight) {
+    if (text.length == 0 || width <= 0) return 0;
+    NSCache *cache = ApolloChatDrawnHeightCache();
+    NSMutableDictionary<NSString *, NSNumber *> *heights = [cache objectForKey:text];
+    NSString *key = [NSString stringWithFormat:@"%.2f|%d", width, avatarPrefix];
+    NSNumber *cached = heights[key];
+    if (cached) return cached.doubleValue;
+
+    NSMutableAttributedString *drawn = [NSMutableAttributedString new];
+    if (avatarPrefix) {
+        // Same geometry as ApolloChatAvatarPrefix; the image itself doesn't affect layout.
+        NSTextAttachment *att = [NSTextAttachment new];
+        att.bounds = CGRectMake(0, -4, kApolloChatAvatarDiameter, kApolloChatAvatarDiameter);
+        [drawn appendAttributedString:ApolloChatAvatarPrefixWithAttachment(att, text)];
+    }
+    [drawn appendAttributedString:text];
+    id first = [drawn attribute:NSParagraphStyleAttributeName atIndex:0 effectiveRange:NULL];
+    NSMutableParagraphStyle *style = [first isKindOfClass:[NSMutableParagraphStyle class]]
+        ? [(NSMutableParagraphStyle *)first mutableCopy] : [NSMutableParagraphStyle new];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    [drawn addAttribute:NSParagraphStyleAttributeName value:style range:NSMakeRange(0, drawn.length)];
+
+    NSTextStorage *storage = [[NSTextStorage alloc] initWithAttributedString:drawn];
+    NSLayoutManager *layoutManager = [NSLayoutManager new];
+    NSTextContainer *container = [[NSTextContainer alloc] initWithSize:CGSizeMake(width, CGFLOAT_MAX)];
+    container.lineFragmentPadding = 0;
+    container.maximumNumberOfLines = 0;
+    [layoutManager addTextContainer:container];
+    [storage addLayoutManager:layoutManager];
+    [layoutManager ensureLayoutForTextContainer:container];
+    CGFloat height = ceil([layoutManager usedRectForTextContainer:container].size.height);
+
+    if (!heights) {
+        heights = [NSMutableDictionary dictionary];
+        [cache setObject:heights forKey:[text copy]];
+    }
+    heights[key] = @(height);
+    ApolloLogDebug(@"[ChatBubble] %lu-char message at %.0f pt: measured %.1f pt, drawn %.0f pt (avatars %d)",
+                   (unsigned long)text.length, width, measuredHeight, height, avatarPrefix);
+    return height;
+}
+
+%hook NSAttributedString
+- (CGRect)boundingRectWithSize:(CGSize)size options:(NSStringDrawingOptions)options context:(NSStringDrawingContext *)context {
+    // Process-wide and hot: everything outside a message list's own sizing pass stops here.
+    if (sApolloChatBubbleSizingDepth == 0) return %orig;
+    CGRect measured = %orig;
+    // Only the size calculator's call: a width, unbounded height, line fragments + font leading.
+    if (context || size.height < CGFLOAT_MAX / 2.0 ||
+        options != (NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)) return measured;
+    // The calculator integral-rounds this rect, adds the label insets, and the flow-layout hooks
+    // add the avatar widening; the label's text column is what remains of that width.
+    BOOL avatarPrefix = sShowUserAvatars;
+    CGFloat width = CGRectGetWidth(CGRectIntegral(measured)) + (avatarPrefix ? kApolloChatAvatarBubbleWidening : 0.0);
+    CGFloat drawnHeight = ApolloChatBubbleDrawnTextHeight(self, width, avatarPrefix, CGRectGetHeight(measured));
+    if (drawnHeight <= 0) return measured;
+    measured.size.height = drawnHeight;
+    return measured;
+}
+%end
+
 // The cell's applyLayoutAttributes only re-fires on (re)configuration, so on a plain
 // scroll the cached attributes' (text-sized) messageContainerSize would be reused,
 // clipping the big image. The flow layout's attribute query runs on every scroll —
@@ -1318,7 +1425,13 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
 // so an image bubble is sized correctly whether freshly built or scrolled back in.
 %hook _TtC6Apollo32MessagesCollectionViewFlowLayout
 - (NSArray *)layoutAttributesForElementsInRect:(CGRect)rect {
-    NSArray *attrs = %orig;
+    NSArray *attrs = nil;
+    sApolloChatBubbleSizingDepth++;
+    @try {
+        attrs = %orig;
+    } @finally {
+        sApolloChatBubbleSizingDepth--;
+    }
     @try {
         NSMutableDictionary *map = objc_getAssociatedObject([(UICollectionViewLayout *)self collectionView], &kApolloChatImgSizeMapKey);
         for (UICollectionViewLayoutAttributes *la in attrs) {
@@ -1333,14 +1446,20 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
                 CGSize cur = ApolloChatGetCGSizeIvar(la, "messageContainerSize");
                 if (cur.width > 0)
                     ApolloChatSetCGSizeIvar(la, "messageContainerSize",
-                        CGSizeMake(cur.width + kApolloChatAvatarDiameter + 6.0, cur.height));
+                        CGSizeMake(cur.width + kApolloChatAvatarBubbleWidening, cur.height));
             }
         }
     } @catch (__unused id e) {}
     return attrs;
 }
 - (id)layoutAttributesForItemAtIndexPath:(id)indexPath {
-    id la = %orig;
+    id la = nil;
+    sApolloChatBubbleSizingDepth++;
+    @try {
+        la = %orig;
+    } @finally {
+        sApolloChatBubbleSizingDepth--;
+    }
     @try {
         NSMutableDictionary *map = objc_getAssociatedObject([(UICollectionViewLayout *)self collectionView], &kApolloChatImgSizeMapKey);
         if ([la isKindOfClass:[UICollectionViewLayoutAttributes class]]) {
@@ -1351,7 +1470,7 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
                 CGSize cur = ApolloChatGetCGSizeIvar(la, "messageContainerSize");
                 if (cur.width > 0)
                     ApolloChatSetCGSizeIvar(la, "messageContainerSize",
-                        CGSizeMake(cur.width + kApolloChatAvatarDiameter + 6.0, cur.height));
+                        CGSizeMake(cur.width + kApolloChatAvatarBubbleWidening, cur.height));
             }
         }
     } @catch (__unused id e) {}
@@ -1366,7 +1485,13 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
     return cell;
 }
 - (CGSize)collectionView:(id)collectionView layout:(id)layout sizeForItemAtIndexPath:(id)indexPath {
-    CGSize originalSize = %orig;
+    CGSize originalSize = CGSizeZero;
+    sApolloChatBubbleSizingDepth++;
+    @try {
+        originalSize = %orig;
+    } @finally {
+        sApolloChatBubbleSizingDepth--;
+    }
     return ApolloChatSizeOverride(self, collectionView, originalSize, indexPath);
 }
 %end
@@ -1378,7 +1503,13 @@ static BOOL ApolloChatRunIsEmoji(NSString *s) {
     return cell;
 }
 - (CGSize)collectionView:(id)collectionView layout:(id)layout sizeForItemAtIndexPath:(id)indexPath {
-    CGSize originalSize = %orig;
+    CGSize originalSize = CGSizeZero;
+    sApolloChatBubbleSizingDepth++;
+    @try {
+        originalSize = %orig;
+    } @finally {
+        sApolloChatBubbleSizingDepth--;
+    }
     return ApolloChatSizeOverride(self, collectionView, originalSize, indexPath);
 }
 %end

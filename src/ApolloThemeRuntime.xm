@@ -2,7 +2,9 @@
 #import "ApolloThemeStore.h"
 #import "ApolloThemeCompiler.h"
 #import "ApolloThemeGalleryCatalog.h"
+#import "ApolloClassicBarTheme.h"
 #import "ApolloCommon.h"
+#import "ApolloState.h"
 #import <CoreText/CoreText.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
@@ -1370,28 +1372,28 @@ static NSString * const kPureBlackReduceSmearingKey = @"PureBlackModeReduceSmear
 //
 // tinted themes (solarized/outrun/sunset/sepia/dracula) retint everything
 // themselves and ignore Pure Black entirely. Non-tinted themes share one
-// baseline each (card 0x20252F, page 0x2B3039, separator 0x484E5B) that
+// baseline each (card 0x20252F, page 0x2B3039, separator 0x474E5C) that
 // ApolloStockNonTintedDarkCardRGB / ...PageRGB / ...SeparatorRGB override per
 // Apollo's Pure Black tier.
 static const struct { const char *name; uint32_t light, dark; uint32_t bgLight, bgDark; uint32_t pageLight, pageDark; uint32_t sepLight, sepDark; BOOL tinted; } kStockThemes[] = {
-    {"default",         0x007AFF, 0x2399FF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"nefertiti",       0x01A200, 0x01A200, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"fieryStare",      0xFF0000, 0xFD0000, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"spookyPumpkin",   0xFF6200, 0xF25D00, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
+    {"default",         0x007AFF, 0x2399FF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"nefertiti",       0x01A200, 0x01A200, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"fieryStare",      0xFF0000, 0xFD0000, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"spookyPumpkin",   0xFF6200, 0xF25D00, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
     {"solarized",       0x268BD2, 0x268BD2, 0xFDF6E3, 0x002B36, 0xE6DFCF, 0x003745, 0xE0DCCD, 0x002836, YES},
     {"outrun",          0xC400A6, 0xFF00D8, 0xCFD7E8, 0x061636, 0xBAC1D1, 0x081D47, 0xB5B9C7, 0x06214D, YES},
     {"sunset",          0xFF6600, 0xFF7D00, 0xFFE3D0, 0x000F29, 0xF2D8C7, 0x12223D, 0xE0CBBD, 0x061B40, YES},
     {"sepia",           0xB88023, 0xD3AC72, 0xF1EAD9, 0x211E1A, 0xDBD5CA, 0x38332C, 0xD4CEC0, 0x29271F, YES},
-    {"monochromatic",   0x000000, 0xFFFFFF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"navy",            0x0058B8, 0x0060C9, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"skiesOnSkies",    0x00B5F2, 0x01ADE8, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"majesticPurple",  0x8800FF, 0x9C2CFF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"magentasplosion", 0xFF00B2, 0xE800A2, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"sniffingWalnut",  0xA74E00, 0xA74E00, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"fisherKing",      0x808286, 0x76787D, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
-    {"chumbus",         0xF8F8F8, 0x20242B, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
+    {"monochromatic",   0x000000, 0xFFFFFF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"navy",            0x0058B8, 0x0060C9, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"skiesOnSkies",    0x00B5F2, 0x01ADE8, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"majesticPurple",  0x8800FF, 0x9C2CFF, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"magentasplosion", 0xFF00B2, 0xE800A2, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"sniffingWalnut",  0xA74E00, 0xA74E00, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"fisherKing",      0x808286, 0x76787D, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
+    {"chumbus",         0xF8F8F8, 0x20242B, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
     {"dracula",         0x9760FF, 0xAD81FF, 0xF8F8F3, 0x1A1D29, 0xEDEDE8, 0x222636, 0xD7D3E0, 0x242838, YES},
-    {"mint",            0x37BB98, 0x62DFA7, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xCCCCCC, 0x484E5B, NO},
+    {"mint",            0x37BB98, 0x62DFA7, 0xFFFFFF, 0x20252F, 0xF2F3F7, 0x2B3039, 0xEEEEEF, 0x474E5C, NO},
 };
 enum { kStockThemeCount = sizeof(kStockThemes) / sizeof(kStockThemes[0]) };
 
@@ -1593,23 +1595,39 @@ static UIColor *ApolloThemeSettingsLabelColor(BOOL secondary) {
 UIColor *ApolloThemeSettingsTextColor(void) { return ApolloThemeSettingsLabelColor(NO); }
 UIColor *ApolloThemeSettingsSecondaryTextColor(void) { return ApolloThemeSettingsLabelColor(YES); }
 
-UIColor *ApolloThemeSubredditListBackgroundColor(void) {
-    UIColor *custom = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryBackground);
+// Dark-mode separator override for a non-tinted stock theme. One "on" value
+// covers both Pure Black tiers — PURER doesn't push the separator any
+// further than plain Pure Black does (unlike the card).
+static UIColor *ApolloThemeSubredditListColor(NSUInteger role) {
+    ApolloThemeToken token = role == 0 ? ApolloThemeTokenSecondaryBackground
+        : role == 1 ? ApolloThemeTokenBackground
+        : role == 2 ? ApolloThemeTokenLabel : ApolloThemeTokenSecondaryLabel;
+    UIColor *custom = ApolloThemeRuntimeColor(token);
     if (custom) return custom;
     uint8_t raw = 0;
     if (!GetLiveAppColorThemeRaw(&raw) || raw >= kStockThemeCount) return nil;
     BOOL tinted = kStockThemes[raw].tinted;
-    UIColor *surface = ApolloThemeCardBackgroundColor();
+    UIColor *surface = role == 0 ? ApolloThemeCardBackgroundColor() : ApolloThemePageBackgroundColor();
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        BOOL dark = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
         uint32_t black = 0;
-        BOOL pure = traits.userInterfaceStyle == UIUserInterfaceStyleDark &&
-            !tinted && ApolloStockNonTintedDarkPageRGB(&black);
-        if (!pure) return [surface resolvedColorWithTraitCollection:traits];
+        BOOL pure = dark && !tinted && ApolloStockNonTintedDarkPageRGB(&black);
+        if (role < 2 && !pure) return [surface resolvedColorWithTraitCollection:traits];
+        uint32_t rgb = role == 0 ? black : role == 1 ? 0x1A1A1A
+            : role == 2 ? (dark ? (pure ? 0xD0D1D6 : 0xEEEFF5) : 0x000000)
+            : (dark ? 0x94969D : 0x666666);
         sBypassHook++;
-        UIColor *color = ApolloThemeUIColorFromRGB(black);
+        UIColor *color = ApolloThemeUIColorFromRGB(rgb);
         sBypassHook--;
         return color;
     }];
+}
+
+UIColor *ApolloThemeSubredditListBackgroundColor(void) { return ApolloThemeSubredditListColor(0); }
+UIColor *ApolloThemeSubredditListHeaderBackgroundColor(void) { return ApolloThemeSubredditListColor(1); }
+UIColor *ApolloThemeSubredditListTextColor(void) { return ApolloThemeSubredditListColor(2); }
+UIColor *ApolloThemeSubredditListSecondaryTextColor(void) { return ApolloThemeSubredditListColor(3); }
+
 BOOL ApolloThemeUsesPureBlackDarkMode(UITraitCollection *traits) {
     if (traits.userInterfaceStyle != UIUserInterfaceStyleDark) return NO;
     if (ApolloThemeCurrentSnapshot()->enabled) return NO;
@@ -1646,43 +1664,10 @@ UIColor *ApolloThemePureBlackCardColor(UITraitCollection *traits) {
     return color;
 }
 
-// Dark-mode separator override for a non-tinted stock theme. One "on" value
-// covers both Pure Black tiers — PURER doesn't push the separator any
-// further than plain Pure Black does (unlike the card).
-static UIColor *ApolloThemeSubredditListColor(NSUInteger role) {
-    ApolloThemeToken token = role == 0 ? ApolloThemeTokenSecondaryBackground
-        : role == 1 ? ApolloThemeTokenBackground
-        : role == 2 ? ApolloThemeTokenLabel : ApolloThemeTokenSecondaryLabel;
-    UIColor *custom = ApolloThemeRuntimeColor(token);
-    if (custom) return custom;
-    uint8_t raw = 0;
-    if (!GetLiveAppColorThemeRaw(&raw) || raw >= kStockThemeCount) return nil;
-    BOOL tinted = kStockThemes[raw].tinted;
-    UIColor *surface = role == 0 ? ApolloThemeCardBackgroundColor() : ApolloThemePageBackgroundColor();
-    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        BOOL dark = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-        uint32_t black = 0;
-        BOOL pure = dark && !tinted && ApolloStockNonTintedDarkPageRGB(&black);
-        if (role < 2 && !pure) return [surface resolvedColorWithTraitCollection:traits];
-        uint32_t rgb = role == 0 ? black : role == 1 ? 0x1A1A1A
-            : role == 2 ? (dark ? (pure ? 0xD0D1D6 : 0xEEEFF5) : 0x000000)
-            : (dark ? 0x94969D : 0x666666);
-        sBypassHook++;
-        UIColor *color = ApolloThemeUIColorFromRGB(rgb);
-        sBypassHook--;
-        return color;
-    }];
-}
-
-UIColor *ApolloThemeSubredditListBackgroundColor(void) { return ApolloThemeSubredditListColor(0); }
-UIColor *ApolloThemeSubredditListHeaderBackgroundColor(void) { return ApolloThemeSubredditListColor(1); }
-UIColor *ApolloThemeSubredditListTextColor(void) { return ApolloThemeSubredditListColor(2); }
-UIColor *ApolloThemeSubredditListSecondaryTextColor(void) { return ApolloThemeSubredditListColor(3); }
-
 static BOOL ApolloStockNonTintedDarkSeparatorRGB(uint32_t *outRGB) {
     NSUserDefaults *d = GroupDefaults();
     if (![d boolForKey:kUsePureBlackDarkModeKey]) return NO;
-    if (outRGB) *outRGB = 0x323740;
+    if (outRGB) *outRGB = 0x313741;
     return YES;
 }
 
@@ -2206,11 +2191,11 @@ void ApolloThemeRuntimeInvalidate(void) {
         sources[@(state)] = title ? [title copy] : NSNull.null;
         UIView *control = NavigationTitleControlForDescendant(self);
         // Recoloring this system button after attachment triggers UIKit's title
-        // fade-out/in. Apply the glass appearance on its first assignment;
-        // classic builds retain their attach path and the original button.
-        BOOL prepareGlassDualTitle = dualTitle && IsLiquidGlass() &&
-            NSClassFromString(@"UIGlassEffect") != Nil;
-        if (prepareGlassDualTitle ||
+        // fade-out/in. Apollo assigns the comments title before the button
+        // reaches the title control, so the attach path can only correct it
+        // afterwards — one white frame, then a 600ms fade, on every refresh
+        // that changes the count. Color it on its first assignment instead.
+        if (dualTitle ||
             (control && ChromeBarLooksApolloOwned(NavigationBarForDescendant(control)))) {
             %orig(NavigationTitleAttributedText(title, self, NavigationTitlePrimaryColor()), state);
             return;
@@ -2291,6 +2276,44 @@ static ASImageNodeTintColorModificationBlockFn ASImageNodeTintColorModificationB
 
 %end
 
+// Classic (non-glass) bar chrome (#787). Apollo fills UINavigationBar and
+// UITabBar from the donor's tertiaryBG constant (stock Outrun #C1C8D9 light /
+// #041129 dark), while ApolloSearchToolbar already uses the donor's bar
+// constant (#C5CAD9 / #031229). The donor remap turns those into Raised and
+// Bars respectively. The editor defines Bars as navigation bars, tab-bar
+// backing, and other app chrome, so replace only an opaque, already-remapped
+// Raised fill at the nav/tab appearance sinks. Exact token matching preserves
+// unrelated colours; stock themes, disabled custom themes, transparent fills,
+// generic toolbar appearances, and Liquid Glass all pass through unchanged.
+static UIColor *ApolloThemeClassicBarFill(UIColor *color) {
+    if (!color) return color;
+    const ApolloThemeRuntimeSnapshot *snapshot = ApolloThemeCurrentSnapshot();
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    BOOL liquidGlass = IsLiquidGlass();
+    BOOL hasComponents = snapshot->enabled && !liquidGlass && ColorComponents(color, &r, &g, &b, &a);
+    uint32_t rgb = hasComponents ? ApolloThemeRGBKeyFromComponents(r, g, b) : 0;
+    if (!ApolloClassicBarShouldRouteRaisedToBars(
+            snapshot->enabled, liquidGlass, hasComponents, a, rgb,
+            snapshot->tokens[ApolloThemeModeLight][ApolloThemeTokenTertiaryBackground],
+            snapshot->tokens[ApolloThemeModeDark][ApolloThemeTokenTertiaryBackground])) return color;
+
+    return ApolloThemeRuntimeColor(ApolloThemeTokenBarBackground) ?: color;
+}
+
+%hook UIBarAppearance
+
+- (void)setBackgroundColor:(UIColor *)color {
+    // UINavigationBar and UITabBar only. UIToolbar and other appearance
+    // subclasses keep the colour Apollo assigned them.
+    if ([self isKindOfClass:[UINavigationBarAppearance class]] ||
+        [self isKindOfClass:[UITabBarAppearance class]]) {
+        color = ApolloThemeClassicBarFill(color);
+    }
+    %orig(color);
+}
+
+%end
+
 %hook UITabBar
 - (void)didMoveToWindow {
     %orig;
@@ -2305,12 +2328,29 @@ static ASImageNodeTintColorModificationBlockFn ASImageNodeTintColorModificationB
     if (IsLiquidGlass()) color = ApolloThemeAccentColor() ?: color;
     %orig(color);
 }
+
+- (void)setBarTintColor:(UIColor *)color {
+    %orig(ApolloThemeClassicBarFill(color));
+}
 %end
 
 %hook UINavigationItem
 
 - (void)setTitleView:(UIView *)view {
-    if (IsLiquidGlass() && view) {
+    if (IsLiquidGlass() && [view isKindOfClass:[UITextField class]]) {
+        // A text field is never a title. UIKit lends a titleView UISearchBar's
+        // own search field to its private _UISearchBarNavigationItem the first
+        // time the bar shows Cancel (setShowsCancelButton:animated: ->
+        // displayNavBarCancelButton:animated: -> searchNavigationItem ->
+        // setUpSearchNavigationItem -> setTitleView:field). The Search tab's
+        // bar is one: Apollo shows Cancel when editing begins, and the prep
+        // below baked the chrome colour into the field's placeholder label and
+        // tagged the field as a neutral title for good, so the dim placeholder
+        // came back in the title colour after Cancel until the screen was
+        // rebuilt.
+        ApolloLog(@"ThemeRuntime: setTitleView: %@ on %@ is a text field; skipping neutral title prep",
+                  NSStringFromClass(view.class), NSStringFromClass(object_getClass(self)));
+    } else if (IsLiquidGlass() && view) {
         // Prepare custom titles before UIKit snapshots the incoming page.
         objc_setAssociatedObject(view, &kApolloNeutralNavigationTitleKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         view.tintColor = ApolloNavigationChromeColor();
@@ -2508,6 +2548,9 @@ static void ApolloThemeRestoreOverlayPillText(id node) {
 - (void)didMoveToWindow {
     %orig;
     ApplyThemeSearchFieldBackground(self);
+    // Header Style (ApolloScrollEdgeEffect.xm) shares this hook rather than
+    // adding a second UISearchBar didMoveToWindow.
+    ApolloHeaderStyleSearchBarDidMoveToWindow(self);
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -2564,7 +2607,7 @@ static char kApolloNavigationDualTitleTintPinnedKey;
 
 - (void)setTintColor:(UIColor *)color {
     // System-button vibrancy uses tint even when attributed text is neutral.
-    UIColor *chrome = ApolloNavigationChromeColor();
+    UIColor *chrome = NavigationTitlePrimaryColor();
     // Install an explicit tint once; later native nil resets must not restart
     // UIKit's title transition or return the button to its inherited accent.
     if (objc_getAssociatedObject(self, &kApolloNavigationDualTitleTintPinnedKey) &&
@@ -2586,11 +2629,9 @@ static char kApolloNavigationDualTitleTintPinnedKey;
         FindRuntimeImages();
         BuildByteFilter();
         %init(ApolloThemeRuntimeHooks);
-        if (IsLiquidGlass() && NSClassFromString(@"UIGlassEffect")) {
-            Class dualTitleButton = NSClassFromString(@"Apollo.DualLabelTitleButton");
-            if (dualTitleButton) {
-                %init(ApolloNavigationDualTitleChrome, ApolloDualLabelTitleButton = dualTitleButton);
-            }
+        Class dualTitleButton = NSClassFromString(@"Apollo.DualLabelTitleButton");
+        if (dualTitleButton) {
+            %init(ApolloNavigationDualTitleChrome, ApolloDualLabelTitleButton = dualTitleButton);
         }
         BOOL haveTM = objc_getClass("_TtC6Apollo12ThemeManager") != nil;
         if (haveTM) %init(ApolloThemeRuntimeManagerHook);
