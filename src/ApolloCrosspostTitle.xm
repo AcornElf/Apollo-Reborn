@@ -341,7 +341,9 @@ static void ApolloCrosspostSetUpTitle(UIViewController *controller) {
     UIEdgeInsets insets = self.textContainerInset;
     CGFloat horizontal = insets.left + insets.right;
     if (constrainedSize.width <= horizontal) return size;
-    size.height = %orig(CGSizeMake(constrainedSize.width - horizontal, constrainedSize.height)).height;
+    constrainedSize.width -= horizontal;
+    CGSize adjustedSize = %orig;
+    size.height = adjustedSize.height;
     return size;
 }
 
