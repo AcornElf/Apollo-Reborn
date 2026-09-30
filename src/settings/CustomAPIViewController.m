@@ -1999,7 +1999,10 @@ typedef NS_ENUM(NSInteger, Tag) {
                                 push:^UIViewController * {
             return [[ApolloActionMenuSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
-    return [ApolloSettingsSection sectionWithTitle:@"Menus" footer:nil rows:@[ actionMenus ]];
+    return [ApolloSettingsSection
+        sectionWithTitle:@"Menus"
+        footer:@"Reorder and hide actions in the ••• menus on posts and comments, as well as moderator menus."
+        rows:@[ actionMenus ]];
 }
 
 - (ApolloSettingsSection *)buildInterfaceDisplayNavigationSection {

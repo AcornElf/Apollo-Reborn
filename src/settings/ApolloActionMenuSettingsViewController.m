@@ -1263,10 +1263,18 @@ willDisplayFooterView:(UIView *)view
 // A menu row's detail: how the menu has been customized.
 static NSString *ApolloAMMenuSummary(NSString *context) {
     if ([context isEqualToString:ApolloActionMenuEditorAllMenus]) {
-        NSUInteger customized = ApolloActionMenuCustomizedContextCount();
-        return customized == 0
-            ? nil
-            : [NSString stringWithFormat:@"%lu customized", (unsigned long)customized];
+        NSMutableSet<NSString *> *hiddenActions = [NSMutableSet set];
+
+        for (NSString *menuContext in ApolloActionMenuAllContexts()) {
+            [hiddenActions unionSet:ApolloActionMenuHiddenItemIDs(menuContext)];
+        }
+
+        NSUInteger hidden = hiddenActions.count;
+        if (hidden == 0) return nil;
+
+        return [NSString stringWithFormat:@"%lu action%@ hidden",
+            (unsigned long)hidden,
+            hidden == 1 ? @"" : @"s"];
     }
 
     BOOL order = ApolloActionMenuHasCustomOrder(context);
@@ -1277,7 +1285,9 @@ static NSString *ApolloAMMenuSummary(NSString *context) {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     if (order) [parts addObject:@"Custom order"];
     if (hidden > 0) {
-        [parts addObject:[NSString stringWithFormat:@"%lu hidden", (unsigned long)hidden]];
+        [parts addObject:[NSString stringWithFormat:@"%lu action%@ hidden",
+            (unsigned long)hidden,
+            hidden == 1 ? @"" : @"s"]];
     }
 
     return [parts componentsJoinedByString:@" · "];
@@ -1407,7 +1417,7 @@ willDisplayHeaderView:(UIView *)view
 
     UITableViewCell *cell = _measuringMenuCell;
     cell.textLabel.text = @"Post";
-    cell.detailTextLabel.text = subtitle ? @"Custom order · 2 hidden" : nil;
+    cell.detailTextLabel.text = subtitle ? @"Custom order · 2 actions hidden" : nil;
     cell.bounds = CGRectMake(0.0, 0.0, width, 100.0);
     ApolloSettingsApplyCellTypography(cell);
 
