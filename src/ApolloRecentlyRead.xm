@@ -323,6 +323,7 @@ void ApolloFlushReadPostIDsToDefaults(void) {
 @property (nonatomic, assign) BOOL lastCompactThumbnailsHidden;
 @property (nonatomic, assign) BOOL lastShowRecentlyReadThumbnails;
 @property (nonatomic, assign) BOOL lastFilterNSFWRecentlyRead;
+@property (nonatomic, assign) UIUserInterfaceStyle lastAppliedInterfaceStyle;
 @property (nonatomic, assign) BOOL hasCachedLayoutPreferences;
 @end
 
@@ -407,6 +408,12 @@ static CGRect RecentlyReadAspectFitRect(CGSize contentSize, CGRect bounds) {
     return CGRectMake(x, y, fitted.width, fitted.height);
 }
 
+static UIColor *RecentlyReadThumbnailBackgroundColor(void) {
+    return ApolloThemeRuntimeIsActive()
+        ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryBackground)
+        : [UIColor tertiarySystemFillColor];
+}
+
 static NSURLSession *RecentlyReadThumbnailSession(void) {
     static NSURLSession *session = nil;
     static dispatch_once_t onceToken;
@@ -468,15 +475,24 @@ static UIImage *RecentlyReadNoThumbnailPlaceholderImage(BOOL isSelfPost, CGFloat
 }
 
 static UIColor *RecentlyReadMetaColor(void) {
+    UIColor *secondary = ApolloThemeRuntimeIsActive()
+        ? ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel)
+        : [UIColor secondaryLabelColor];
+    UIColor *primary = ApolloThemeRuntimeIsActive()
+        ? ApolloThemeRuntimeColor(ApolloThemeTokenLabel)
+        : [UIColor labelColor];
+
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
-        UIColor *secondary = [UIColor secondaryLabelColor];
-        UIColor *primary = [UIColor labelColor];
+        UIColor *resolvedSecondary = [secondary resolvedColorWithTraitCollection:tc];
+        UIColor *resolvedPrimary = [primary resolvedColorWithTraitCollection:tc];
         CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
-        [secondary getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
-        [primary getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
+        [resolvedSecondary getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+        [resolvedPrimary getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
         CGFloat t = 0.3;
-        return [UIColor colorWithRed:r1 + (r2 - r1) * t green:g1 + (g2 - g1) * t
-            blue:b1 + (b2 - b1) * t alpha:a1 + (a2 - a1) * t];
+        return [UIColor colorWithRed:r1 + (r2 - r1) * t
+                               green:g1 + (g2 - g1) * t
+                                blue:b1 + (b2 - b1) * t
+                               alpha:a1 + (a2 - a1) * t];
     }];
 }
 
@@ -852,81 +868,101 @@ static UIImage *RecentlyReadNSFWBadgeImage(CGFloat titleFontSize,
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
 
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
-                                                        cornerRadius:cornerRadius];
-        [RecentlyReadNativeNSFWBadgeBackgroundColor(traitCollection) setFill];
-        [path fill];
-        [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+    __block UIImage *image = nil;
+    UITraitCollection *traits = traitCollection ?: UITraitCollection.currentTraitCollection;
+    [traits performAsCurrentTraitCollection:^{
+        image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+            UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
+                                                            cornerRadius:cornerRadius];
+            [RecentlyReadNativeNSFWBadgeBackgroundColor(traits) setFill];
+            [path fill];
+            [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+        }];
     }];
+    return image;
 }
 
-/// Custom themes provide their own card background. For stock themes, keep
-// UIKit's system background so Apollo's native light/dark appearance is preserved.
-static UIColor *RecentlyReadCellBackgroundColor(void) {
-    if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryBackground);
+// Recently Read normally uses Apollo's card surface. In Pure Black, use the
+// page surface for the row so flair pills can retain the lighter ordinary
+// Pure Black card surface, preserving their visual separation.
+static UIColor *RecentlyReadCellBackgroundColor(UITraitCollection *traits) {
+    UIColor *card = ApolloThemeCardBackgroundColor();
+    UIColor *page = ApolloThemePageBackgroundColor();
+
+    if (ApolloThemeUsesPureBlackDarkMode(traits)) {
+        return page ?: [UIColor systemBackgroundColor];
     }
 
-    return [UIColor systemBackgroundColor];
+    return card ?: [UIColor systemBackgroundColor];
 }
 
 // Flair text color
-static UIColor *RecentlyReadFlairTextColor(void) {
-    if (ApolloThemeRuntimeIsActive()) {
-        return ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
-    }
-
-    return [UIColor secondaryLabelColor];
+static UIColor *RecentlyReadFlairTextColor(UITraitCollection *traits) {
+    return ApolloThemeSecondaryTextColor(traits) ?: [UIColor secondaryLabelColor];
 }
 
-// Create a flair badge using the traits of the cell that will display it.
+// Render with the controller's current traits so a live appearance switch does
+// not retain badge pixels resolved by an outgoing cell trait collection.
 static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
                                             CGFloat fontSize,
+                                            CGFloat maxWidth,
                                             UITraitCollection *traits) {
     UIFont *badgeFont = [UIFont systemFontOfSize:fontSize weight:UIFontWeightRegular];
-    UIColor *flairTextColor = RecentlyReadFlairTextColor();
+    UIColor *flairTextColor = RecentlyReadFlairTextColor(traits);
+
+    NSMutableParagraphStyle *paragraphStyle = [[NSMutableParagraphStyle alloc] init];
+    paragraphStyle.lineBreakMode = NSLineBreakByTruncatingTail;
 
     NSDictionary *attrs = @{
         NSFontAttributeName: badgeFont,
-        NSForegroundColorAttributeName: flairTextColor
+        NSForegroundColorAttributeName: flairTextColor,
+        NSParagraphStyleAttributeName: paragraphStyle
     };
 
     CGSize textSize = [text sizeWithAttributes:attrs];
     CGFloat hPad = 4.25;
     CGFloat vPad = 1.5;
     CGFloat badgeHeight = ceil(badgeFont.lineHeight) + vPad * 2;
-    CGFloat badgeWidth = textSize.width + hPad * 2;
+    CGFloat naturalBadgeWidth = textSize.width + hPad * 2;
+    CGFloat badgeWidth = MIN(naturalBadgeWidth, maxWidth);
     CGFloat cornerRadius = badgeHeight * 0.325;
     CGSize canvasSize = CGSizeMake(badgeWidth, badgeHeight);
 
     UIGraphicsImageRenderer *renderer =
         [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
 
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-        UIBezierPath *path =
-            [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
-                                      cornerRadius:cornerRadius];
+    __block UIImage *image = nil;
+    UITraitCollection *effectiveTraits = traits ?: UITraitCollection.currentTraitCollection;
+    [effectiveTraits performAsCurrentTraitCollection:^{
+        image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+            UIBezierPath *path =
+                [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, badgeWidth, badgeHeight)
+                                          cornerRadius:cornerRadius];
+            UIColor *badgeBackgroundColor;
 
-        // Custom themes use the page/background token for flair badges. For stock
-        // themes, use UIKit's grouped backgrounds to match the native light/dark appearance.
-        UIColor *badgeBackgroundColor;
+            if (ApolloThemeUsesPureBlackDarkMode(traits)) {
+                badgeBackgroundColor = ApolloThemePureBlackCardColor(traits)
+                    ?: [UIColor secondarySystemGroupedBackgroundColor];
+            } else {
+                badgeBackgroundColor = ApolloThemePageBackgroundColor()
+                    ?: [UIColor systemGroupedBackgroundColor];
+            }
 
-        BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+            [badgeBackgroundColor setFill];
+            [path fill];
 
-        if (ApolloThemeRuntimeIsActive()) {
-            badgeBackgroundColor = ApolloThemeRuntimeColor(ApolloThemeTokenBackground);
-        } else {
-            badgeBackgroundColor = darkMode
-                ? [UIColor secondarySystemBackgroundColor]
-                : [UIColor systemGroupedBackgroundColor];
-        }
-
-        [badgeBackgroundColor setFill];
-        [path fill];
-
-        [text drawAtPoint:CGPointMake(hPad, vPad) withAttributes:attrs];
+            CGRect textRect = CGRectMake(hPad,
+                                         vPad,
+                                         badgeWidth - hPad * 2,
+                                         ceil(badgeFont.lineHeight));
+            [text drawWithRect:textRect
+                       options:NSStringDrawingUsesLineFragmentOrigin |
+                               NSStringDrawingTruncatesLastVisibleLine
+                    attributes:attrs
+                       context:nil];
+        }];
     }];
+    return image;
 }
 
 @implementation RecentlyReadViewController
@@ -1547,7 +1583,11 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
     [super apollo_applyTheme];
 
     for (UITableViewCell *cell in self.tableView.visibleCells) {
-        cell.backgroundColor = RecentlyReadCellBackgroundColor();
+        cell.backgroundColor = RecentlyReadCellBackgroundColor(self.traitCollection);
+
+        UIImageView *thumbnailView =
+            (UIImageView *)[cell.contentView viewWithTag:kThumbTag];
+        thumbnailView.backgroundColor = RecentlyReadThumbnailBackgroundColor();
 
         UILabel *titleLabel = [cell.contentView viewWithTag:kTitleTag];
         if (!titleLabel) continue;
@@ -1563,8 +1603,10 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
             // Existing cells do not necessarily get reconfigured on a theme change.
             // Refresh attributed metadata too: setTitleColor alone cannot replace
             // the foreground colour stored in an attributed button title.
-            UIColor *metaColor =
-                [RecentlyReadMetaColor() resolvedColorWithTraitCollection:cell.traitCollection];
+            // Keep this dynamic.  During a live appearance transition the cell
+            // can still report its outgoing traits while UIKit resolves the
+            // color for the incoming appearance.
+            UIColor *metaColor = RecentlyReadMetaColor();
             UIColor *metaHighlight = [metaColor colorWithAlphaComponent:0.4];
             cell.tintColor = metaColor;
             for (NSNumber *tag in @[@(kSubHeaderTag), @(kSubFooterSubredditTag),
@@ -1595,14 +1637,31 @@ static UIImage *RecentlyReadFlairBadgeImage(NSString *text,
 }
 
 - (UIColor *)apollo_themeCellBackgroundColor {
-    return RecentlyReadCellBackgroundColor();
+    return RecentlyReadCellBackgroundColor(self.traitCollection);
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
+// Recently Read uses custom post cells, not settings rows.  The settings base
+// class otherwise applies its accent/tint walk to every content subview during
+// willDisplayCell: and theme refreshes, clobbering these cells' own fonts and
+// attributed foreground colours.  Keep its background lifecycle only.
+- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
+    if (!cell) return;
+    cell.backgroundColor = [self apollo_themeCellBackgroundColor];
+}
 
-    if (previousTraitCollection &&
-        previousTraitCollection.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+
+    UIUserInterfaceStyle style = self.view.window.traitCollection.userInterfaceStyle;
+    if (style == UIUserInterfaceStyleUnspecified) return;
+
+    if (self.lastAppliedInterfaceStyle == UIUserInterfaceStyleUnspecified) {
+        self.lastAppliedInterfaceStyle = style;
+        return;
+    }
+
+    if (style != self.lastAppliedInterfaceStyle) {
+        self.lastAppliedInterfaceStyle = style;
         [self apollo_applyTheme];
     }
 }
@@ -1746,7 +1805,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
 
     NSDictionary *linkDomainAttrs = @{
         NSFontAttributeName: titleFont,
-        NSForegroundColorAttributeName: RecentlyReadFlairTextColor(),
+        NSForegroundColorAttributeName: RecentlyReadFlairTextColor(self.traitCollection),
         NSParagraphStyleAttributeName: titlePara,
     };
 
@@ -1764,11 +1823,18 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     }
 
     if (flairText.length > 0) {
-        // Render the flair badge using the title label's trait environment.
+        // The controller owns the current appearance during a live transition;
+        // a reused label can still carry its outgoing trait collection here.
+        CGFloat flairMaxWidth = CGRectGetWidth(titleLabel.superview.bounds);
+        if (flairMaxWidth <= 0.0) {
+            flairMaxWidth = CGRectGetWidth(self.tableView.bounds) - 28.0;
+        }
+
         UIImage *flairBadge =
             RecentlyReadFlairBadgeImage(flairText,
                                         titleFont.pointSize,
-                                        titleLabel.traitCollection);
+                                        flairMaxWidth,
+                                        self.traitCollection);
 
         NSTextAttachment *flairAtt =
             [[NSTextAttachment alloc] init];
@@ -1797,7 +1863,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
             [[NSAttributedString alloc] initWithString:@" "]];
 
         UIImage *badge = RecentlyReadNSFWBadgeImage(titleFont.pointSize,
-                                                     titleLabel.traitCollection);
+                                                     self.traitCollection);
 
         NSTextAttachment *att =
             [[NSTextAttachment alloc] init];
@@ -1828,7 +1894,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellID];
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        cell.backgroundColor = RecentlyReadCellBackgroundColor();
+        cell.backgroundColor = RecentlyReadCellBackgroundColor(self.traitCollection);
 
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.tintColor = RecentlyReadMetaColor();
@@ -1923,9 +1989,7 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         thumbnailView.contentMode = UIViewContentModeScaleAspectFill;
         thumbnailView.clipsToBounds = YES;
         thumbnailView.layer.cornerRadius = 6.0;
-        thumbnailView.backgroundColor = ApolloThemeRuntimeIsActive()
-            ? ApolloThemeRuntimeColor(ApolloThemeTokenTertiaryBackground)
-            : [UIColor tertiarySystemFillColor];
+        thumbnailView.backgroundColor = RecentlyReadThumbnailBackgroundColor();
         thumbnailView.translatesAutoresizingMaskIntoConstraints = NO;
         [cell.contentView addSubview:thumbnailView];
 
@@ -2162,7 +2226,10 @@ static void RecentlyReadClearThumbTask(UIImageView *thumbnailView, NSURLSessionD
         }
     }
 
-    // Title with optional NSFW badge
+    // Resolve thumbnail-driven width changes before sizing the flair attachment.
+    [cell.contentView layoutIfNeeded];
+
+    // Title with optional flair and NSFW badge
     [self applyTitleAppearanceToLabel:titleLabel forLink:link];
 
     statsLabel.attributedText = [self statsAttributedStringForLink:link];

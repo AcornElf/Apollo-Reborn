@@ -1610,6 +1610,40 @@ UIColor *ApolloThemeSubredditListBackgroundColor(void) {
         sBypassHook--;
         return color;
     }];
+BOOL ApolloThemeUsesPureBlackDarkMode(UITraitCollection *traits) {
+    if (traits.userInterfaceStyle != UIUserInterfaceStyleDark) return NO;
+    if (ApolloThemeCurrentSnapshot()->enabled) return NO;
+
+    uint8_t raw = 0;
+    if (!GetLiveAppColorThemeRaw(&raw)) return NO;
+    if (raw >= kStockThemeCount || kStockThemes[raw].tinted) return NO;
+
+    return [GroupDefaults() boolForKey:kUsePureBlackDarkModeKey];
+}
+
+UIColor *ApolloThemeSecondaryTextColor(UITraitCollection *traits) {
+    UIColor *custom = ApolloThemeRuntimeColor(ApolloThemeTokenSecondaryLabel);
+    if (custom) return custom;
+
+    if (traits.userInterfaceStyle != UIUserInterfaceStyleDark) {
+        return [UIColor secondaryLabelColor];
+    }
+
+    uint32_t rgb = ApolloThemeUsesPureBlackDarkMode(traits) ? 0x75777A : 0x94969D;
+
+    sBypassHook++;
+    UIColor *color = ApolloThemeUIColorFromRGB(rgb);
+    sBypassHook--;
+    return color;
+}
+
+UIColor *ApolloThemePureBlackCardColor(UITraitCollection *traits) {
+    if (!ApolloThemeUsesPureBlackDarkMode(traits)) return nil;
+
+    sBypassHook++;
+    UIColor *color = ApolloThemeUIColorFromRGB(0x131516);
+    sBypassHook--;
+    return color;
 }
 
 // Dark-mode separator override for a non-tinted stock theme. One "on" value
