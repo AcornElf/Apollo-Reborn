@@ -365,6 +365,7 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
 @property (nonatomic, strong, readonly) UIImageView *checkmark;
 @property (nonatomic, strong, readonly) UIImageView *grip;
 @property (nonatomic) BOOL showsGrip;
+@property (nonatomic) BOOL reservesGripSpace;
 @end
 
 static const CGFloat kApolloAMCheckmarkWidth = 22.0;
@@ -394,6 +395,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     [_accessory addSubview:_grip];
     self.accessoryView = _accessory;
     _showsGrip = YES;
+    _reservesGripSpace = NO;
     [self layoutAccessory];
     self.imageView.contentMode = UIViewContentModeCenter;
     self.textLabel.numberOfLines = 1;
@@ -407,10 +409,18 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     [self layoutAccessory];
 }
 
+- (void)setReservesGripSpace:(BOOL)reservesGripSpace {
+    if (_reservesGripSpace == reservesGripSpace) return;
+    _reservesGripSpace = reservesGripSpace;
+    [self layoutAccessory];
+}
+
 // The accessory view's bounds drive UIKit's trailing placement, so it is
-// sized here (never from layoutSubviews) whenever the grip comes or goes.
+// sized here (never from layoutSubviews) whenever the grip or its reserved
+// space changes.
 - (void)layoutAccessory {
-    CGFloat width = kApolloAMCheckmarkWidth + (self.showsGrip ? kApolloAMAccessoryGap + kApolloAMGripWidth : 0.0);
+    BOOL hasGripSlot = self.showsGrip || self.reservesGripSpace;
+    CGFloat width = kApolloAMCheckmarkWidth + (hasGripSlot ? kApolloAMAccessoryGap + kApolloAMGripWidth : 0.0);
     _accessory.bounds = CGRectMake(0.0, 0.0, width, kApolloAMAccessoryHeight);
     self.checkmark.frame = CGRectMake(0.0, 0.0, kApolloAMCheckmarkWidth, kApolloAMAccessoryHeight);
     self.grip.frame = CGRectMake(width - kApolloAMGripWidth, 0.0, kApolloAMGripWidth, kApolloAMAccessoryHeight);
@@ -733,7 +743,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         if (!ApolloNativeActionMenusActive()) {
             NSString *note =
                 @"Apollo Reborn actions stay below Apollo actions and "
-                 "can’t be reordered or hidden.";
+                 "can’t be reordered.";
 
             itemsFooter =
                 [itemsFooter stringByAppendingFormat:@"\n\n%@", note];
@@ -778,6 +788,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         item.isTweakRow;
 
     cell.showsGrip = !self.editingAllMenus && !fixedTweakRow;
+    cell.reservesGripSpace = fixedTweakRow;
     [self styleItemCell:cell forItem:item hidden:hidden];
     return cell;
 }
@@ -904,13 +915,8 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     UIColor *accent = [self apollo_themeAccentColor] ?: ApolloThemeAccentColor() ?: self.view.tintColor;
-    BOOL fixedTweakRow =
-        !self.editingAllMenus &&
-        !ApolloNativeActionMenusActive() &&
-        item.isTweakRow;
-
     cell.checkmark.tintColor = accent;
-    cell.checkmark.alpha = fixedTweakRow ? 0.0 : (hidden ? 0.0 : 1.0);
+    cell.checkmark.alpha = hidden ? 0.0 : 1.0;
     // Reuse pool: set BOTH states explicitly. A hidden row's label is disabled
     // (the theme pass leaves disabled labels alone, so the dim survives it);
     // a shown row is re-enabled, reset to the plain label colour and marked
@@ -939,15 +945,6 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 // nothing moves under the finger; the checkmark fades in or out.
 - (void)toggleItemWithID:(NSString *)itemID {
     if (itemID.length == 0) return;
-
-    ApolloActionMenuItem *catalogItem =
-        ApolloActionMenuCatalogItem(self.context, itemID);
-
-    if (!self.editingAllMenus &&
-        !ApolloNativeActionMenusActive() &&
-        catalogItem.isTweakRow) {
-        return;
-    }
 
     BOOL hide = ![self itemIsHidden:itemID];
     for (NSString *context in [self contextsForItem:itemID]) {
@@ -1098,17 +1095,37 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 
 - (NSIndexPath *)tableView:(UITableView *)tableView targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)sourceIndexPath toProposedIndexPath:(NSIndexPath *)proposedDestinationIndexPath {
     if (![self indexPathIsItemRow:sourceIndexPath]) return sourceIndexPath;
-    if ([self indexPathIsItemRow:proposedDestinationIndexPath]) return proposedDestinationIndexPath;
+
     NSInteger itemsSection = [self itemsSectionIndex];
     NSInteger lastRow = MAX([tableView numberOfRowsInSection:itemsSection] - 1, 0);
+
+    // Classic keeps Apollo Reborn actions in a fixed tail. Native actions may
+    // be reordered within their own block, but cannot be dropped into that tail.
+    if (!ApolloNativeActionMenusActive()) {
+        NSArray<ApolloActionMenuItem *> *items = [self editableItems];
+        for (NSUInteger i = 0; i < items.count; i++) {
+            if (items[i].isTweakRow) {
+                if (i == 0) return sourceIndexPath;
+                lastRow = (NSInteger)i - 1;
+                break;
+            }
+        }
+    }
+
+    if ([self indexPathIsItemRow:proposedDestinationIndexPath]) {
+        NSInteger row = MIN(proposedDestinationIndexPath.row, lastRow);
+        return [NSIndexPath indexPathForRow:row inSection:itemsSection];
+    }
+
     NSInteger row = proposedDestinationIndexPath.section < itemsSection ? 0 : lastRow;
     return [NSIndexPath indexPathForRow:row inSection:itemsSection];
 }
 
 - (NSArray<UIDragItem *> *)tableView:(UITableView *)tableView itemsForBeginningDragSession:(id<UIDragSession>)session atIndexPath:(NSIndexPath *)indexPath {
-    ApolloLog(@"[ActionMenuSettings] drag begin asked for %ld/%ld (item row: %d)",
-              (long)indexPath.section, (long)indexPath.row, [self indexPathIsItemRow:indexPath]);
-    if (![self indexPathIsItemRow:indexPath]) return @[];
+    BOOL movable = [self tableView:tableView canMoveRowAtIndexPath:indexPath];
+    ApolloLog(@"[ActionMenuSettings] drag begin asked for %ld/%ld (movable: %d)",
+              (long)indexPath.section, (long)indexPath.row, movable);
+    if (!movable) return @[];
     UIDragItem *item = [[UIDragItem alloc] initWithItemProvider:[NSItemProvider new]];
     item.localObject = indexPath;
     return @[ item ];
