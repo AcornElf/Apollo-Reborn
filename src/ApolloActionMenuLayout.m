@@ -532,18 +532,23 @@ static NSArray<NSString *> *ApolloActionMenuLockedFirst(ApolloActionMenuContext 
     return result;
 }
 
+static NSArray<NSString *> *ApolloActionMenuNativeDefaultOrder(ApolloActionMenuContext context) {
+    NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
+    NSMutableArray<NSString *> *nativeOrder = [NSMutableArray array];
+    for (NSString *itemID in ApolloActionMenuLastPresentedItemIDs(context)) {
+        if ([catalogOrder containsObject:itemID]) [nativeOrder addObject:itemID];
+    }
+    for (NSString *itemID in catalogOrder) {
+        if (![nativeOrder containsObject:itemID]) [nativeOrder addObject:itemID];
+    }
+    return ApolloActionMenuLockedFirst(context, nativeOrder);
+}
+
 NSArray<NSString *> *ApolloActionMenuResolvedOrder(ApolloActionMenuContext context) {
     NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
     NSArray<NSString *> *stored = ApolloActionMenuStringArray(ApolloActionMenuStoredLayout(context)[kApolloActionMenuLayoutOrderKey]);
     if (stored.count == 0) {
-        NSMutableArray<NSString *> *nativeOrder = [NSMutableArray array];
-        for (NSString *itemID in ApolloActionMenuLastPresentedItemIDs(context)) {
-            if ([catalogOrder containsObject:itemID]) [nativeOrder addObject:itemID];
-        }
-        for (NSString *itemID in catalogOrder) {
-            if (![nativeOrder containsObject:itemID]) [nativeOrder addObject:itemID];
-        }
-        return ApolloActionMenuLockedFirst(context, nativeOrder);
+        return ApolloActionMenuNativeDefaultOrder(context);
     }
 
     NSMutableArray<NSString *> *order = [NSMutableArray arrayWithCapacity:catalogOrder.count];
@@ -614,7 +619,7 @@ void ApolloActionMenuSetOrder(ApolloActionMenuContext context, NSArray<NSString 
         if (![clean containsObject:itemID]) [clean addObject:itemID];
     }
     NSArray<NSString *> *normalized = ApolloActionMenuLockedFirst(context, clean);
-    NSArray<NSString *> *defaultOrder = ApolloActionMenuLockedFirst(context, catalogOrder);
+    NSArray<NSString *> *defaultOrder = ApolloActionMenuNativeDefaultOrder(context);
     NSArray<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context).allObjects;
 
     if ([normalized isEqualToArray:defaultOrder]) {
