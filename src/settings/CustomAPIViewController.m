@@ -2074,7 +2074,7 @@ typedef NS_ENUM(NSInteger, Tag) {
         }];
     return [ApolloSettingsSection
         sectionWithTitle:@"Menus"
-        footer:@"Reorder and hide actions in the ••• menus on posts and comments, as well as moderator menus."
+        footer:@"Reorder and hide actions in the ••• menus on feeds, posts and comments, and in the moderator menus. Touching and holding a post or comment opens the same menu."
         rows:@[ actionMenus ]];
 }
 

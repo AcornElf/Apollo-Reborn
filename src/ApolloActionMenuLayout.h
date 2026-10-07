@@ -53,7 +53,8 @@ extern ApolloActionMenuContext const ApolloActionMenuContextModeratorComment;
 
 // Presentation order for pickers.
 NSArray<ApolloActionMenuContext> *ApolloActionMenuAllContexts(void);
-// Short picker title ("Feed", "Post", "Post with Comments", "Comment").
+// The menu's title ("Feed", "Post", "Post with Comments", "Comment",
+// "Moderator Subreddit", …), distinct across all seven menus.
 NSString *ApolloActionMenuContextTitle(ApolloActionMenuContext context);
 // One sentence saying where that menu is opened from.
 NSString *ApolloActionMenuContextDescription(ApolloActionMenuContext context);

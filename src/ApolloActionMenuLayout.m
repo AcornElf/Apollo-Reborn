@@ -1,6 +1,7 @@
 #import "ApolloActionMenuLayout.h"
 
 #import "ApolloCommon.h"
+#import "ApolloNativeActionMenus.h"
 #import "ApolloNativeActionMetadata.h"
 #import "UserDefaultConstants.h"
 
@@ -32,17 +33,20 @@ NSString *ApolloActionMenuContextTitle(ApolloActionMenuContext context) {
     if ([context isEqualToString:ApolloActionMenuContextPost]) return @"Post";
     if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"Post with Comments";
     if ([context isEqualToString:ApolloActionMenuContextComment]) return @"Comment";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"Subreddit";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"Post";
-    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"Comment";
+    // Distinct from the ••• menus' "Post"/"Comment": settings search lists
+    // every menu by this title, and All Menus names menus with it. The hub's
+    // Moderator Menus section shows the short forms under its own heading.
+    if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"Moderator Subreddit";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"Moderator Post";
+    if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"Moderator Comment";
     return context ?: @"";
 }
 
 NSString *ApolloActionMenuContextDescription(ApolloActionMenuContext context) {
     if ([context isEqualToString:ApolloActionMenuContextFeed]) return @"The ••• menu at the top of a subreddit or feed.";
-    if ([context isEqualToString:ApolloActionMenuContextPost]) return @"The ••• menu on a post in a feed.";
-    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"The ••• menu at the top of the full-page post view.";
-    if ([context isEqualToString:ApolloActionMenuContextComment]) return @"The ••• menu on a comment.";
+    if ([context isEqualToString:ApolloActionMenuContextPost]) return @"The ••• menu on a post in a feed. Touching and holding the post opens the same menu.";
+    if ([context isEqualToString:ApolloActionMenuContextPostDetail]) return @"The ••• menu at the top of a post’s comments. Touching and holding the post above them opens the same menu.";
+    if ([context isEqualToString:ApolloActionMenuContextComment]) return @"The ••• menu on a comment. Touching and holding the comment opens the same menu.";
     if ([context isEqualToString:ApolloActionMenuContextModeratorSubreddit]) return @"The shield menu at the top of a subreddit you moderate.";
     if ([context isEqualToString:ApolloActionMenuContextModeratorPost]) return @"The shield menu on a post in a subreddit you moderate.";
     if ([context isEqualToString:ApolloActionMenuContextModeratorComment]) return @"The shield menu on a comment in a subreddit you moderate.";
@@ -532,6 +536,12 @@ static NSArray<NSString *> *ApolloActionMenuLockedFirst(ApolloActionMenuContext 
     return result;
 }
 
+// The order an untouched menu has: what the menu offered last time, then the
+// catalogue rows it didn't offer. Apollo's classic sheet always appends Apollo
+// Reborn's rows after its own (ApolloActionMenu.h), and the editor lists them
+// that way there, so on Classic they go last here too. Otherwise a menu dragged
+// back into exactly the order the editor showed would still not count as the
+// default, because the stored order put an Apollo Reborn row somewhere else.
 static NSArray<NSString *> *ApolloActionMenuNativeDefaultOrder(ApolloActionMenuContext context) {
     NSArray<NSString *> *catalogOrder = ApolloActionMenuDefaultOrder(context);
     NSMutableArray<NSString *> *nativeOrder = [NSMutableArray array];
@@ -540,6 +550,15 @@ static NSArray<NSString *> *ApolloActionMenuNativeDefaultOrder(ApolloActionMenuC
     }
     for (NSString *itemID in catalogOrder) {
         if (![nativeOrder containsObject:itemID]) [nativeOrder addObject:itemID];
+    }
+    if (!ApolloNativeActionMenusActive()) {
+        NSMutableArray<NSString *> *tweakRows = [NSMutableArray array];
+        for (NSString *itemID in [nativeOrder copy]) {
+            if (!ApolloActionMenuCatalogItem(context, itemID).isTweakRow) continue;
+            [nativeOrder removeObject:itemID];
+            [tweakRows addObject:itemID];
+        }
+        [nativeOrder addObjectsFromArray:tweakRows];
     }
     return ApolloActionMenuLockedFirst(context, nativeOrder);
 }
