@@ -963,7 +963,7 @@ static UIMenu *ApolloActionMenuLayoutContextMenu(UIMenu *menu, ApolloActionMenuC
     // Hidden rows go. Then, under a saved order, the catalogued rows are
     // sorted by it and dealt back into the slots catalogued rows occupied, so
     // a row this context doesn't know keeps Apollo's position — the comments
-    // header's Moderator row stays first and Remind Me In… last.
+    // header's Moderator row stays first.
     NSSet<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context);
     NSMutableArray<UIMenuElement *> *kept = [NSMutableArray arrayWithCapacity:children.count];
     NSMutableArray *keptIDs = [NSMutableArray arrayWithCapacity:children.count];
