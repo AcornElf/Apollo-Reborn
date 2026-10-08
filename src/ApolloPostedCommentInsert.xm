@@ -13,6 +13,10 @@
 // so the window is narrow and precise: wrap the completion of the submit funnel, and while it runs
 // treat the comments list's non-animated batch as animated, with the new row fading in while the
 // rows below slide down to make room.
+//
+// "N more replies" inserts through the same non-animated batch; ApolloLoadMoreComments.xm arms
+// the same promotion through ApolloCommentsRunWithAnimatedBatch (ApolloCommentsBatchAnimation.h),
+// so this file stays the single owner of the comments-list batch hooks.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -20,6 +24,7 @@
 #import <objc/message.h>
 #import "ApolloCommon.h"
 #import "ApolloClasses.h"
+#import "ApolloCommentsBatchAnimation.h"
 
 @interface ASDisplayNode : NSObject
 - (BOOL)isNodeLoaded;
@@ -34,10 +39,20 @@
 // RedditKit's RDKObjectCompletionBlock: the parsed RDKComment (or nil) and an error.
 typedef void (^ApolloPostedCommentCompletion)(id object, NSError *error);
 
-// YES only while a SUCCESSFUL comment-submit completion is running on the main thread; set and
-// restored around the original completion (@finally-guarded), so the only batch update that can
-// observe it is the one Apollo issues for that comment. Main-thread only.
-static BOOL sApolloPostedCommentCompletionActive = NO;
+// The armed promotion: set only while ApolloCommentsRunWithAnimatedBatch's body runs on the main
+// thread (a successful comment-submit completion, or a load-more insert) and restored afterwards
+// (@finally-guarded), so the only batch updates that can observe it are the ones Apollo issues
+// from inside that body. Main-thread only.
+@interface ApolloCommentsBatchPromotion : NSObject
+@property (nonatomic, copy) NSString *reason;
+@property (nonatomic, copy) void (^willAnimate)(id tableNode);
+@property (nonatomic, copy) void (^didFinish)(BOOL finished);
+@end
+
+@implementation ApolloCommentsBatchPromotion
+@end
+
+static ApolloCommentsBatchPromotion *sApolloCommentsBatchPromotion = nil;
 // Non-zero while the animated batch's updates block runs, so the row-level calls inside it can
 // swap `.none` for a fade. Main-thread only.
 static NSUInteger sApolloPostedCommentBatchDepth = 0;
@@ -143,6 +158,30 @@ static void ApolloPostedCommentDisplayPendingCell(UITableView *tableView, UITabl
     os_log_debug(ApolloFixLog(), "[ApolloFix] [PostedCommentInsert] drew fresh cell synchronously for row %ld", (long)indexPath.row);
 }
 
+void ApolloCommentsRunWithAnimatedBatch(NSString *reason,
+                                        NS_NOESCAPE dispatch_block_t body,
+                                        void (^willAnimate)(id tableNode),
+                                        void (^didFinish)(BOOL finished)) {
+    if (!body) return;
+    if (!NSThread.isMainThread) {
+        // Off-main deliveries can't be paired with a main-thread batch; run them untouched.
+        body();
+        return;
+    }
+    ApolloCommentsBatchPromotion *promotion = [ApolloCommentsBatchPromotion new];
+    promotion.reason = reason.length > 0 ? reason : @"comments update";
+    promotion.willAnimate = willAnimate;
+    promotion.didFinish = didFinish;
+    ApolloCommentsBatchPromotion *previous = sApolloCommentsBatchPromotion;
+    sApolloCommentsBatchPromotion = promotion;
+    @try {
+        body();
+    } @finally {
+        sApolloCommentsBatchPromotion = previous;
+    }
+}
+
+
 %hook RDKClient
 
 // Every comment submit funnels through here (the onLink: / asReplyToComment: variants tail-call
@@ -151,15 +190,14 @@ static void ApolloPostedCommentDisplayPendingCell(UITableView *tableView, UITabl
 - (id)submitComment:(id)body onThingWithFullName:(id)fullName completion:(ApolloPostedCommentCompletion)completion {
     if (!completion) return %orig;
     ApolloPostedCommentCompletion wrapped = ^(id object, NSError *error) {
-        BOOL previous = sApolloPostedCommentCompletionActive;
-        // A failed submit shows an alert instead of inserting; an off-main delivery could not
-        // be paired with the batch anyway.
-        sApolloPostedCommentCompletionActive = (error == nil && object != nil && NSThread.isMainThread);
-        @try {
+        // A failed submit shows an alert instead of inserting; nothing to animate.
+        if (error != nil || object == nil) {
             completion(object, error);
-        } @finally {
-            sApolloPostedCommentCompletionActive = previous;
+            return;
         }
+        ApolloCommentsRunWithAnimatedBatch(@"posted comment", ^{
+            completion(object, error);
+        }, nil, nil);
     };
     return %orig(body, fullName, wrapped);
 }
@@ -169,16 +207,18 @@ static void ApolloPostedCommentDisplayPendingCell(UITableView *tableView, UITabl
 %hook ASTableNode
 
 - (void)performBatchAnimated:(BOOL)animated updates:(void (^)(void))updates completion:(void (^)(BOOL))completion {
-    if (!sApolloPostedCommentCompletionActive || animated) {
+    ApolloCommentsBatchPromotion *promotion = sApolloCommentsBatchPromotion;
+    if (!promotion || animated) {
         %orig;
         return;
     }
     if (!ApolloPostedCommentTableIsCommentsList(self)) {
-        ApolloLog(@"[PostedCommentInsert] non-animated batch during a comment submit is not on a comments list — leaving it");
+        ApolloLog(@"[PostedCommentInsert] non-animated batch during a %@ is not on a comments list — leaving it", promotion.reason);
         %orig;
         return;
     }
-    ApolloLog(@"[PostedCommentInsert] animating the posted-comment batch on table %p", self);
+    ApolloLog(@"[PostedCommentInsert] animating the %@ batch on table %p", promotion.reason, self);
+    if (promotion.willAnimate) promotion.willAnimate(self);
     ApolloPostedCommentClearPending();
     sApolloPostedCommentInsertedRows = [NSMutableArray array];
     sApolloPostedCommentReloadedRows = [NSMutableArray array];
@@ -196,9 +236,11 @@ static void ApolloPostedCommentDisplayPendingCell(UITableView *tableView, UITabl
         sApolloPostedCommentReloadedRows = nil;
         sApolloPostedCommentDeletedRows = nil;
     };
+    void (^didFinish)(BOOL) = promotion.didFinish;
     void (^wrappedCompletion)(BOOL) = ^(BOOL finished) {
         ApolloPostedCommentClearPending();
         if (completion) completion(finished);
+        if (didFinish) didFinish(finished);
     };
     %orig(YES, animatedUpdates, wrappedCompletion);
 }
