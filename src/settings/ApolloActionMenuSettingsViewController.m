@@ -484,6 +484,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 @interface ApolloActionMenuEditorViewController () <UITableViewDragDelegate, UITableViewDropDelegate>
 @property (nonatomic, copy) ApolloActionMenuContext context;
 @property (nonatomic, strong) UIBarButtonItem *previewButton;
+@property (nonatomic, strong) UIBarButtonItem *resetButton;
 // Exact item-row heights (see itemRowHeightForItem:).
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *itemRowHeights;
 @property (nonatomic, strong) ApolloAMItemCell *measuringItemCell;
@@ -526,7 +527,19 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     }
     preview.accessibilityLabel = @"Preview this menu";
     self.previewButton = preview;
+
+    if (self.editingAllMenus) {
+        UIBarButtonItem *reset = [[UIBarButtonItem alloc]
+            initWithTitle:@"Reset"
+            style:UIBarButtonItemStylePlain
+            target:self
+            action:@selector(presentResetMenuSheet)];
+        reset.accessibilityLabel = @"Reset All Menus";
+        self.resetButton = reset;
+    }
+
     [self refreshPreviewButton];
+    [self refreshResetControl];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -534,6 +547,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     // A real ••• opened since (recording what it offered) changes the dimming;
     // the glass menu is built on tap anyway, this keeps the button state right.
     [self refreshPreviewButton];
+    [self refreshResetControl];
 }
 
 #pragma mark - The ••• preview
@@ -545,7 +559,8 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     UIBarButtonItem *button = self.previewButton;
     if (!button) return;
     // All Menus is an overview, not a menu: nothing to preview.
-    self.navigationItem.rightBarButtonItem = self.editingAllMenus ? nil : button;
+    self.navigationItem.rightBarButtonItem =
+        self.editingAllMenus ? self.resetButton : button;
     if (self.editingAllMenus) return;
     button.image = ApolloAMPreviewButtonImage(self.context);
     if (!ApolloNativeActionMenusActive()) return;
@@ -722,17 +737,22 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         }
     }
 
-    // Where this menu opens from and how to preview it (text only), the
-    // items, then Reset — the same three sections on every editor.
+    // Introductory guidance and items, followed by Reset for individual menus.
+    // All Menus keeps Reset accessible in the navigation bar.
     ApolloSettingsSection *intro = [ApolloSettingsSection sectionWithTitle:nil footer:menuFooter rows:@[]];
     if (!self.editingAllMenus) {
         intro.footerDisplay = ^(UITableViewHeaderFooterView *view) {
             [weakSelf menuFooterDisplay:view text:menuFooter];
         };
     }
+    ApolloSettingsSection *items =
+        [ApolloSettingsSection sectionWithTitle:nil footer:itemsFooter rows:itemRows];
+
+    if (self.editingAllMenus) return @[ intro, items ];
+
     return @[
         intro,
-        [ApolloSettingsSection sectionWithTitle:nil footer:itemsFooter rows:itemRows],
+        items,
         [ApolloSettingsSection sectionWithTitle:nil footer:nil rows:@[ reset ]],
     ];
 }
@@ -928,16 +948,21 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
             [self styleItemCell:(ApolloAMItemCell *)cell forItem:item hidden:nowHidden];
         }];
     }
-    // The Reset row's enabled state follows every change. Its reload is also
+    // The Reset control's enabled state follows every change. Its reload is also
     // the updates pass that gives an All Menus row whose subtitle just grew
     // or shrank ("Hidden in …") its new height, so no row is reloaded under
     // the finger.
-    [self refreshResetRow];
+    [self refreshResetControl];
     [self refreshPreviewButton];
 }
 
-- (void)refreshResetRow {
-    [self reloadRowWithID:kApolloAMRowReset];
+- (void)refreshResetControl {
+    if (self.editingAllMenus) {
+        self.resetButton.enabled =
+            ApolloActionMenuCustomizedContextCount() > 0;
+    } else {
+        [self reloadRowWithID:kApolloAMRowReset];
+    }
 }
 
 // Reset All Menus asks first. A single menu offers what it can reset: its
@@ -949,8 +974,8 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     UIAlertController *sheet;
     __weak __typeof(self) weakSelf = self;
     if (self.editingAllMenus) {
-        sheet = [UIAlertController alertControllerWithTitle:@"Reset All Menus"
-                                                    message:@"This restores the default order and visibility in every menu."
+        sheet = [UIAlertController alertControllerWithTitle:IsLiquidGlass() ? @"Reset" : nil
+                                                    message:@"Restore the default order and show all available actions in every menu"
                                              preferredStyle:UIAlertControllerStyleActionSheet];
         [sheet addAction:[UIAlertAction actionWithTitle:@"Reset All Menus"
                                                   style:UIAlertActionStyleDestructive
@@ -980,9 +1005,14 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
 
-    UITableViewCell *cell = [self cellForRowID:kApolloAMRowReset];
-    sheet.popoverPresentationController.sourceView = cell ?: self.view;
-    sheet.popoverPresentationController.sourceRect = cell ? cell.bounds : CGRectZero;
+    if (self.editingAllMenus) {
+        sheet.popoverPresentationController.barButtonItem = self.resetButton;
+    } else {
+        UITableViewCell *cell = [self cellForRowID:kApolloAMRowReset];
+        sheet.popoverPresentationController.sourceView = cell ?: self.view;
+        sheet.popoverPresentationController.sourceRect =
+            cell ? cell.bounds : CGRectZero;
+    }
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
@@ -992,12 +1022,12 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         else ApolloActionMenuResetContext(context);
     }
 
-    // Rebuild the items first, then refresh the Reset row's final enabled state.
+    // Rebuild the items first, then refresh the Reset control's final enabled state.
     NSString *firstItemRowID = [self firstItemRowID];
     if (firstItemRowID) {
         [self rebuildSectionContainingRowID:firstItemRowID withRowAnimation:UITableViewRowAnimationFade];
     }
-    [self refreshResetRow];
+    [self refreshResetControl];
     [self refreshPreviewButton];
 }
 
@@ -1052,7 +1082,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
-        [strongSelf refreshResetRow];
+        [strongSelf refreshResetControl];
         [strongSelf refreshPreviewButton];
     });
 }
