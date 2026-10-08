@@ -28,12 +28,18 @@
 //   2. recursivelyEnsureDisplaySynchronously:YES right after the reconfigure,
 //      and again on the next main-queue turn — flushes the display passes the
 //      reconfigure scheduled (the -setNeedsLayout wave lands a turn later).
-// Both selectors exist in Apollo's bundled Texture (verified in the binary).
+//   3. For each flush, image nodes that would commit blank (e.g. the rebuilt
+//      rich link card's hero image) temporarily drop Texture's
+//      shouldBypassEnsureDisplay so the flush waits for them too.
+// All three selectors exist in Apollo's bundled Texture (verified in the binary).
 //
 // Scope: ONLY cells that actually receive a model-update notification while
 // visible (votes, live edits). Cells never get touched during scrolling, so
-// scroll perf is unaffected; the one-off synchronous draw of an already
-// visible cell is a sub-millisecond text render on a tap — imperceptible.
+// scroll perf is unaffected. The one-off synchronous draw of an already
+// visible cell is a sub-millisecond text render on a tap, plus (step 3) one
+// image draw for each network image the vote rebuilt that would otherwise
+// commit blank, such as a link card's hero (~10 ms for a 1280x720 thumbnail
+// in the sim).
 //
 // Covers both the comment rows (CommentSectionController) and the post header
 // in the comments view (CommentsHeaderSectionController) — both flicker the
@@ -53,8 +59,10 @@
 @interface ASDisplayNode : NSObject
 @property (nonatomic) BOOL neverShowPlaceholders;
 @property (nonatomic) BOOL displaysAsynchronously;
+@property (nonatomic) BOOL shouldBypassEnsureDisplay;
 @property (nonatomic, readonly) BOOL isNodeLoaded;
 @property (nonatomic, readonly) UIView *view;
+@property (nonatomic, readonly) CALayer *layer;
 - (NSArray<ASDisplayNode *> *)subnodes;
 - (void)didEnterHierarchy;
 - (void)didExitHierarchy;
@@ -239,20 +247,69 @@ static NSArray *ApolloVFCellsForUpdatedModel(id note) {
     return hits;
 }
 
+// ASNetworkImageNode's init sets shouldBypassEnsureDisplay, so
+// recursivelyEnsureDisplaySynchronously: starts its draw but never waits for
+// it. A comment vote rebuilds the comment's LinkButtonNode, so the rich link
+// card comes back with a fresh hero image node: the flush drew the rebuilt
+// text in-frame, but the card image committed blank for ~2 frames until its
+// async draw landed. Opt in, for one flush, only the image nodes that would
+// commit blank (in the layer tree, unhidden, non-empty, image set, no contents
+// yet). Image nodes that already show pixels keep bypassing. Texture replays a
+// pending setNeedsDisplay on them a turn later, and that redraw keeps the old
+// contents up until it lands, so waiting on it would only cost main-thread
+// time.
+static void ApolloVFOptInBlankImageNodes(ASDisplayNode *root, NSMutableArray *optedIn) {
+    if (!root) return;
+    Class networkImageClass = ApolloClassASNetworkImageNode;
+    if (!networkImageClass ||
+        ![networkImageClass instancesRespondToSelector:@selector(setShouldBypassEnsureDisplay:)]) {
+        // Without the opt-in a rebuilt card image commits blank again on a vote.
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            ApolloLog(@"[VoteFlicker] blank-image opt-in NOT armed: ASNetworkImageNode or -setShouldBypassEnsureDisplay: missing");
+        });
+        return;
+    }
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:root];
+    while (pending.count > 0) {
+        ASDisplayNode *node = pending.lastObject;
+        [pending removeLastObject];
+        NSArray *children = node.subnodes;
+        if (children.count > 0) [pending addObjectsFromArray:children];
+        if (![node isKindOfClass:networkImageClass] || !node.isNodeLoaded || !node.shouldBypassEnsureDisplay) continue;
+        CALayer *layer = node.layer;
+        if (layer.contents || !layer.superlayer || layer.hidden || CGRectIsEmpty(layer.bounds)) continue;
+        if (!ApolloSendObject(node, @selector(image))) continue;
+        node.shouldBypassEnsureDisplay = NO;
+        [optedIn addObject:node];
+    }
+}
+
 static void ApolloVFEnsureSynchronousDisplay(NSArray *cells, const char *stage) {
+    NSUInteger waitedImages = 0;
     for (ASDisplayNode *cell in cells) {
+        NSMutableArray *optedIn = [NSMutableArray array];
         @try {
             if ([cell respondsToSelector:@selector(setNeverShowPlaceholders:)]) {
                 cell.neverShowPlaceholders = YES;
             }
+            // The rebuilt card's nodes only join the layer tree in the cell's
+            // pending layout pass, which the flush runs first. Run it here so
+            // the scan can see them (the flush then finds no layout to do).
+            CALayer *layer = cell.isNodeLoaded ? cell.layer : nil;
+            if (layer.needsLayout) [layer layoutIfNeeded];
+            ApolloVFOptInBlankImageNodes(cell, optedIn);
             if ([cell respondsToSelector:@selector(recursivelyEnsureDisplaySynchronously:)]) {
                 [cell recursivelyEnsureDisplaySynchronously:YES];
             }
         } @catch (__unused NSException *e) {}
+        // Restore Texture's default even if the flush threw.
+        for (ASDisplayNode *node in optedIn) node.shouldBypassEnsureDisplay = YES;
+        waitedImages += optedIn.count;
     }
     if (cells.count > 0) {
-        os_log_info(ApolloFixLog(), "[ApolloFix] [VoteFlicker] ensured synchronous display for %lu cell(s) (%{public}s)",
-                    (unsigned long)cells.count, stage);
+        os_log_info(ApolloFixLog(), "[ApolloFix] [VoteFlicker] ensured synchronous display for %lu cell(s) (%{public}s), waited on %lu new image(s)",
+                    (unsigned long)cells.count, stage, (unsigned long)waitedImages);
     }
 }
 
