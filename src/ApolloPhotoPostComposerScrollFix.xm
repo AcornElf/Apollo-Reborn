@@ -10,6 +10,7 @@
 #import "ApolloCommon.h"
 #import "ApolloState.h"
 #import "ApolloSwiftRuntime.h"
+#import "ApolloTableSnapshot.h"
 #import "ApolloThemeRuntime.h"
 #import "fishhook.h"
 #import "ApolloClasses.h"
@@ -1944,6 +1945,10 @@ static CGFloat ApolloMediaComposerTitleHeightWithEmbeddedBody(UITableView *table
 // returns a concrete height, so nothing re-queries it as the title wraps - the second half
 // of issue #791. Schedule a coalesced height-only update pass whenever the title text
 // mutates so the row keeps tracking the caret.
+// Main thread only: whether the current stretch of stale-table skips has been
+// logged at the persisted level yet (one skip per keystroke otherwise).
+static BOOL sApolloMediaComposerLoggedStaleSkip;
+
 static void ApolloMediaComposerScheduleTitleRowRemeasure(UIViewController *controller) {
     controller = ApolloMediaComposerCanonicalBodyController(controller) ?: controller;
     if (!controller) return;
@@ -1959,6 +1964,21 @@ static void ApolloMediaComposerScheduleTitleRowRemeasure(UIViewController *contr
         if (!ApolloMediaComposerShouldInsertBodyRow(strongController)) return; // non-Media tabs self-size natively
         UITableView *tableView = ApolloMediaComposerFindPrimaryTableView(strongController);
         if (!tableView || !tableView.window) return;
+        // Even an empty pass is a batch, and UIKit checks it against the row counts it cached
+        // at the last reload. If the composer's rows changed since then and the table hasn't
+        // been told yet, the pass throws "Invalid batch updates" (#1339). There's nothing to
+        // re-measure on a table in that state: the reload that brings it up to date asks for
+        // the row heights again, and its title cell schedules a fresh pass from cellForRow.
+        if (ApolloTableSnapshotIsStale(tableView)) {
+            if (!sApolloMediaComposerLoggedStaleSkip) {
+                sApolloMediaComposerLoggedStaleSkip = YES;
+                ApolloLog(@"[MediaPostBody] skipped title row height pass: composer rows changed since the table's last reload");
+            } else {
+                os_log_info(ApolloFixLog(), "[ApolloFix] [MediaPostBody] skipped title row height pass again: table still out of date");
+            }
+            return;
+        }
+        sApolloMediaComposerLoggedStaleSkip = NO;
         // Height-only pass: re-queries heightForRowAtIndexPath (our measured title height)
         // without reloading cells, so the keyboard and first responder stay untouched.
         [tableView beginUpdates];

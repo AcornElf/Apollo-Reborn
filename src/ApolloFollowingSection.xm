@@ -56,14 +56,17 @@
 //    once the handler closes its point window. Apollo's name-based expansion
 //    state can affect more models than that batch accounts for; see
 //    ApolloMultiredditExpansion.h for the reproduced invalid-row-count case.
+//    The favorite star's batch takes the same route when the table's cached
+//    counts are already stale before it starts (#1335).
 //
 // Everything else Apollo does to this table is reloadData (unsubscribe commits,
 // model refreshes), which is remap-safe: our mapping is invalidated in a
 // reloadData hook before the table re-queries anything.
 //
 // When "Separate Followed Users" is OFF and the section order is the default,
-// every hook is a straight %orig passthrough (one static + pointer check), so
-// the module is inert for anyone not using the feature.
+// the remapping hooks are straight %orig passthroughs (one static + pointer
+// check). The two crash guards on this list still run for everyone: the
+// multireddit expansion deferral and the favorite star's stale-count check.
 //
 // ============================ Reading the model ==============================
 // The u_ rows' native positions come from the sectionedSubreddits ivar. It's a
@@ -1409,6 +1412,38 @@ NSIndexPath *ApolloFollowingVisibleIndexPathForNative(UITableView *tableView, NS
 - (void)endUpdates {
     if (ApolloDeferMultiredditTableUpdate((UITableView *)self)) return;
     %orig;
+}
+
+// Apollo's favorite star (see ApolloTableSnapshotIsStale). The check runs
+// before the block, while UIKit's cached counts and the model should still
+// agree. When they don't, no row the block names can pass UIKit's validation,
+// so the favorite change lands and one reload presents it. The star resolved
+// its row from the on-screen layout and reads the name from the current model,
+// so the tapped subreddit is the one toggled as long as the stale change is in
+// another section (the #1335 case: Moderator Posts, MODERATOR, Multireddits).
+// No caller gate: a stale snapshot fails every batch, whoever submits it.
+- (void)performBatchUpdates:(void (^)(void))updates completion:(void (^)(BOOL))completion {
+    UITableView *table = (UITableView *)self;
+    if (!ApolloFollowingTableIsList(table)) {
+        %orig;
+        return;
+    }
+    if (ApolloDeferMultiredditTableUpdate(table)) {
+        // Inside an expansion scope the row calls are deferred, so a real
+        // batch would register nothing and fail the same validation.
+        if (updates) updates();
+    } else if (ApolloTableSnapshotIsStale(table)) {
+        ApolloLog(@"[FollowingSection] list counts changed since the last reload; applying this batch with a reload");
+        ApolloPerformBatchAsReload(table, updates);
+    } else {
+        %orig;
+        return;
+    }
+    if (completion) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(YES);
+        });
+    }
 }
 
 - (NSIndexPath *)indexPathForRowAtPoint:(CGPoint)point {
