@@ -1,3 +1,4 @@
+#import "ApolloProfilePicturesPreview.h"
 #import "ApolloSettingsShortcutsViewController.h"
 #import "settings/CustomAPIViewController.h"
 #import "settings/ApolloSiriSettingsViewController.h"
@@ -930,10 +931,6 @@ typedef NS_ENUM(NSInteger, Tag) {
     [self reloadRowWithID:@"interface.hideBarsOnScroll"];
     [self reloadRowWithID:@"interface.hideTopBarToo"];
     [self reloadRowWithID:@"interface.tabBarScrollBehavior"];
-    [self reloadRowWithID:@"interface.avatarShape"];
-    // Refresh the Profile Layout summary after returning from that screen
-    // (Density/Avatar/band switches may have just changed).
-    [self reloadRowWithID:@"feat.profileLayout"];
     [self reloadRowWithID:@"siri.settings"];
     // The Setup section footer (onboarding nudge) collapses once a Reddit key
     // exists, which may have just been entered on the pushed API Keys screen.
@@ -1156,8 +1153,6 @@ typedef NS_ENUM(NSInteger, Tag) {
 }
 
 - (ApolloSettingsSection *)buildFeaturesSection {
-    __weak typeof(self) weakSelf = self;
-
     ApolloSettingsRow *posts =
         [self hubDisclosureRowWithID:@"feat.posts" title:@"Posts & Feeds" subtitle:nil
                                 push:^UIViewController * {
@@ -1179,11 +1174,11 @@ typedef NS_ENUM(NSInteger, Tag) {
             return [[ApolloSubredditsSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
     ApolloSettingsRow *profileLayout =
-        [self hubValueDisclosureRowWithID:@"feat.profileLayout"
-                                    title:@"Profile Layout"
-                                    value:^NSString * { return [weakSelf profileLayoutSummaryText]; }
-                                     push:^UIViewController * {
-            return [[ApolloProfileLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+        [self hubDisclosureRowWithID:@"feat.profileLayout"
+                               title:@"User Profiles"
+                            subtitle:nil
+                                push:^UIViewController * {
+            return [[ApolloUserProfilesSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
         }];
     ApolloSettingsRow *interface_ =
         [self hubDisclosureRowWithID:@"feat.interface" title:@"Interface" subtitle:nil
@@ -2123,8 +2118,44 @@ typedef NS_ENUM(NSInteger, Tag) {
                                               rows:@[ actionMenus ]];
 }
 
-- (ApolloSettingsSection *)buildInterfaceDisplayNavigationSection {
+- (ApolloSettingsSection *)buildUserProfilesLayoutSection {
+    ApolloSettingsRow *layout =
+        [ApolloSettingsRow disclosureRowWithID:@"profiles.layout"
+                                        title:@"Profile Layout"
+                                       detail:^NSString * {
+            if (!sShowDetailedProfiles) return @"Native";
+            return sProfileHeaderImmersive ? @"Immersive" : @"Compact";
+        }
+                                         push:^UIViewController * {
+            return [[ApolloProfileLayoutViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+        }];
+    return [ApolloSettingsSection sectionWithTitle:nil footer:nil rows:@[ layout ]];
+}
+
+- (ApolloSettingsSection *)buildUserProfilePicturesSection {
     __weak typeof(self) weakSelf = self;
+
+    ApolloSettingsRow *preview = [ApolloSettingsRow customRowWithID:@"profiles.picturesPreview"
+        cell:^UITableViewCell *(UITableView *table, __unused ApolloSettingsRow *row) {
+            UITableViewCell *cell = [table dequeueReusableCellWithIdentifier:@"ProfilePicturesPreview"];
+            if (!cell) {
+                cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"ProfilePicturesPreview"];
+                cell.selectionStyle = UITableViewCellSelectionStyleNone;
+                ApolloProfilePicturesPreview *sample = [ApolloProfilePicturesPreview new];
+                sample.tag = 7302;
+                sample.translatesAutoresizingMaskIntoConstraints = NO;
+                [cell.contentView addSubview:sample];
+                [NSLayoutConstraint activateConstraints:@[
+                    [sample.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor],
+                    [sample.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor],
+                    [sample.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor],
+                    [sample.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor]
+                ]];
+            }
+            [(ApolloProfilePicturesPreview *)[cell.contentView viewWithTag:7302] refresh];
+            return cell;
+        } onSelect:nil];
+    preview.height = ^CGFloat { return 214; };
 
     ApolloSettingsRow *userAvatars =
         [ApolloSettingsRow switchRowWithID:@"interface.userAvatars"
@@ -2143,6 +2174,13 @@ typedef NS_ENUM(NSInteger, Tag) {
     avatarShape.configure = ^(UITableViewCell *cell) {
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     };
+    return [ApolloSettingsSection sectionWithTitle:@"Preview"
+                                            footer:@"Show user profile pictures beside usernames in posts, comments, messages, inbox rows, and moderator lists. Shape also applies to profile headers and the profile tab icon."
+                                              rows:@[ preview, userAvatars, avatarShape ]];
+}
+
+- (ApolloSettingsSection *)buildInterfaceDisplayNavigationSection {
+    __weak typeof(self) weakSelf = self;
 
     // "Color Flairs" now rides Appearance → Flair (native injection) —
     // -flairColorsSwitchToggled: below stays as the shared toggle handler.
@@ -2228,8 +2266,8 @@ typedef NS_ENUM(NSInteger, Tag) {
         }];
 
     return [ApolloSettingsSection sectionWithTitle:@"Display & Navigation"
-                                            footer:@"User Profile Pictures adds avatars beside usernames in posts, comments, messages, inbox rows, and moderator lists. Return Button puts an arrow beside Back after a status bar tap scrolls to the top; tap it, the navigation bar, or the status bar again to go back to where you were. True Black Keyboard paints the keyboard background pure black in the chosen appearance (takes effect the next time the keyboard appears). Liquid Glass is required for the remaining options.\n\nIn Liquid Glass, navigation titles stay centered unless expanded actions need room. Collapse Navigation Actions hides the actions behind an ellipsis until tapped; scrolling collapses them again. With it off, actions stay expanded. Center Title Between Buttons centers the title in the space between the back button and actions. Both options default to off. Header Style: Soft is the iOS 26 default; Hard is the iOS 27 default. Hidden removes the header edge effect entirely."
-                                              rows:@[ userAvatars, avatarShape, scrollReturnButton, trueBlackKeyboard, collapseActions, centerBetween, scrollEdgeEffect ]];
+                                            footer:@"Return Button puts an arrow beside Back after a status bar tap scrolls to the top; tap it, the navigation bar, or the status bar again to go back to where you were. True Black Keyboard paints the keyboard background pure black in the chosen appearance (takes effect the next time the keyboard appears). Liquid Glass is required for the remaining options.\n\nIn Liquid Glass, navigation titles stay centered unless expanded actions need room. Collapse Navigation Actions hides the actions behind an ellipsis until tapped; scrolling collapses them again. With it off, actions stay expanded. Center Title Between Buttons centers the title in the space between the back button and actions. Both options default to off. Header Style: Soft is the iOS 26 default; Hard is the iOS 27 default. Hidden removes the header edge effect entirely."
+                                              rows:@[ scrollReturnButton, trueBlackKeyboard, collapseActions, centerBetween, scrollEdgeEffect ]];
 }
 
 // Display order differs from stored values; Blur is optional, while Hidden
@@ -2666,18 +2704,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
                                               rows:@[ proxyImgur, albumFallback ]];
 }
 
-- (NSString *)profileLayoutSummaryText {
-    if (!sShowDetailedProfiles) return @"Native (Apollo)";
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    [parts addObject:sProfileHeaderImmersive ? @"Immersive" : @"Compact"];
-    switch (sProfileAvatarStyle) {
-        case 1:  [parts addObject:@"Circle"]; break;
-        case 2:  [parts addObject:@"Square"]; break;
-        default: [parts addObject:@"Full"]; break;
-    }
-    return [parts componentsJoinedByString:@" · "];
-}
-
 - (NSString *)profilePictureShapeText {
     switch (sProfileAvatarStyle) {
         case 1:  return @"Circle";
@@ -2688,7 +2714,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
 
 - (void)presentProfilePictureShapePickerFromSourceView:(UIView *)sourceView {
     __weak typeof(self) weakSelf = self;
-    ApolloSettingsPresentPicker(self, sourceView, @"Profile Picture Shape",
+    ApolloSettingsPresentPicker(self, sourceView, nil,
                                 @[@"Full", @"Circle", @"Square"],
                                 sProfileAvatarStyle, ^(NSInteger pickedIndex) {
         if (pickedIndex < 0 || pickedIndex > 2) return;
@@ -2696,7 +2722,6 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
         [[NSUserDefaults standardUserDefaults] setInteger:pickedIndex
                                                    forKey:UDKeyProfileAvatarStyle];
         [weakSelf reloadRowWithID:@"interface.avatarShape"];
-        [weakSelf reloadRowWithID:@"feat.profileLayout"];
         [[NSNotificationCenter defaultCenter]
             postNotificationName:@"ApolloUserAvatarsToggleChangedNotification"
                           object:@"ApolloProfileAvatarStyleChanged"];
@@ -5370,6 +5395,21 @@ static NSDictionary *ApolloWidgetAccountCredentials(void) {
     [animator startAnimation];
 }
 
+@end
+
+@implementation ApolloUserProfilesSettingsViewController
+- (NSString *)apollo_screenTitle { return @"User Profiles"; }
+- (NSArray<ApolloSettingsSection *> *)buildForm {
+    return @[ [self buildUserProfilesLayoutSection],
+              [self buildUserProfilePicturesSection] ];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reloadRowWithID:@"profiles.layout"];
+    // Appearance can change Apollo's independent comment text-size slider
+    // while this controller remains on the navigation stack.
+    [self reloadRowWithID:@"profiles.picturesPreview"];
+}
 @end
 
 @implementation ApolloInterfaceSettingsViewController
