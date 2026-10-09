@@ -245,7 +245,7 @@ static UITableViewCell *ApolloPFToggleCell(UITableView *tableView,
 
 #pragma mark - Section header / footer views (self-sizing)
 
-static UIView *ApolloPFSectionHeaderView(NSString *title) {
+static UIView *ApolloPFSectionHeaderView(NSString *title, CGFloat topPadding) {
     UIView *container = [[UIView alloc] init];
     UILabel *label = [[UILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
@@ -256,9 +256,9 @@ static UIView *ApolloPFSectionHeaderView(NSString *title) {
     label.numberOfLines = 0;
     [container addSubview:label];
     [NSLayoutConstraint activateConstraints:@[
-        [label.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:20.0],
-        [label.trailingAnchor constraintLessThanOrEqualToAnchor:container.trailingAnchor constant:-20.0],
-        [label.topAnchor constraintEqualToAnchor:container.topAnchor constant:18.0],
+        [label.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:16.0],
+        [label.trailingAnchor constraintLessThanOrEqualToAnchor:container.trailingAnchor constant:-16.0],
+        [label.topAnchor constraintEqualToAnchor:container.topAnchor constant:topPadding],
         [label.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6.0],
     ]];
     return container;
@@ -286,6 +286,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 #pragma mark - Hook
 
 %hook _TtC6Apollo29SettingsFiltersViewController
+
 
 // origCount: our numberOfSectionsInTableView: returns native + kApolloPFExtraSections,
 // so subtracting it back yields the native count without needing %orig outside the
@@ -737,7 +738,11 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     if (section == native) title = @"Subreddit-Specific Filters";
     else if (section == native + 1) title = @"Filter Subreddits by Name";
     else title = @"Tagged Posts";
-    return ApolloPFSectionHeaderView(title);
+    CGFloat topPadding = 30.0;
+    if (section == native) {
+        if (@available(iOS 26.0, *)) topPadding += 20.4;
+    }
+    return ApolloPFSectionHeaderView(title, topPadding);
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
