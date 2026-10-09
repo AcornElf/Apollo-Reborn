@@ -98,20 +98,16 @@ static CGFloat ApolloCommentHeaderMinimumWidthWithoutFlair(
 ) {
     NSArray *children = header.children;
     CGFloat width = 0.0;
-    NSUInteger includedChildren = 0;
 
     for (id child in children) {
         if (child == flair) continue;
-
-        CGFloat childWidth = ApolloCommentHeaderNaturalWidth(child);
-        if (childWidth <= 0.0) continue;
-
-        width += childWidth;
-        includedChildren++;
+        width += ApolloCommentHeaderNaturalWidth(child);
     }
 
-    if (includedChildren > 1) {
-        width += header.spacing * (includedChildren - 1);
+    // Texture keeps the gap on both sides of a zero-width child (the fully
+    // shrunk flair and Apollo's flexGrow spacer), so count every gap.
+    if (children.count > 1) {
+        width += header.spacing * (children.count - 1);
     }
 
     return width;
