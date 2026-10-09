@@ -38,6 +38,7 @@
 #import "ApolloToast.h"
 #import "ApolloWebJSON.h"
 #import "ApolloWebSessionStore.h"
+#import "ApolloReduceRateLimiting.h"
 #import "ApolloWebSessionLoginViewController.h"
 #import "ApolloMessageDraftStore.h"
 #import "ApolloAccountCredentials.h"
@@ -3783,6 +3784,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyImgurAlbumFallbackProxies: @YES,
                                     UDKeyAutomaticUpdateChecks: @YES,
                                     UDKeyWebJSONEnabled: @NO,
+                                    UDKeyReduceRateLimiting: @NO,
+                                    UDKeyReduceRateLimitingOffered: @NO,
                                     UDKeyUseModernRedditChat: @NO,
                                     UDKeyUseModernRedditModmail: @NO,
                                     UDKeyNotificationBackendURL: @"",
@@ -4177,6 +4180,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // installed below — in the simulator the keychain is virtualized by those
     // hooks, so reading before they're in place returns nothing.
     sWebJSONEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyWebJSONEnabled];
+    sReduceRateLimiting = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyReduceRateLimiting];
     sPollsFeatureEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyPollsEnabled];
     sPollOptionAlignment = [[NSUserDefaults standardUserDefaults] integerForKey:UDKeyPollOptionAlignment];
     if (sPollOptionAlignment != ApolloPollOptionAlignmentCenter && sPollOptionAlignment != ApolloPollOptionAlignmentLeft) {
@@ -4200,7 +4204,11 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification *note) {
-        ApolloShowRedditRateLimitToast([note.userInfo[@"seconds"] doubleValue]);
+        NSTimeInterval seconds = [note.userInfo[@"seconds"] doubleValue];
+        // An account that signed in before the Reduce Rate Limiting offer
+        // existed gets it here, once, in place of the toast.
+        if (ApolloReduceRateLimitingOfferAtRateLimit(seconds)) return;
+        ApolloShowRedditRateLimitToast(seconds);
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil

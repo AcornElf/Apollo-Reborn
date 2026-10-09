@@ -310,6 +310,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloWebAuthViewController.m \
     $(SRC_DIR)/ApolloWebAuthPopupViewController.m \
     $(SRC_DIR)/ApolloWebJSON.m \
+    $(SRC_DIR)/ApolloReduceRateLimiting.m \
     $(SRC_DIR)/ApolloWebJSONWriteRepair.m \
     $(SRC_DIR)/ApolloWebJSONIdentity.xm \
     $(SRC_DIR)/ApolloWebSessionLoginViewController.m \
