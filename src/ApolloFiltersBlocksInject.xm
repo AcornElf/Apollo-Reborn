@@ -1219,6 +1219,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         tf.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
     __weak UIAlertController *weakAlert = alert;
+    __weak __typeof__(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
 
     UIAlertAction *addAction =
@@ -1243,7 +1244,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         }
 
         [tableView reloadData];
-        [self apollo_pfOpenDetailForSubreddit:sub fromTable:tableView];
+        [weakSelf apollo_pfOpenDetailForSubreddit:sub fromTable:tableView];
     }];
 
     addAction.enabled = NO;
@@ -1319,14 +1320,12 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 // Users toggle uses.
 %new
 - (UITableViewCell *)apollo_tfCellForTable:(UITableView *)tableView row:(NSInteger)row {
-    UITableViewCell *cell;
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     if (row == ApolloTFRowOverrides) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         cell.textLabel.text = @"Customize by Subreddit";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     } else {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *sw = [[UISwitch alloc] init];
         switch (row) {
