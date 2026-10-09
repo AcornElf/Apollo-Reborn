@@ -1253,7 +1253,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
     UITextField *field = alert.textFields.firstObject;
     [field addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
-        NSString *text = field.text ?: @"";
+        NSString *text = ((UITextField *)action.sender).text ?: @"";
         addAction.enabled =
             [text stringByTrimmingCharactersInSet:
                 [NSCharacterSet whitespaceAndNewlineCharacterSet]].length > 0;
@@ -1303,7 +1303,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
     UITextField *field = alert.textFields.firstObject;
     [field addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
-        NSString *text = field.text ?: @"";
+        NSString *text = ((UITextField *)action.sender).text ?: @"";
         addAction.enabled =
             [text stringByTrimmingCharactersInSet:
                 [NSCharacterSet whitespaceAndNewlineCharacterSet]].length > 0;

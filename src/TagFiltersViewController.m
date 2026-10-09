@@ -222,7 +222,7 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = self.overridesOnly ? @"Subreddit Overrides" : @"Tag Filters";
+    self.title = self.overridesOnly ? @"Customize by Subreddit" : @"Tag Filters";
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -232,10 +232,15 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 
 
 
-// overridesOnly maps the visible single section onto TagFiltersSectionOverrides;
-// the full screen passes sections through unchanged.
+// In overrides-only mode, an introductory section appears when the master
+// switch is disabled; the remaining section contains subreddit overrides.
 - (NSInteger)modelSectionFor:(NSInteger)section {
-    return self.overridesOnly ? TagFiltersSectionOverrides : section;
+    if (self.overridesOnly) {
+        return (!sTagFilterEnabled && section == 0)
+            ? -1
+            : TagFiltersSectionOverrides;
+    }
+    return section;
 }
 
 #pragma mark - Helpers
@@ -252,7 +257,9 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 #pragma mark - Section / row counts
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return self.overridesOnly ? 1 : TagFiltersSectionCount;
+    return self.overridesOnly
+        ? (sTagFilterEnabled ? 1 : 2)
+        : TagFiltersSectionCount;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -264,7 +271,7 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     section = [self modelSectionFor:section];
-    if (self.overridesOnly) return nil; // the nav title already says it
+    if (self.overridesOnly) return nil;
     if (section == TagFiltersSectionGeneral) return @"General";
     if (section == TagFiltersSectionOverrides) return @"Per-Subreddit Overrides";
     return nil;
@@ -281,9 +288,57 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
     return nil;
 }
 
+- (CGFloat)tableView:(UITableView *)tableView
+    heightForFooterInSection:(NSInteger)section {
+    if (self.overridesOnly && !sTagFilterEnabled && section == 0) {
+        NSString *message =
+            @"Enable Cover Tagged Posts to apply customizations.";
+
+        UIFont *font =
+            ApolloSettingsFont(UIFontTextStyleBody, tableView.traitCollection);
+
+        CGFloat width = MAX(1.0, CGRectGetWidth(tableView.bounds) - 40.0);
+
+        CGRect bounds = [message boundingRectWithSize:
+            CGSizeMake(width, CGFLOAT_MAX)
+            options:NSStringDrawingUsesLineFragmentOrigin |
+                    NSStringDrawingUsesFontLeading
+            attributes:@{NSFontAttributeName: font}
+            context:nil];
+
+        return ceil(bounds.size.height);
+    }
+
+    return UITableViewAutomaticDimension;
+}
+
 - (UIView *)tableView:(UITableView *)tableView
     viewForFooterInSection:(NSInteger)section {
     NSInteger modelSection = [self modelSectionFor:section];
+    if (self.overridesOnly && !sTagFilterEnabled && section == 0) {
+        UIView *container = [[UIView alloc] init];
+        UILabel *label = [[UILabel alloc] init];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        label.text = @"Enable Cover Tagged Posts to apply customizations.";
+        label.font =
+            ApolloSettingsFont(UIFontTextStyleBody, label.traitCollection);
+        label.adjustsFontForContentSizeCategory = NO;
+        label.textColor = [UIColor secondaryLabelColor];
+        label.numberOfLines = 0;
+
+        [container addSubview:label];
+        [NSLayoutConstraint activateConstraints:@[
+            [label.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:20.0],
+            [label.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-20.0],
+            [label.topAnchor constraintEqualToAnchor:container.topAnchor
+                                             constant:0.0],
+            [label.bottomAnchor constraintEqualToAnchor:container.bottomAnchor
+                                                constant:0.0],
+        ]];
+
+        return container;
+    }
+
     if (modelSection != TagFiltersSectionOverrides) return nil;
 
     UIView *container = [[UIView alloc] init];
@@ -366,21 +421,24 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 
     BOOL nsfw = [o[@"nsfw"] isKindOfClass:[NSNumber class]]
         ? [o[@"nsfw"] boolValue]
-        : (sTagFilterEnabled && sTagFilterNSFW);
+        : sTagFilterNSFW;
 
     BOOL spoiler = [o[@"spoiler"] isKindOfClass:[NSNumber class]]
         ? [o[@"spoiler"] boolValue]
-        : (sTagFilterEnabled && sTagFilterSpoiler);
+        : sTagFilterSpoiler;
 
+    NSString *summary;
     if (nsfw == spoiler) {
-        return nsfw
-            ? @"Cover NSFW and Spoilers"
-            : @"Show NSFW and Spoilers";
+        summary = nsfw
+            ? @"Cover NSFW and spoilers"
+            : @"Show NSFW and spoilers";
+    } else {
+        summary = [NSString stringWithFormat:@"%@ NSFW · %@ spoilers",
+            nsfw ? @"Cover" : @"Show",
+            spoiler ? @"Cover" : @"Show"];
     }
 
-    return [NSString stringWithFormat:@"%@ NSFW · %@ Spoilers",
-        nsfw ? @"Cover" : @"Show",
-        spoiler ? @"Cover" : @"Show"];
+    return summary;
 }
 
 #pragma mark - Switch handlers
@@ -481,7 +539,7 @@ static NSString *const TagFilterRowRemove = @"tag-filter.remove";
 
     UITextField *field = alert.textFields.firstObject;
     [field addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
-        NSString *text = field.text ?: @"";
+        NSString *text = ((UITextField *)action.sender).text ?: @"";
         addAction.enabled =
             [text stringByTrimmingCharactersInSet:
                 [NSCharacterSet whitespaceAndNewlineCharacterSet]].length > 0;
