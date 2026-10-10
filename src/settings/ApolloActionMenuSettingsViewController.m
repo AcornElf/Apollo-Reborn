@@ -231,6 +231,7 @@ static const CGFloat kApolloAMSheetTextX = 68.0;
     _table.separatorColor = self.separatorColor ?: UIColor.separatorColor;
     _table.separatorInset = UIEdgeInsetsMake(0.0, kApolloAMSheetTextX, 0.0, 0.0);
     _table.rowHeight = kApolloAMSheetRowHeight;
+    _table.showsVerticalScrollIndicator = NO;
     _table.tableFooterView = [UIView new];
     _table.alwaysBounceVertical = NO;
     [_card addSubview:_table];
@@ -356,6 +357,10 @@ static const CGFloat kApolloAMSheetTextX = 68.0;
     cell.accessoryType = (self.chevronsOnEveryRow || ApolloAMItemIsSubmitPost(row.item))
         ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
     cell.contentView.alpha = row.available ? 1.0 : kApolloAMPreviewUnavailableAlpha;
+    // Keep separators between actions, but not beneath the final action.
+    cell.separatorInset = indexPath.row == (NSInteger)self.rows.count - 1
+        ? UIEdgeInsetsMake(0.0, CGRectGetWidth(tableView.bounds), 0.0, 0.0)
+        : UIEdgeInsetsMake(0.0, kApolloAMSheetTextX, 0.0, 0.0);
     cell.accessibilityLabel = row.available ? row.item.title
         : [NSString stringWithFormat:@"%@, shown when relevant", row.item.title];
     return cell;
@@ -393,12 +398,41 @@ static NSArray<ApolloAMPreviewRow *> *ApolloAMLegacyPreviewRows(ApolloActionMenu
 @property (nonatomic, strong, readonly) UIImageView *grip;
 @property (nonatomic) BOOL showsGrip;
 @property (nonatomic) BOOL reservesGripSpace;
+- (CGFloat)textBlockHeightForWidth:(CGFloat)width;
 @end
+
+// Use the same subtitle summary for display and row-height measurement.
+static NSString *ApolloAMHiddenSummary(NSArray<NSString *> *names, NSUInteger contextCount) {
+    if (names.count == 0) return nil;
+    if (names.count == contextCount && contextCount > 1) return @"Hidden everywhere";
+    if (names.count == 1) return [@"Hidden in " stringByAppendingString:names[0]];
+    NSString *leading = [[names subarrayWithRange:NSMakeRange(0, names.count - 1)] componentsJoinedByString:@", "];
+    return [NSString stringWithFormat:@"Hidden in %@ and %@", leading, names.lastObject];
+}
 
 static const CGFloat kApolloAMCheckmarkWidth = 22.0;
 static const CGFloat kApolloAMGripWidth = 24.0;
 static const CGFloat kApolloAMAccessoryGap = 14.0;
 static const CGFloat kApolloAMAccessoryHeight = 28.0;
+
+// Measure text directly: UIKit's subtitle-cell label can report a single-line
+// fitting size before its native layout has settled.
+static CGFloat ApolloAMWrappedTextHeight(NSString *text, UIFont *font, CGFloat width) {
+    if (!text.length || !font || width <= 0.0) return 0.0;
+    NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
+    paragraph.lineBreakMode = NSLineBreakByWordWrapping;
+    paragraph.lineBreakStrategy = NSLineBreakStrategyNone;
+    CGRect rect = [text boundingRectWithSize:CGSizeMake(width, CGFLOAT_MAX)
+        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+        attributes:@{NSFontAttributeName: font, NSParagraphStyleAttributeName: paragraph}
+        context:nil];
+    return ceil(MAX(font.lineHeight, CGRectGetHeight(rect)));
+}
+
+static CGFloat ApolloAMWrappedLabelHeight(UILabel *label, CGFloat width) {
+    return ApolloAMWrappedTextHeight(label.text, label.font, width);
+}
+
 
 @implementation ApolloAMItemCell {
     UIView *_accessory;
@@ -425,8 +459,10 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     _reservesGripSpace = NO;
     [self layoutAccessory];
     self.imageView.contentMode = UIViewContentModeCenter;
-    self.textLabel.numberOfLines = 1;
-    self.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.textLabel.numberOfLines = 0;
+    self.textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    self.textLabel.lineBreakStrategy = NSLineBreakStrategyNone;
+    self.detailTextLabel.lineBreakStrategy = NSLineBreakStrategyNone;
     return self;
 }
 
@@ -455,23 +491,37 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     [self setNeedsLayout];
 }
 
+// Shared by the offscreen sizing cell and displayed rows.
+- (CGFloat)textBlockHeightForWidth:(CGFloat)width {
+    if (width <= 0.0) return 0.0;
+    CGFloat titleHeight = ApolloAMWrappedLabelHeight(self.textLabel, width);
+    CGFloat detailHeight = self.detailTextLabel.text.length > 0
+        ? ApolloAMWrappedLabelHeight(self.detailTextLabel, width) : 0.0;
+    return titleHeight + (detailHeight > 0.0 ? 2.0 + detailHeight : 0.0);
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect content = self.contentView.bounds;
-    // Apollo's option-* art is a mixed bag of shapes; a fixed 28pt box keeps
-    // every title on the same column.
+    // A fixed icon box aligns titles regardless of the source art's shape.
     CGRect imageFrame = self.imageView.frame;
     imageFrame.size = CGSizeMake(28.0, 28.0);
     imageFrame.origin.y = round((CGRectGetHeight(content) - 28.0) / 2.0);
     self.imageView.frame = imageFrame;
-    // UIKit already keeps the content area clear of the accessory view.
-    CGRect textFrame = self.textLabel.frame;
-    textFrame.origin.x = CGRectGetMaxX(imageFrame) + 12.0;
-    textFrame.size.width = MAX(0.0, CGRectGetMaxX(content) - 8.0 - CGRectGetMinX(textFrame));
-    self.textLabel.frame = textFrame;
-    CGRect detailFrame = self.detailTextLabel.frame;
-    detailFrame.origin.x = textFrame.origin.x;
-    self.detailTextLabel.frame = detailFrame;
+    CGFloat textX = CGRectGetMaxX(imageFrame) + 12.0;
+    CGFloat textWidth = MAX(0.0, CGRectGetMaxX(content) - 8.0 - textX);
+    CGFloat blockHeight = [self textBlockHeightForWidth:textWidth];
+    CGFloat titleHeight = textWidth > 0.0
+        ? ApolloAMWrappedLabelHeight(self.textLabel, textWidth) : 0.0;
+    CGFloat textY = (CGRectGetHeight(content) - blockHeight) / 2.0;
+    self.textLabel.frame = CGRectMake(textX, textY, textWidth, titleHeight);
+    self.detailTextLabel.frame = CGRectMake(textX, textY + titleHeight + 2.0,
+        textWidth, MAX(0.0, blockHeight - titleHeight - 2.0));
+
+    if (self.window && !self.hidden) {
+
+    }
+
     // The theme pass tints every image view in the cell with the accent; the
     // grip is chrome, not content (the checkmark IS accent-coloured).
     self.grip.tintColor = UIColor.tertiaryLabelColor;
@@ -544,10 +594,22 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self.view layoutIfNeeded];
+    // Height cache keys include width and typography. Preserve cached
+    // measurements between appearances instead of measuring every item again.
+    for (ApolloActionMenuItem *item in [self editableItems]) [self itemRowHeightForItem:item];
+    [self.tableView reloadData];
+    [self.tableView layoutIfNeeded];
     // A real ••• opened since (recording what it offered) changes the dimming;
     // the glass menu is built on tap anyway, this keeps the button state right.
     [self refreshPreviewButton];
     [self refreshResetControl];
+}
+
+// Resolve item estimates through the same precomputed height provider, so
+// offscreen rows do not start at a one-line estimate during the push.
+- (CGFloat)tableView:(UITableView *)tableView estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self tableView:tableView heightForRowAtIndexPath:indexPath];
 }
 
 #pragma mark - The ••• preview
@@ -820,24 +882,65 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
 // its real text, never assumed to fit one line, and never read off the
 // on-screen cell, which doesn't exist for a row that isn't showing.
 - (CGFloat)itemRowHeightForItem:(ApolloActionMenuItem *)item {
+    if (!self.editingAllMenus)
+        return [self itemRowHeightForItem:item measurementSubtitle:nil];
+
+    // Measure the current subtitle rather than reserving the maximum
+    // height across every possible hidden-state combination.
+    NSArray<NSString *> *contexts = [self contextsForItem:item.itemID];
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+
+    for (NSString *context in contexts) {
+        if (ApolloActionMenuIsItemHidden(context, item.itemID))
+            [names addObject:ApolloActionMenuContextTitle(context)];
+    }
+
+    NSString *subtitle = ApolloAMHiddenSummary(names, contexts.count) ?: @"";
+
+    CGFloat height = [self itemRowHeightForItem:item
+                            measurementSubtitle:subtitle];
+
+    if (height == UITableViewAutomaticDimension)
+        return height;
+
+    // Reserve a single-line subtitle even when none is visible.
+    CGFloat baseline = [self itemRowHeightForItem:item
+                              measurementSubtitle:@"Hidden"];
+
+    if (baseline == UITableViewAutomaticDimension)
+        return height;
+
+    return MAX(62.0, MAX(baseline, height));
+}
+
+- (CGFloat)itemRowHeightForItem:(ApolloActionMenuItem *)item measurementSubtitle:(NSString *)measurementSubtitle {
     UITableView *table = self.tableView;
     CGFloat width = CGRectGetWidth(table.bounds) - table.layoutMargins.left - table.layoutMargins.right;
-    UITableViewCell *sample = table.visibleCells.firstObject;
-    if (sample && sample.superview) width = CGRectGetWidth([sample.superview convertRect:sample.frame toView:table]);
+
     if (width <= 0.0) return UITableViewAutomaticDimension;
 
     if (!self.measuringItemCell) {
         self.measuringItemCell = [[ApolloAMItemCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        // Inherit the table's Dynamic Type and other traits while remaining
+        // outside its visible rows. A detached cell uses default typography.
+        self.measuringItemCell.hidden = YES;
+        [table addSubview:self.measuringItemCell];
     }
     ApolloAMItemCell *cell = self.measuringItemCell;
     [self configureItemCell:cell forItem:item];
+    if (measurementSubtitle != nil) cell.detailTextLabel.text = measurementSubtitle;
     // The fonts the table's typography pass gives every row, from scratch so
     // a text size change since the last measurement is picked up.
-    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
-    cell.detailTextLabel.font = [UIFont systemFontOfSize:12.0];
-    ApolloSettingsApplyCellTypography(cell);
+    UIFont *measurementTitleFont =
+        ApolloSettingsFont(UIFontTextStyleBody, table.traitCollection);
+    UIFont *measurementSubtitleFont =
+        ApolloSettingsFont(UIFontTextStyleFootnote, table.traitCollection);
+    cell.textLabel.font = measurementTitleFont;
+    cell.detailTextLabel.font = measurementSubtitleFont;
 
-    NSString *key = [NSString stringWithFormat:@"%@|%d|%.0f|%.0f|%.1f|%.1f",
+
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%d|%.0f|%.3f|%.1f|%.1f",
+                     item.itemID,
                      cell.detailTextLabel.text ?: @"",
                      cell.showsGrip || cell.reservesGripSpace,
                      cell.imageView.image.size.width,
@@ -848,12 +951,50 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
     if (cached) return cached.doubleValue;
 
     cell.bounds = CGRectMake(0.0, 0.0, width, 100.0);
+    // Resolve native icon/accessory placement offscreen before measuring text.
+    // This preserves UIKit's icon column without waiting for displayed rows.
     [cell setNeedsLayout];
     [cell layoutIfNeeded];
-    CGFloat height = ceil([cell systemLayoutSizeFittingSize:CGSizeMake(width, UILayoutFittingCompressedSize.height)
-                                  withHorizontalFittingPriority:UILayoutPriorityRequired
-                                        verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
-    if (height <= 0.0) return UITableViewAutomaticDimension;
+
+    // Resolve Apollo's actual text size after native offscreen layout.
+    // These assignments affect only the hidden measuring cell.
+    cell.textLabel.font = measurementTitleFont;
+    cell.detailTextLabel.font = measurementSubtitleFont;
+
+    CGFloat textWidth = CGRectGetWidth(cell.textLabel.frame);
+    if (textWidth <= 0.0) return UITableViewAutomaticDimension;
+    // Use UIKit's original fitting height as the baseline, preserving its
+    // native vertical spacing and subtitle sizing.
+    CGFloat nativeHeight = ceil(
+        [cell systemLayoutSizeFittingSize:
+            CGSizeMake(width, UILayoutFittingCompressedSize.height)
+            withHorizontalFittingPriority:UILayoutPriorityRequired
+                  verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+
+    if (nativeHeight <= 0.0) return UITableViewAutomaticDimension;
+
+    // UIKit's subtitle cell measures the title as a single line.
+    // Add only the height required by additional wrapped title lines.
+    CGFloat titleHeight = ApolloAMWrappedTextHeight(
+        cell.textLabel.text, measurementTitleFont, textWidth);
+
+    // Include the complete subtitle, including any wrapped lines.
+    // All Menus reserves one subtitle line and grows for additional lines.
+    CGFloat subtitleHeight = 0.0;
+    if (cell.detailTextLabel.text.length > 0) {
+        CGFloat subtitleWidth = textWidth;
+        subtitleHeight = ApolloAMWrappedTextHeight(
+            cell.detailTextLabel.text, measurementSubtitleFont, subtitleWidth);
+    }
+
+    CGFloat textBlockHeight = titleHeight +
+        (subtitleHeight > 0.0 ? 2.0 + subtitleHeight : 0.0);
+
+    CGFloat height = ceil(MAX(
+        nativeHeight,
+        textBlockHeight + 12.0
+    ));
+
     if (!self.itemRowHeights) self.itemRowHeights = [NSMutableDictionary dictionary];
     self.itemRowHeights[key] = @(height);
     return height;
@@ -887,16 +1028,7 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
         for (NSString *context in contexts) {
             if (ApolloActionMenuIsItemHidden(context, item.itemID)) [names addObject:ApolloActionMenuContextTitle(context)];
         }
-        if (names.count == 0) {
-            cell.detailTextLabel.text = nil;
-        } else if (names.count == contexts.count && contexts.count > 1) {
-            cell.detailTextLabel.text = @"Hidden everywhere";
-        } else if (names.count == 1) {
-            cell.detailTextLabel.text = [@"Hidden in " stringByAppendingString:names[0]];
-        } else {
-            NSString *leading = [[names subarrayWithRange:NSMakeRange(0, names.count - 1)] componentsJoinedByString:@", "];
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"Hidden in %@ and %@", leading, names.lastObject];
-        }
+        cell.detailTextLabel.text = ApolloAMHiddenSummary(names, contexts.count);
     }
     cell.detailTextLabel.numberOfLines = 0;
     cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
@@ -948,10 +1080,15 @@ static const CGFloat kApolloAMAccessoryHeight = 28.0;
             [self styleItemCell:(ApolloAMItemCell *)cell forItem:item hidden:nowHidden];
         }];
     }
-    // The Reset control's enabled state follows every change. Its reload is also
-    // the updates pass that gives an All Menus row whose subtitle just grew
-    // or shrank ("Hidden in …") its new height, so no row is reloaded under
-    // the finger.
+    // All Menus rows may grow or shrink when their subtitles change.
+    // Update their heights without replacing the tapped cell.
+    if (self.editingAllMenus) {
+        // The subtitle may now occupy a different number of lines.
+        // Recalculate heights without replacing the tapped cell.
+        [self.itemRowHeights removeAllObjects];
+        [self.tableView beginUpdates];
+        [self.tableView endUpdates];
+    }
     [self refreshResetControl];
     [self refreshPreviewButton];
 }
@@ -1223,37 +1360,42 @@ static NSString *ApolloAMMenuSummary(NSString *context) {
     }];
 }
 
-// A menu row's height with its real summary as the subtitle (none for a menu
-// at Apollo's default), measured once per summary, width and font size; the
-// summary can wrap at large text sizes.
-- (CGFloat)menuRowHeightWithSummary:(NSString *)summary {
+// Measure each menu row using its actual title and summary.
+// Cache by content, width and Dynamic Type size.
+- (CGFloat)menuRowHeightWithTitle:(NSString *)title summary:(NSString *)summary {
     UITableView *table = self.tableView;
     CGFloat width = CGRectGetWidth(table.bounds);
     if (width <= 0.0) return UITableViewAutomaticDimension;
 
-    if (!_measuringMenuCell) {
-        _measuringMenuCell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
-        _measuringMenuCell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    }
-    UITableViewCell *cell = _measuringMenuCell;
-    cell.textLabel.text = @"Post with Comments";
-    cell.detailTextLabel.text = summary;
-    cell.detailTextLabel.numberOfLines = 0;
-    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
-    cell.detailTextLabel.font = [UIFont systemFontOfSize:12.0];
-    ApolloSettingsApplyCellTypography(cell);
-
-    NSString *key = [NSString stringWithFormat:@"%@|%.0f|%.1f|%.1f", summary ?: @"", width,
-                     cell.textLabel.font.pointSize, cell.detailTextLabel.font.pointSize];
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%.0f|%@",
+                     title, summary ?: @"", width,
+                     table.traitCollection.preferredContentSizeCategory ?: @""];
     NSNumber *cached = _menuRowHeights[key];
     if (cached) return cached.doubleValue;
 
+    if (!_measuringMenuCell) {
+        _measuringMenuCell =
+            [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                   reuseIdentifier:nil];
+        _measuringMenuCell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    }
+
+    UITableViewCell *cell = _measuringMenuCell;
+    cell.textLabel.text = title;
+    cell.detailTextLabel.text = summary;
+    cell.detailTextLabel.numberOfLines = 0;
     cell.bounds = CGRectMake(0.0, 0.0, width, 100.0);
+    ApolloSettingsApplyCellTypography(cell);
+
     [cell setNeedsLayout];
     [cell layoutIfNeeded];
-    CGFloat height = ceil([cell systemLayoutSizeFittingSize:CGSizeMake(width, UILayoutFittingCompressedSize.height)
-                                  withHorizontalFittingPriority:UILayoutPriorityRequired
-                                        verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+
+    CGFloat height =
+        ceil([cell systemLayoutSizeFittingSize:
+                  CGSizeMake(width, UILayoutFittingCompressedSize.height)
+              withHorizontalFittingPriority:UILayoutPriorityRequired
+                    verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height);
+
     if (height <= 0.0) return UITableViewAutomaticDimension;
     if (!_menuRowHeights) _menuRowHeights = [NSMutableDictionary dictionary];
     _menuRowHeights[key] = @(height);
@@ -1279,7 +1421,7 @@ static NSString *ApolloAMMenuSummary(NSString *context) {
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return UITableViewAutomaticDimension;
 
-        return [strongSelf menuRowHeightWithSummary:ApolloAMMenuSummary(context)];
+        return [strongSelf menuRowHeightWithTitle:title summary:ApolloAMMenuSummary(context)];
     };
 
     return row;
