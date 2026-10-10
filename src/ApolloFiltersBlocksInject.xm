@@ -168,17 +168,14 @@ static UIView *ApolloPFNativeDisclosureAccessoryView(UITableViewCell *cell) {
 static void ApolloPFSetToggleChevron(UITableViewCell *cell,
                                      BOOL expanded,
                                      BOOL enabled) {
-    if (!enabled) {
-        cell.accessoryView = nil;
-        cell.accessoryType = UITableViewCellAccessoryNone;
-        return;
-    }
+    // At count zero, remove the accessory so the count aligns to the
+    // trailing edge. Otherwise, retain the native disclosure indicator.
+    cell.accessoryView = nil;
+    cell.accessoryType = enabled
+        ? UITableViewCellAccessoryDisclosureIndicator
+        : UITableViewCellAccessoryNone;
 
-    if (cell.accessoryType != UITableViewCellAccessoryDisclosureIndicator ||
-        cell.accessoryView != nil) {
-        cell.accessoryView = nil;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    }
+    if (!enabled) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [cell setNeedsLayout];
@@ -187,6 +184,7 @@ static void ApolloPFSetToggleChevron(UITableViewCell *cell,
         UIView *accessory = ApolloPFNativeDisclosureAccessoryView(cell);
         if (!accessory) return;
 
+        accessory.alpha = 1.0;
         accessory.transform = expanded
             ? CGAffineTransformMakeRotation((CGFloat)M_PI_2)
             : CGAffineTransformIdentity;
@@ -219,11 +217,11 @@ static UITableViewCell *ApolloPFToggleCell(UITableView *tableView,
     cell.selectedBackgroundView = selectedBackground;
 
     cell.textLabel.text =
-        [NSString stringWithFormat:@"%@ %@", expanded ? @"Hide" : @"Show", noun];
-    cell.textLabel.textColor = UIColor.secondaryLabelColor;
+        noun;
+    cell.textLabel.textColor = UIColor.labelColor;
 
     cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long)count];
-    cell.detailTextLabel.textColor = UIColor.labelColor;
+    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
 
     BOOL enabled = count > 0;
     cell.selectionStyle =
@@ -233,12 +231,11 @@ static UITableViewCell *ApolloPFToggleCell(UITableView *tableView,
     ApolloPFSetToggleChevron(cell, expanded, enabled);
     ApolloPFApplyCellTypography(cell);
 
-    // Give Show/Hide controls a little hierarchy over the values beneath them
-    // without making them read like section headings.
+    // The toggle row doubles as the section heading.
     UIFont *toggleFont = cell.textLabel.font;
     cell.textLabel.font =
         [UIFont systemFontOfSize:toggleFont.pointSize
-                         weight:UIFontWeightMedium];
+                         weight:UIFontWeightSemibold];
 
     return cell;
 }
@@ -247,6 +244,14 @@ static UITableViewCell *ApolloPFToggleCell(UITableView *tableView,
 
 static UIView *ApolloPFSectionHeaderView(NSString *title, CGFloat topPadding) {
     UIView *container = [[UIView alloc] init];
+
+    // Collapsible sections already display their headings in the first row.
+    // Preserve the section spacing without creating an empty text label.
+    if (title.length == 0) {
+        [container.heightAnchor constraintEqualToConstant:topPadding + 6.0].active = YES;
+        return container;
+    }
+
     UILabel *label = [[UILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
     label.text = title.uppercaseString;
@@ -256,8 +261,8 @@ static UIView *ApolloPFSectionHeaderView(NSString *title, CGFloat topPadding) {
     label.numberOfLines = 0;
     [container addSubview:label];
     [NSLayoutConstraint activateConstraints:@[
-        [label.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:16.0],
-        [label.trailingAnchor constraintLessThanOrEqualToAnchor:container.trailingAnchor constant:-16.0],
+        [label.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:20.0],
+        [label.trailingAnchor constraintLessThanOrEqualToAnchor:container.trailingAnchor constant:-20.0],
         [label.topAnchor constraintEqualToAnchor:container.topAnchor constant:topPadding],
         [label.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6.0],
     ]];
@@ -283,14 +288,80 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return container;
 }
 
+
+// Measure the native Blocked Users footer before its UILabel receives a frame.
+// Apollo positions the label manually, with 16pt horizontal and 6pt top insets.
+static CGFloat ApolloPFNativeFooterOverflow(UITableView *tableView) {
+    for (UIView *view in tableView.subviews) {
+        if (![NSStringFromClass(view.class)
+                containsString:@"ApolloHeaderFooterView"]) {
+            continue;
+        }
+
+        CGFloat footerWidth = CGRectGetWidth(view.bounds);
+        CGFloat footerHeight = CGRectGetHeight(view.bounds);
+        if (footerWidth <= 32.0 || footerHeight <= 0.0) continue;
+
+        NSMutableArray<UIView *> *pending =
+            [NSMutableArray arrayWithObject:view];
+
+        while (pending.count) {
+            UIView *child = pending.lastObject;
+            [pending removeLastObject];
+
+            if ([child isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)child;
+
+                if ([label.text containsString:
+                        @"Exclude posts and communication"] &&
+                    label.font) {
+                    CGFloat textWidth = footerWidth - 32.0;
+
+                    CGRect bounds = [label.text boundingRectWithSize:
+                        CGSizeMake(textWidth, CGFLOAT_MAX)
+                        options:NSStringDrawingUsesLineFragmentOrigin |
+                                NSStringDrawingUsesFontLeading
+                        attributes:@{NSFontAttributeName: label.font}
+                        context:nil];
+
+                    CGFloat scale = UIScreen.mainScreen.scale;
+                    CGFloat textHeight =
+                        ceil(CGRectGetHeight(bounds) * scale) / scale;
+
+                    CGFloat overflow =
+                        MAX(0.0, 6.0 + textHeight - footerHeight);
+
+                    return overflow;
+                }
+            }
+
+            [pending addObjectsFromArray:child.subviews];
+        }
+    }
+
+    return 0.0;
+}
+
+// Shared footer text for the three custom sections.
+static NSString *ApolloPFCustomFooterText(NSInteger index) {
+    switch (index) {
+        case 0:
+            return @"Exclude posts in these subreddits when their title, link, or post flair matches a filter. Applies on this device.";
+        case 1:
+            return @"Exclude subreddits containing these words or phrases in their name (e.g. 'circlejerk' hides r/carscirclejerk). Applies to feeds and search on this device.";
+        default:
+            return @"Cover the title and thumbnail of NSFW or spoiler posts. Tap to reveal.";
+    }
+}
+
 #pragma mark - Hook
+
+
+
 
 %hook _TtC6Apollo29SettingsFiltersViewController
 
-
-// origCount: our numberOfSectionsInTableView: returns native + kApolloPFExtraSections,
-// so subtracting it back yields the native count without needing %orig outside the
-// numberOfSections hook.
+// This helper is added by the tweak, not implemented by Apollo.
 %new
 - (NSInteger)apollo_pfNativeSectionCount:(UITableView *)tableView {
     return [self numberOfSectionsInTableView:tableView] - kApolloPFExtraSections;
@@ -339,8 +410,8 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC
             );
 
-            // With no keywords, only Add Keyword is visible.
-            if (n <= 1) return 1;
+            // With no keywords, the toggle and Add Keyword rows remain visible.
+            if (n <= 1) return 2;
 
             // Otherwise: toggle + Add Keyword stay visible while collapsed.
             return [objc_getAssociatedObject(self, kApolloPFKeywordsExpandedKey) boolValue]
@@ -370,8 +441,8 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC
             );
 
-            // With no filtered subreddits, only Add Subreddit is visible.
-            if (n <= 1) return 1;
+            // With no filtered subreddits, the toggle and Add Subreddit rows remain visible.
+            if (n <= 1) return 2;
 
             // Otherwise: toggle + Add Subreddit stay visible while collapsed.
             return [objc_getAssociatedObject(self, kApolloPFSubredditsExpandedKey) boolValue]
@@ -402,8 +473,8 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC
             );
 
-            // With no blocked users, only Add User is visible.
-            if (n <= 1) return 1;
+            // With no blocked users, the toggle and Add User rows remain visible.
+            if (n <= 1) return 2;
 
             // Otherwise: toggle + Add User stay visible while collapsed.
             return [objc_getAssociatedObject(self, kApolloPFBlockedExpandedKey) boolValue]
@@ -421,8 +492,8 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
                 kApolloPFSpecificSubredditsExpandedKey
             ) boolValue];
 
-        // With no subreddit-specific filters, only Add Subreddit Filter is visible.
-        if (count == 0) return 1;
+        // With no subreddit-specific filters, the toggle and Add rows remain visible.
+        if (count == 0) return 2;
 
         // Otherwise: toggle + Add Subreddit Filter stay visible while collapsed.
         return expanded ? (count + 2) : 2;
@@ -432,8 +503,8 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         BOOL expanded =
             [objc_getAssociatedObject(self, kApolloPFNameFiltersExpandedKey) boolValue];
 
-        // With no filter phrases, only Add Filter Phrase is visible.
-        if (count == 0) return 1;
+        // With no filter phrases, the toggle and Add Filter Phrase rows remain visible.
+        if (count == 0) return 2;
 
         // Otherwise: toggle + Add Filter Phrase stay visible while collapsed.
         return expanded ? (count + 2) : 2;
@@ -454,6 +525,10 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // No keywords: displayed row 0 is Apollo's native Add Keyword row.
             if (nativeCount <= 1) {
+                if (indexPath.row == 0) {
+                    return [self apollo_pfKeywordsToggleCellForTable:tableView
+                                                    showingExpanded:NO];
+                }
                 return %orig(tableView,
                     [NSIndexPath indexPathForRow:0 inSection:indexPath.section]);
             }
@@ -506,6 +581,10 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // No filtered subreddits: displayed row 0 is Apollo's native Add Subreddit row.
             if (nativeCount <= 1) {
+                if (indexPath.row == 0) {
+                    return [self apollo_pfSubredditsToggleCellForTable:tableView
+                                                    showingExpanded:NO];
+                }
                 return %orig(tableView,
                     [NSIndexPath indexPathForRow:0 inSection:indexPath.section]);
             }
@@ -561,6 +640,10 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // No blocked users: displayed row 0 is Apollo's native Add User row.
             if (nativeCount <= 1) {
+                if (indexPath.row == 0) {
+                    return [self apollo_pfBlockedToggleCellForTable:tableView
+                                                    showingExpanded:NO];
+                }
                 return %orig(tableView,
                     [NSIndexPath indexPathForRow:0 inSection:indexPath.section]);
             }
@@ -618,7 +701,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         NSArray<NSString *> *subs =
             [ApolloPostFilterStore allSubreddits];
 
-        if (subs.count > 0 && indexPath.row == 0) {
+        if (indexPath.row == 0) {
             return [self apollo_pfSpecificSubredditsToggleCellForTable:tableView
                                                       showingExpanded:expanded];
         }
@@ -648,7 +731,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
         NSArray<NSString *> *names = [ApolloPostFilterStore nameSubstrings];
 
-        if (names.count > 0 && indexPath.row == 0) {
+        if (indexPath.row == 0) {
             return [self apollo_pfNameFiltersToggleCellForTable:tableView
                                                showingExpanded:expanded];
         }
@@ -729,20 +812,55 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
     NSInteger native = [self apollo_pfNativeSectionCount:tableView];
+
     if (section < native) {
         UIView *header = %orig;
         ApolloSettingsApplySectionHeaderTypography(header);
+
+        // The collapsible sections use their first rows as headings.
+        // Preserve native header geometry while hiding its contents.
+        if (section < 3) {
+            for (UIView *subview in header.subviews) {
+                subview.hidden = YES;
+            }
+        }
         return header;
     }
+
     NSString *title;
-    if (section == native) title = @"Subreddit-Specific Filters";
-    else if (section == native + 1) title = @"Filter Subreddits by Name";
+    if (section == native) title = @"";
+    else if (section == native + 1) title = @"";
     else title = @"Tagged Posts";
-    CGFloat topPadding = 30.0;
+
+    // Match Apollo's native section spacing on every iOS version.
+    // The custom header contributes 6 pt below its label.
+    CGRect nativeHeader = [tableView rectForHeaderInSection:1];
+    CGFloat nativeHeight = CGRectGetHeight(nativeHeader);
+    CGFloat topPadding = nativeHeight > 0.0
+        ? nativeHeight - 6.0
+        : 30.0;
     if (section == native) {
-        if (@available(iOS 26.0, *)) topPadding += 20.4;
+        topPadding += ApolloPFNativeFooterOverflow(tableView);
     }
+
     return ApolloPFSectionHeaderView(title, topPadding);
+}
+
+%new
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+    NSInteger native = [self apollo_pfNativeSectionCount:tableView];
+    if (section < native) return UITableViewAutomaticDimension;
+
+    NSString *text = ApolloPFCustomFooterText(section - native);
+    UIView *footer = ApolloPFSectionFooterView(text);
+    UILabel *label = (UILabel *)footer.subviews.firstObject;
+
+    // Account for the inset-grouped footer and label padding (20pt per side each).
+    CGFloat width = CGRectGetWidth(tableView.bounds) - 80.0;
+    if (width <= 0.0) return UITableViewAutomaticDimension;
+
+    CGSize required = [label sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+    return ceil(required.height) + 12.0;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
@@ -753,14 +871,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         // a frame as it re-laid-out). It just slides down as the rows expand.
         return %orig;
     }
-    NSString *text;
-    if (section == native) {
-        text = @"Exclude posts in these subreddits when their title, link, or post flair matches a filter. Applies on this device.";
-    } else if (section == native + 1) {
-        text = @"Exclude subreddits containing these words or phrases in their name (e.g. 'circlejerk' hides r/carscirclejerk). Applies to feeds and search on this device.";
-    } else {
-        text = @"Cover the title and thumbnail of NSFW or spoiler posts. Tap to reveal.";
-    }
+    NSString *text = ApolloPFCustomFooterText(section - native);
     return ApolloPFSectionFooterView(text);
 }
 
@@ -773,7 +884,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // With no keywords, row 0 is Apollo's native Add Keyword row.
             if (nativeCount <= 1) {
-                %orig(tableView, indexPath);
+                if (indexPath.row == 1) {
+                    %orig(tableView, indexPath);
+                }
                 return;
             }
 
@@ -803,7 +916,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // With no filtered subreddits, row 0 is Apollo's native Add Subreddit row.
             if (nativeCount <= 1) {
-                %orig(tableView, indexPath);
+                if (indexPath.row == 1) {
+                    %orig(tableView, indexPath);
+                }
                 return;
             }
 
@@ -837,7 +952,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
             // With no blocked users, row 0 is Apollo's native Add User row.
             if (nativeCount <= 1) {
-                %orig(tableView, indexPath);
+                if (indexPath.row == 1) {
+                    %orig(tableView, indexPath);
+                }
                 return;
             }
 
@@ -876,7 +993,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
         // With no filters, row 0 is Add Subreddit Filter.
         if (subs.count == 0) {
-            [self apollo_pfPromptAddSubredditFromTable:tableView];
+            if (indexPath.row == 1) {
+                [self apollo_pfPromptAddSubredditFromTable:tableView];
+            }
             return;
         }
 
@@ -912,7 +1031,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 
         // With no filters, row 0 is Add Filter Phrase.
         if (names.count == 0) {
-            [self apollo_pfPromptAddNameFromTable:tableView];
+            if (indexPath.row == 1) {
+                [self apollo_pfPromptAddNameFromTable:tableView];
+            }
             return;
         }
 
@@ -1438,7 +1559,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return ApolloPFToggleCell(
         tableView,
         @"ApolloPFSpecificSubredditsToggle",
-        @"Subreddits",
+        @"Subreddit-Specific Filters",
         count,
         showingExpanded
     );
@@ -1459,9 +1580,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     if (!cell) return;
 
     cell.textLabel.text =
-        expanded ? @"Hide Subreddits" : @"Show Subreddits";
+        @"Subreddit-Specific Filters";
 
-    ApolloPFSetToggleChevron(cell, expanded, YES);
+    ApolloPFSetToggleChevron(cell, expanded, [ApolloPostFilterStore allSubreddits].count > 0);
 }
 
 %new
@@ -1527,7 +1648,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return ApolloPFToggleCell(
         tableView,
         @"ApolloPFNameFiltersToggle",
-        @"Filter Phrases",
+        @"Filter Subreddits by Name",
         count,
         showingExpanded
     );
@@ -1544,9 +1665,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     if (!cell) return;
 
     cell.textLabel.text =
-        expanded ? @"Hide Filter Phrases" : @"Show Filter Phrases";
+        @"Filter Subreddits by Name";
 
-    ApolloPFSetToggleChevron(cell, expanded, YES);
+    ApolloPFSetToggleChevron(cell, expanded, [ApolloPostFilterStore nameSubstrings].count > 0);
 }
 
 %new
@@ -1608,7 +1729,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return ApolloPFToggleCell(
         tableView,
         @"ApolloPFFilteredKeywordsToggle",
-        @"Keywords",
+        @"Filtered Keywords",
         MAX((NSInteger)0, nativeRows - 1),
         showingExpanded
     );
@@ -1620,9 +1741,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         [tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]];
     if (!cell) return;
 
-    cell.textLabel.text = expanded ? @"Hide Keywords" : @"Show Keywords";
+    cell.textLabel.text = @"Filtered Keywords";
 
-    ApolloPFSetToggleChevron(cell, expanded, YES);
+    ApolloPFSetToggleChevron(cell, expanded, [objc_getAssociatedObject(self, kApolloPFKeywordsNativeCountKey) integerValue] > 1);
 }
 
 %new
@@ -1677,7 +1798,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return ApolloPFToggleCell(
         tableView,
         @"ApolloPFFilteredSubredditsToggle",
-        @"Subreddits",
+        @"Filtered Subreddits",
         MAX((NSInteger)0, nativeRows - 1),
         showingExpanded
     );
@@ -1693,9 +1814,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     if (!cell) return;
 
     cell.textLabel.text =
-        expanded ? @"Hide Subreddits" : @"Show Subreddits";
+        @"Filtered Subreddits";
 
-    ApolloPFSetToggleChevron(cell, expanded, YES);
+    ApolloPFSetToggleChevron(cell, expanded, [objc_getAssociatedObject(self, kApolloPFSubredditsNativeCountKey) integerValue] > 1);
 }
 
 %new
@@ -1764,7 +1885,7 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return ApolloPFToggleCell(
         tableView,
         @"ApolloPFBlockedUsersToggle",
-        @"Users",
+        @"Blocked Users",
         MAX((NSInteger)0, nativeRows - 1),
         showingExpanded
     );
@@ -1780,9 +1901,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     if (!cell) return;
 
     cell.textLabel.text =
-        expanded ? @"Hide Users" : @"Show Users";
+        @"Blocked Users";
 
-    ApolloPFSetToggleChevron(cell, expanded, YES);
+    ApolloPFSetToggleChevron(cell, expanded, [objc_getAssociatedObject(self, kApolloPFBlockedNativeCountKey) integerValue] > 1);
 }
 
 %new
