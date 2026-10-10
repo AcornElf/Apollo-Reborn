@@ -1007,6 +1007,13 @@ static CGFloat ApolloAMWrappedLabelHeight(UILabel *label, CGFloat width) {
 // re-resolves estimates above the viewport (both seen in device recordings of
 // the earlier switch rows, 2026-09-14/15). Animatable, so a caller may wrap it
 // in a UIView animation: the checkmark fades, the rest applies at once.
+// Match the actual action-menu icons, including Apollo's exact moderator green.
+- (UIColor *)iconColorForItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden {
+    if (hidden) return UIColor.tertiaryLabelColor;
+    if (IsLiquidGlass() && [item.itemID isEqualToString:@"moderator"]) return ApolloModeratorColor();
+    return IsLiquidGlass() ? UIColor.blackColor : [self apollo_themeAccentColor];
+}
+
 - (void)styleItemCell:(ApolloAMItemCell *)cell forItem:(ApolloActionMenuItem *)item hidden:(BOOL)hidden {
     // A row Apollo only offers sometimes says so — unless this user's menu
     // offered it last time (a moderator's Moderator row, say). Same rule the
@@ -1036,14 +1043,21 @@ static CGFloat ApolloAMWrappedLabelHeight(UILabel *label, CGFloat width) {
     UIColor *accent = [self apollo_themeAccentColor] ?: ApolloThemeAccentColor() ?: self.view.tintColor;
     cell.checkmark.tintColor = accent;
     cell.checkmark.alpha = hidden ? 0.0 : 1.0;
-    // Reuse pool: set BOTH states explicitly. A hidden row's label is disabled
-    // (the theme pass leaves disabled labels alone, so the dim survives it);
-    // a shown row is re-enabled, reset to the plain label colour and marked
-    // for the theme's primary text like every other settings row.
-    cell.imageView.tintColor = hidden ? UIColor.tertiaryLabelColor : accent;
+    // Classic menu actions use the theme accent; Liquid Glass uses primary
+    // text and black icons. Hidden actions remain dimmed in both styles.
+    // Register the title colour with the theme pass so initial display and
+    // subsequent theme changes preserve it.
+    BOOL liquidGlass = IsLiquidGlass();
+    if (!liquidGlass && !hidden) {
+        [self apollo_applyAccentActionTextColorToCell:cell];
+    } else {
+        [self apollo_removeAccentActionTextColorFromCell:cell];
+    }
+    cell.imageView.tintColor = [self iconColorForItem:item hidden:hidden];
     cell.textLabel.enabled = !hidden;
-    cell.textLabel.textColor = hidden ? UIColor.secondaryLabelColor : UIColor.labelColor;
     if (!hidden) [self apollo_applyPrimaryTextColorToCell:cell];
+    cell.textLabel.textColor = hidden ? UIColor.secondaryLabelColor
+        : (liquidGlass ? UIColor.labelColor : accent);
     cell.textLabel.alpha = 1.0;
     cell.accessibilityTraits = UIAccessibilityTraitButton;
     cell.accessibilityLabel = offered ? item.title : [NSString stringWithFormat:@"%@, shown when relevant", item.title];
@@ -1062,6 +1076,20 @@ static CGFloat ApolloAMWrappedLabelHeight(UILabel *label, CGFloat width) {
 // A tap on an item row: flip its visibility (across every supporting menu in
 // the All overview) and restyle that very cell in place — no row reload, so
 // nothing moves under the finger; the checkmark fades in or out.
+- (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
+    [super apollo_applyThemeToCell:cell];
+    if (![cell isKindOfClass:[ApolloAMItemCell class]]) return;
+
+    ApolloAMItemCell *itemCell = (ApolloAMItemCell *)cell;
+    for (ApolloActionMenuItem *item in [self editableItems]) {
+        if ([item.itemID isEqualToString:itemCell.itemID]) {
+            itemCell.imageView.tintColor =
+                [self iconColorForItem:item hidden:[self itemIsHidden:item.itemID]];
+            break;
+        }
+    }
+}
+
 - (void)toggleItemWithID:(NSString *)itemID {
     if (itemID.length == 0) return;
 
