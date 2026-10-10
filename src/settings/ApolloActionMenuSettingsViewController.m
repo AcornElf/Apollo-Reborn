@@ -1160,8 +1160,8 @@ static CGFloat ApolloAMWrappedLabelHeight(UILabel *label, CGFloat width) {
                 [weakSelf resetCurrentMenuOrderOnly:YES];
             }]];
         }
-        NSString *title = order && hidden ? @"Reset Order and Visibility"
-                        : (order ? @"Reset Order" : @"Show All Actions");
+        NSString *title = order && hidden ? @"Reset Order and Unhide All Actions"
+                        : (order ? @"Reset Order" : @"Unhide All Actions");
         [sheet addAction:[UIAlertAction actionWithTitle:title
                                                   style:UIAlertActionStyleDestructive
                                                 handler:^(__unused UIAlertAction *action) {
