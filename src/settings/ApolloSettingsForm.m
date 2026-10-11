@@ -231,6 +231,7 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
         [[UITapGestureRecognizer alloc] initWithTarget:self
                                                 action:@selector(dismissKeyboard)];
     tapGesture.cancelsTouchesInView = NO;
+    tapGesture.name = @"ApolloSettingsKeyboardDismissTap";
     tapGesture.delegate = self;
     [self.view addGestureRecognizer:tapGesture];
     // Let standard cells grow for Dynamic Type and long localized labels.
@@ -252,7 +253,7 @@ static const void *kApolloSFSwitchRowKey = &kApolloSFSwitchRowKey;
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
         shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return YES;
+    return [gestureRecognizer.name isEqualToString:@"ApolloSettingsKeyboardDismissTap"];
 }
 
 - (void)refreshFormAfterRowMove {
