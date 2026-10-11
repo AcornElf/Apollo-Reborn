@@ -1,6 +1,6 @@
 // Three-state score-tap voting for comments and posts.
 // Neutral → upvote → downvote → neutral.
-// Uses Apollo's native action controller for voting and UI updates.
+// Posts use native voting controls; comments use Apollo's action controller.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -11,7 +11,7 @@
 #import "ApolloState.h"
 
 // Cycle score taps through no vote → upvote → downvote → no vote.
-// Apollo's native action controller handles the actual vote and UI updates.
+// Select the next available native action for comment voting.
 static BOOL ApolloThreeStateInvokeNextAction(id actionController) {
     uint16_t action = UINT16_MAX;
 
@@ -28,11 +28,9 @@ static BOOL ApolloThreeStateInvokeNextAction(id actionController) {
 
     if (action == UINT16_MAX ||
         !ApolloNativeActionMenuHasAction(actionController, action)) {
-        NSLog(@"[VoteCycle] Native action unavailable");
         return NO;
     }
 
-    NSLog(@"[VoteCycle] Invoking native action %u", action);
     ApolloNativeActionMenuInvokeAction(actionController, action);
     return YES;
 }
@@ -58,6 +56,54 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
     return ApolloThreeStateInvokeNextAction(actionController);
 }
 
+// Dispatch score taps through the post's native voting controls.
+static BOOL ApolloThreeStateCycleFeedVote(id cell) {
+    Ivar linkIvar = class_getInstanceVariable([cell class], "link");
+    id link = linkIvar ? object_getIvar(cell, linkIvar) : nil;
+    if (!link) return NO;
+
+    NSInteger status = -1;
+    @try {
+        status = [[link valueForKey:@"voteStatus"] integerValue];
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+
+    const char *buttonName = status == 2 ? "upvoteButton" :
+                             (status == 0 || status == 1)
+                                 ? "downvoteButton" : NULL;
+    if (!buttonName) return NO;
+
+    id container = cell;
+
+    Ivar optionsIvar =
+        class_getInstanceVariable([cell class], "optionButtonsNode");
+    if (optionsIvar) {
+        id options = object_getIvar(cell, optionsIvar);
+        if (options) container = options;
+    }
+
+    Ivar buttonIvar =
+        class_getInstanceVariable([container class], buttonName);
+
+    // Compact posts keep their voting controls directly on the cell.
+    if (!buttonIvar && container == cell) {
+        buttonName = status == 2
+            ? "upvoteButtonNode" : "downvoteButtonNode";
+        buttonIvar = class_getInstanceVariable([cell class], buttonName);
+    }
+
+    id button = buttonIvar ? object_getIvar(container, buttonIvar) : nil;
+    SEL action = @selector(sendActionsForControlEvents:withEvent:);
+
+    if (!button || ![button respondsToSelector:action]) return NO;
+
+    ((void (*)(id, SEL, NSUInteger, id))objc_msgSend)(
+        button, action, (NSUInteger)(1 << 4), nil);
+
+    return YES;
+}
+
 %hook _TtC6Apollo15CommentCellNode
 
 - (void)pointsTappedWithSender:(id)sender {
@@ -72,8 +118,10 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
 %hook _TtC6Apollo17LargePostCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!sThreeStateVoting || !ApolloThreeStateCycleVote(
-            self, sender, @selector(moreOptionsButtonTappedWithSender:))) {
+    if (!sThreeStateVoting ||
+        (!ApolloThreeStateCycleFeedVote(self) &&
+         !ApolloThreeStateCycleVote(
+             self, sender, @selector(moreOptionsButtonTappedWithSender:)))) {
         %orig;
     }
 }
@@ -83,67 +131,58 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
 %hook _TtC6Apollo19CompactPostCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!sThreeStateVoting || !ApolloThreeStateCycleVote(
-            self, sender, @selector(moreOptionsButtonTappedWithSender:))) {
+    if (!sThreeStateVoting ||
+        (!ApolloThreeStateCycleFeedVote(self) &&
+         !ApolloThreeStateCycleVote(
+             self, sender, @selector(moreOptionsButtonTappedWithSender:)))) {
         %orig;
     }
 }
 
 %end
 
-// Find the post-detail controller through the score button's responder chain.
-static BOOL ApolloThreeStateCycleHeaderVote(id sender) {
-    UIView *sourceView = nil;
+// Route post-detail score taps through the same native controls as the
+// large action-bar icons, keeping Apollo's model and UI update paths unified.
+static BOOL ApolloThreeStateCycleHeaderVote(id header) {
+    Ivar linkIvar = class_getInstanceVariable([header class], "link");
+    id link = linkIvar ? object_getIvar(header, linkIvar) : nil;
+    if (!link) return NO;
 
-    if ([sender respondsToSelector:@selector(view)]) {
-        sourceView = ((id (*)(id, SEL))objc_msgSend)(
-            sender, @selector(view));
-    }
-
-    if (!sourceView.window) return NO;
-
-    Class commentsClass =
-        objc_getClass("_TtC6Apollo22CommentsViewController");
-
-    UIResponder *responder = sourceView;
-    id commentsController = nil;
-
-    while (responder) {
-        if (commentsClass && [responder isKindOfClass:commentsClass]) {
-            commentsController = responder;
-            break;
-        }
-        responder = responder.nextResponder;
-    }
-
-    SEL menuSelector =
-        @selector(moreOptionsBarButtonItemTappedWithSender:);
-
-    if (!commentsController ||
-        ![commentsController respondsToSelector:menuSelector]) {
-        NSLog(@"[VoteCycle] Post-detail controller unavailable");
+    NSInteger voteStatus = -1;
+    @try {
+        voteStatus = [[link valueForKey:@"voteStatus"] integerValue];
+    } @catch (__unused NSException *exception) {
         return NO;
     }
 
-    id actionController =
-        ApolloNativeActionMenuCaptureController(sourceView, ^{
-            ((void (*)(id, SEL, id))objc_msgSend)(
-                commentsController, menuSelector, sourceView);
-        });
+    Ivar barIvar = class_getInstanceVariable([header class], "quickBarNode");
+    id bar = barIvar ? object_getIvar(header, barIvar) : nil;
+    if (!bar) return NO;
 
-    return ApolloThreeStateInvokeNextAction(actionController);
+    // 2 = neutral, 0 = upvoted, 1 = downvoted.
+    const char *buttonName = voteStatus == 2 ? "upvoteButton" :
+                             voteStatus == 0 || voteStatus == 1
+                                 ? "downvoteButton" : NULL;
+    if (!buttonName) return NO;
+
+    Ivar buttonIvar = class_getInstanceVariable([bar class], buttonName);
+    id button = buttonIvar ? object_getIvar(bar, buttonIvar) : nil;
+
+    SEL action = @selector(sendActionsForControlEvents:withEvent:);
+    if (!button || ![button respondsToSelector:action]) return NO;
+
+    ((void (*)(id, SEL, NSUInteger, id))objc_msgSend)(
+        button, action, (NSUInteger)(1 << 4), nil);
+
+    return YES;
 }
 
 %hook _TtC6Apollo22CommentsHeaderCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!sThreeStateVoting || !ApolloThreeStateCycleHeaderVote(sender)) {
+    if (!sThreeStateVoting || !ApolloThreeStateCycleHeaderVote(self)) {
         %orig;
     }
 }
 
 %end
-
-%ctor {
-    %init;
-}
