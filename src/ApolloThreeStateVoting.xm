@@ -8,6 +8,7 @@
 #import <stdint.h>
 
 #import "ApolloNativeActionMenus.h"
+#import "ApolloState.h"
 
 // Cycle score taps through no vote → upvote → downvote → no vote.
 // Apollo's native action controller handles the actual vote and UI updates.
@@ -60,7 +61,7 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
 %hook _TtC6Apollo15CommentCellNode
 
 - (void)pointsTappedWithSender:(id)sender {
-    if (!ApolloThreeStateCycleVote(
+    if (!sThreeStateVoting || !ApolloThreeStateCycleVote(
             self, sender, @selector(moreOptionsTappedWithSender:))) {
         %orig;
     }
@@ -71,7 +72,7 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
 %hook _TtC6Apollo17LargePostCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!ApolloThreeStateCycleVote(
+    if (!sThreeStateVoting || !ApolloThreeStateCycleVote(
             self, sender, @selector(moreOptionsButtonTappedWithSender:))) {
         %orig;
     }
@@ -82,7 +83,7 @@ static BOOL ApolloThreeStateCycleVote(id cell, id sender, SEL menuSelector) {
 %hook _TtC6Apollo19CompactPostCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!ApolloThreeStateCycleVote(
+    if (!sThreeStateVoting || !ApolloThreeStateCycleVote(
             self, sender, @selector(moreOptionsButtonTappedWithSender:))) {
         %orig;
     }
@@ -136,7 +137,7 @@ static BOOL ApolloThreeStateCycleHeaderVote(id sender) {
 %hook _TtC6Apollo22CommentsHeaderCellNode
 
 - (void)pointsButtonTappedWithSender:(id)sender {
-    if (!ApolloThreeStateCycleHeaderVote(sender)) {
+    if (!sThreeStateVoting || !ApolloThreeStateCycleHeaderVote(sender)) {
         %orig;
     }
 }

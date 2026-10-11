@@ -3737,6 +3737,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyScrollReturnButton: @YES,
                                     UDKeyCenterTitleBetweenButtons: @NO,
                                     UDKeyInfoRowTapTranslation: @YES,
+                                    UDKeyThreeStateVoting: @NO,
                                     UDKeyLiveCommentsFollow: @YES,
                                     UDKeyPerPostCommentSort: @NO,
                                     UDKeyEnableBulkTranslation: @NO,
@@ -4050,6 +4051,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // it (ApolloInfoTapFired / SRTActivateTarget check it first).
     if (sInfoRowPopupMode && sInfoRowOverlayMode) sInfoRowPopupMode = NO;
     sInfoRowTapTranslation = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapTranslation];
+    sThreeStateVoting = [standardDefaults boolForKey:UDKeyThreeStateVoting];
     sLiveCommentsFollow = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyLiveCommentsFollow];
     sPerPostCommentSort = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyPerPostCommentSort];
     // Both sort memories on = stale state from an older build or a restored backup;
