@@ -1,8 +1,8 @@
 #import "ApolloSwiftRuntime.h"
 #import "ApolloTextureDecls.h"
-#import "ApolloClasses.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import "ApolloClasses.h"
 
 // The author is an ApolloButtonNode (ASButtonNode), not a UILabel. Let
 // Texture remeasure it at the space left after the score, badges and age;
@@ -109,6 +109,88 @@ static CGFloat ApolloCommentHeaderMinimumWidthWithoutFlair(
 
     return width;
 }
+
+// PostInfoNode is also used in feeds. Mark the instance owned by the
+// comments header before its first layout, when supernode may still be nil.
+static char kApolloCommentHeaderPostInfoKey;
+
+static BOOL ApolloPostInfoIsInCommentsHeader(ASDisplayNode *node) {
+    if (objc_getAssociatedObject(node, &kApolloCommentHeaderPostInfoKey)) {
+        return YES;
+    }
+
+    Class headerClass = objc_getClass("_TtC6Apollo22CommentsHeaderCellNode");
+    if (!headerClass) return NO;
+
+    ASDisplayNode *parent = node.supernode;
+    for (NSUInteger i = 0; parent && i < 8; i++) {
+        if ([parent isKindOfClass:headerClass]) return YES;
+        parent = parent.supernode;
+    }
+    return NO;
+}
+
+%hook _TtC6Apollo22CommentsHeaderCellNode
+
+- (id)layoutSpecThatFits:(struct ApolloTextureSizeRange)constrainedSize {
+    id postInfo = ApolloObjectIvar(self, "postInfoNode");
+    if (postInfo) {
+        objc_setAssociatedObject(postInfo, &kApolloCommentHeaderPostInfoKey,
+                                 @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return %orig;
+}
+
+%end
+
+%hook _TtC6Apollo12PostInfoNode
+
+- (id)layoutSpecThatFits:(struct ApolloTextureSizeRange)constrainedSize {
+    id spec = %orig;
+
+    if (!ApolloPostInfoIsInCommentsHeader((ASDisplayNode *)self)) {
+        return spec;
+    }
+
+    id author = ApolloObjectIvar(self, "authorButtonNode");
+    id flair = ApolloObjectIvar(self, "flairNode");
+    if (!author || !flair) return spec;
+
+    CGFloat horizontalInsets = 0.0;
+    ASStackLayoutSpec *header =
+        ApolloCommentHeaderStack(spec, author, &horizontalInsets);
+
+    if (!header || ![header.children containsObject:flair]) {
+        return spec;
+    }
+
+    CGFloat availableWidth =
+        MAX(0.0, constrainedSize.max.width - horizontalInsets);
+
+    CGFloat minimumWidth =
+        ApolloCommentHeaderMinimumWidthWithoutFlair(header, flair);
+
+    BOOL shouldShrinkAuthor = minimumWidth > availableWidth;
+
+    ((ASDisplayNode *)author).style.flexShrink =
+        shouldShrinkAuthor ? 1.0 : 0.0;
+
+    ((ASDisplayNode *)flair).style.flexShrink = 1.0;
+
+    SEL titleSelector = @selector(titleNode);
+    if ([author respondsToSelector:titleSelector]) {
+        ASTextNode *title =
+            ((id (*)(id, SEL))objc_msgSend)(author, titleSelector);
+
+        title.maximumNumberOfLines = 1;
+        title.style.flexShrink = shouldShrinkAuthor ? 1.0 : 0.0;
+        title.truncationMode = NSLineBreakByTruncatingTail;
+    }
+
+    return spec;
+}
+
+%end
 
 %hook _TtC6Apollo15CommentCellNode
 
