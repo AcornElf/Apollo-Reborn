@@ -110,7 +110,7 @@
     }
 
     actionsFooter = [actionsFooter stringByAppendingString:
-        @"\n\nTap the vote count to cycle through upvote, downvote and no vote."];
+        @"\n\nAdd Downvote Tap makes tapping a score cycle through upvote, downvote and no vote."];
 
     return @[
         [ApolloSettingsSection sectionWithTitle:@"Magnifier"
