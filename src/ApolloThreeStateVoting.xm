@@ -7,6 +7,7 @@
 #import <objc/message.h>
 #import <stdint.h>
 
+#import "ApolloCommon.h"
 #import "ApolloNativeActionMenus.h"
 #import "ApolloState.h"
 
@@ -28,6 +29,11 @@ static BOOL ApolloThreeStateInvokeNextAction(id actionController) {
 
     if (action == UINT16_MAX ||
         !ApolloNativeActionMenuHasAction(actionController, action)) {
+        // The tap falls back to Apollo's own score tap (upvote toggle). Log it
+        // so a "no downvote step" report shows whether the menu was captured
+        // at all or Apollo's vote actions changed.
+        ApolloLog(@"[ThreeStateVoting] No vote action to cycle to (%@), using Apollo's own score tap",
+                  actionController ? @"menu captured" : @"no menu captured");
         return NO;
     }
 
