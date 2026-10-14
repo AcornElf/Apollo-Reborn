@@ -2109,13 +2109,16 @@ typedef NS_ENUM(NSInteger, Tag) {
                                  onSelect:^{
             __strong typeof(weakSelf) self = weakSelf;
             if (!self) return;
-            ApolloSettingsPresentPicker(self, [self cellForRowID:@"interface.inboxBadgeColor"],
+            ApolloSettingsPresentLivePicker(self, [self cellForRowID:@"interface.inboxBadgeColor"],
                                         @"Unread Badge Color", @[@"Red", @"Theme Accent"],
                                         [NSUserDefaults.standardUserDefaults boolForKey:UDKeyInboxBadgeUseThemeAccent] ? 1 : 0,
                                         ^(NSInteger pickedIndex) {
                 [NSUserDefaults.standardUserDefaults setBool:(pickedIndex == 1) forKey:UDKeyInboxBadgeUseThemeAccent];
                 [NSNotificationCenter.defaultCenter postNotificationName:ApolloInboxBadgeChangedNotification object:nil];
-                [weakSelf reloadRowWithID:@"interface.inboxBadgeColor"];
+                // Keep the existing row in place while its sheet dismisses.
+                UITableViewCell *cell = [weakSelf cellForRowID:@"interface.inboxBadgeColor"];
+                cell.detailTextLabel.text = pickedIndex == 1 ? @"Theme Accent" : @"Red";
+                [cell setNeedsLayout];
             });
         }];
     inboxBadgeColor.configure = ^(UITableViewCell *cell) {

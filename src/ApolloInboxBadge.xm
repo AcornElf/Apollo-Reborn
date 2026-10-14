@@ -84,37 +84,36 @@ static void ApolloInboxBadgeSetCustomDot(UIView *button,
     [button bringSubviewToFront:dot];
 }
 
-static void ApolloInboxBadgeSetGlassDot(UITabBar *tabBar,
+static void ApolloInboxBadgeSetGlassDot(UIView *button,
                                         UIView *icon,
                                         BOOL visible,
                                         UIColor *color) {
-    UIView *dot = objc_getAssociatedObject(tabBar, &kInboxBadgeDotViewKey);
+    if (!button || !icon) return;
 
-    if (!visible || !icon) {
-        dot.hidden = YES;
-        return;
-    }
+    UIView *dot = objc_getAssociatedObject(button, &kInboxBadgeDotViewKey);
 
     if (!dot) {
         dot = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 8.0, 8.0)];
         dot.userInteractionEnabled = NO;
         dot.layer.cornerRadius = 4.0;
         dot.layer.zPosition = 1000.0;
-        objc_setAssociatedObject(tabBar,
+
+        objc_setAssociatedObject(button,
                                  &kInboxBadgeDotViewKey,
                                  dot,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [tabBar addSubview:dot];
+        [button addSubview:dot];
     }
 
-    CGRect iconFrame = [tabBar convertRect:icon.bounds fromView:icon];
-
-    // Follow the icon itself so the dot moves with Apollo's label setting.
+    // Match the original upper-right icon anchor, but inherit the
+    // icon's animated position and transforms.
+    CGRect iconFrame = [button convertRect:icon.bounds fromView:icon];
     dot.center = CGPointMake(CGRectGetMaxX(iconFrame),
                              CGRectGetMinY(iconFrame));
+
     dot.backgroundColor = color;
-    dot.hidden = NO;
-    [tabBar bringSubviewToFront:dot];
+    dot.hidden = !visible;
+    [button bringSubviewToFront:dot];
 }
 
 static CGFloat ApolloInboxBadgePerceptualLightness(UIColor *color) {
@@ -232,25 +231,35 @@ static void ApolloInboxBadgeApply(UITabBarController *controller) {
                 : NSOrderedDescending;
         }];
 
-        UIView *inboxIcon = nil;
+        NSMutableArray<UIView *> *inboxButtons = [NSMutableArray array];
+        NSMutableArray<UIView *> *inboxIcons = [NSMutableArray array];
+
         if (glassButtons.count >= tabBar.items.count * 2) {
-            // Two representations share each horizontal position, so
-            // indices 2 and 3 correspond to the second tab (Inbox).
-            UIView *inboxButton = glassButtons[2];
-            NSMutableArray<UIView *> *images = [NSMutableArray array];
-            ApolloInboxBadgeCollectViews(inboxButton,
-                                         UIImageView.class,
-                                         images);
-            inboxIcon = images.firstObject;
+            // Liquid Glass maintains two representations of each tab.
+            for (NSUInteger index = 2; index <= 3; index++) {
+                UIView *inboxButton = glassButtons[index];
+                NSMutableArray<UIView *> *images = [NSMutableArray array];
+
+                ApolloInboxBadgeCollectViews(inboxButton,
+                                             UIImageView.class,
+                                             images);
+
+                if (images.firstObject) {
+                    [inboxButtons addObject:inboxButton];
+                    [inboxIcons addObject:images.firstObject];
+                }
+            }
         }
 
         BOOL hasUnreadBadge = glassBadges.count > 0;
-        BOOL showDot = dotMode && hasUnreadBadge && inboxIcon != nil;
+        BOOL showDot = dotMode && hasUnreadBadge && inboxIcons.count == 2;
 
-        ApolloInboxBadgeSetGlassDot(tabBar,
-                                    inboxIcon,
-                                    showDot,
-                                    renderedColor);
+        for (NSUInteger index = 0; index < inboxIcons.count; index++) {
+            ApolloInboxBadgeSetGlassDot(inboxButtons[index],
+                                        inboxIcons[index],
+                                        showDot,
+                                        renderedColor);
+        }
 
         // Hide UIKit's native badge only while the replacement dot is shown.
         // Explicitly restore it when returning to numbered mode.
@@ -397,6 +406,101 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
 
 %end
 
+// Keep native Inbox badge text contrast stable during UIKit updates.
+static UIColor *ApolloInboxBadgeColorForLabel(UILabel *label) {
+    UIView *ancestor = label.superview;
+    UIView *badge = nil;
+
+    while (ancestor) {
+        if ([ancestor isKindOfClass:NSClassFromString(@"_UIBarBadgeView")]) {
+            badge = ancestor;
+            break;
+        }
+        ancestor = ancestor.superview;
+    }
+
+    if (!badge) return nil;
+
+    for (UITabBarController *controller in sInboxBadgeControllers) {
+        UITabBar *tabBar = controller.tabBar;
+
+        if (tabBar.items.count < 2 ||
+            tabBar.items[1].badgeValue.length == 0) {
+            continue;
+        }
+
+        UIView *view = badge;
+        while (view && view != tabBar) {
+            view = view.superview;
+        }
+
+        if (view == tabBar) {
+            NSMutableArray<UIView *> *badges = [NSMutableArray array];
+
+            ApolloInboxBadgeCollectViews(
+                tabBar,
+                NSClassFromString(@"_UIBarBadgeView"),
+                badges
+            );
+
+            if (badges.count == 1 && badges.firstObject == badge) {
+                return tabBar.items[1].badgeColor;
+            }
+
+            break;
+        }
+    }
+
+    return nil;
+}
+
+%hook UILabel
+
+- (void)setTextColor:(UIColor *)color {
+    if (IsLiquidGlass() &&
+        [NSUserDefaults.standardUserDefaults
+            boolForKey:UDKeyInboxBadgeUseThemeAccent] &&
+        [NSUserDefaults.standardUserDefaults
+            boolForKey:UDKeyInboxBadgeShowUnreadCount]) {
+
+        UIColor *inboxBadgeColor =
+            ApolloInboxBadgeColorForLabel(self);
+
+        if (inboxBadgeColor) {
+            color = ApolloInboxBadgeTextColor(inboxBadgeColor);
+        }
+    }
+
+    %orig(color);
+}
+
+- (void)setAttributedText:(NSAttributedString *)text {
+    if (IsLiquidGlass() &&
+        [NSUserDefaults.standardUserDefaults
+            boolForKey:UDKeyInboxBadgeUseThemeAccent] &&
+        [NSUserDefaults.standardUserDefaults
+            boolForKey:UDKeyInboxBadgeShowUnreadCount]) {
+
+        UIColor *inboxBadgeColor =
+            ApolloInboxBadgeColorForLabel(self);
+
+        if (inboxBadgeColor && text.length) {
+            NSMutableAttributedString *corrected =
+                [text mutableCopy];
+
+            [corrected addAttribute:NSForegroundColorAttributeName
+                              value:ApolloInboxBadgeTextColor(inboxBadgeColor)
+                              range:NSMakeRange(0, corrected.length)];
+
+            text = corrected;
+        }
+    }
+
+    %orig(text);
+}
+
+%end
+
 // Apollo changes Inbox unread state by updating the tab item's badgeValue.
 // Refresh after UIKit has created or removed the corresponding badge view.
 %hook UITabBarItem
@@ -434,22 +538,50 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
 
 // UIKit can replace the native badge while Apollo applies a theme. Reapply
 // after a newly created badge joins the window so the user's presentation wins.
+
+// Prevent UIKit from restoring system red during Liquid Glass tab transitions.
+static UIColor *ApolloInboxBadgeInterceptColor(UIView *badge, UIColor *requested) {
+    if (!IsLiquidGlass() || sInboxBadgeApplying) return requested;
+
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (![defaults boolForKey:UDKeyInboxBadgeUseThemeAccent] ||
+        ![defaults boolForKey:UDKeyInboxBadgeShowUnreadCount]) {
+        return requested;
+    }
+
+    for (UITabBarController *controller in sInboxBadgeControllers) {
+        UITabBar *tabBar = controller.tabBar;
+        if (tabBar.items.count < 2 ||
+            ![badge isDescendantOfView:tabBar]) {
+            continue;
+        }
+
+        // Only intercept the Inbox item's native badge.
+        NSMutableArray<UIView *> *badges = [NSMutableArray array];
+        ApolloInboxBadgeCollectViews(
+            tabBar, NSClassFromString(@"_UIBarBadgeView"), badges);
+
+        // Avoid modifying ambiguous or unexpected hierarchies.
+        if (badges.count != 1 || badges.firstObject != badge) {
+            return requested;
+        }
+
+        UIColor *accent = ApolloThemeAccentColor() ?: tabBar.tintColor;
+        if (!accent) return requested;
+
+        accent = [accent resolvedColorWithTraitCollection:tabBar.traitCollection];
+
+        return accent;
+    }
+
+    return requested;
+}
+
 %hook _UIBarBadgeView
 
-- (void)layoutSubviews {
-    %orig;
-
-    if (!IsLiquidGlass() || !((UIView *)self).window) return;
-
-    // Liquid Glass maintains normal and selected-content copies of tab items.
-    // UIKit can restyle the selected badge during its layout transition, so
-    // reapply the Inbox presentation immediately after that layout pass.
-    for (UITabBarController *controller in sInboxBadgeControllers) {
-        if ([(UIView *)self isDescendantOfView:controller.tabBar]) {
-            ApolloInboxBadgeApply(controller);
-            break;
-        }
-    }
+- (void)setBackgroundColor:(UIColor *)color {
+    UIColor *replacement = ApolloInboxBadgeInterceptColor((UIView *)self, color);
+    %orig(replacement);
 }
 
 %end
@@ -486,6 +618,7 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
                 }
                 // Apollo may rebuild the tab bar after the theme notification;
                 // apply once more after that rebuild has settled.
+                if (![notification.name isEqualToString:ApolloInboxBadgeChangedNotification]) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), ^{
                     for (UITabBarController *controller in sInboxBadgeControllers) {
@@ -493,6 +626,7 @@ static UITabBarController *ApolloInboxBadgeOwnerOfTabBar(UITabBar *tabBar) {
                         ApolloInboxBadgeApply(controller);
                     }
                 });
+                }
             });
         }];
     }
