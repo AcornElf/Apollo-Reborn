@@ -34,6 +34,7 @@ extern NSString *sRandomSubredditsSource;
 extern NSString *sRandNsfwSubredditsSource;
 extern NSString *sTrendingSubredditsSource;
 extern NSString *sTrendingSubredditsLimit;
+extern NSString *sRecentlyVisitedSubredditsLimit;
 
 extern BOOL sBlockAnnouncements;
 extern BOOL sAutomaticBackupsEnabled;
@@ -254,6 +255,8 @@ extern BOOL sInfoRowTapComments;
 extern BOOL sInfoRowPopupMode;
 extern BOOL sInfoRowOverlayMode;
 extern BOOL sInfoRowTapTranslation;
+// Include downvotes when tapping post and comment scores. Default OFF.
+extern BOOL sThreeStateVoting;
 // When ON (default), Live Update comment sort keeps the newest comments visible at the top
 // while you're at the top, and shows a "N new comments" jump pill when you've scrolled down
 // to read/reply. See ApolloLiveCommentsFollow.xm. Default ON via registerDefaults.
