@@ -875,7 +875,7 @@ static NSString *SpacedThemeName(NSString *raw) {
         case HSBrowse:   return 2;
         case HSMyThemes: return MAX((NSInteger)[self myThemes].count, 1);
         case HSImported: return (NSInteger)[self importedThemes].count; // section exists only with content
-        case HSOptions:  return 3;
+        case HSOptions:  return IsLiquidGlass() ? 2 : 3;
     }
     return 0;
 }
@@ -1091,19 +1091,26 @@ static NSString *SpacedThemeName(NSString *raw) {
             cell.textLabel.text = @"Light/Dark Mode";
             cell.imageView.image = [UIImage systemImageNamed:@"circle.lefthalf.filled"];
         } else if (ip.row == 1) {
-            cell.textLabel.text = @"Tab Bar Icons";
-            cell.detailTextLabel.text =
-                [[NSUserDefaults standardUserDefaults] boolForKey:kApolloTintedTabIconsKey]
-                    ? @"Tinted" : @"Default";
-            cell.imageView.image = [UIImage systemImageNamed:@"paintbrush"];
-        } else {
             cell.textLabel.text = @"Comments Theme";
             cell.detailTextLabel.text = [self commentsThemeDetail];
             cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
             cell.detailTextLabel.minimumScaleFactor = 0.8;
             cell.imageView.image = [UIImage systemImageNamed:@"text.bubble"];
+        } else {
+            cell.textLabel.text = @"Tint Tab Bar Icons";
+            cell.imageView.image = [UIImage systemImageNamed:@"paintbrush"];
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+            UISwitch *toggle = [[UISwitch alloc] init];
+            toggle.on = [[NSUserDefaults standardUserDefaults]
+                boolForKey:kApolloTintedTabIconsKey];
+            [toggle addTarget:self
+                       action:@selector(apolloTintTabBarIconsChanged:)
+             forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = toggle;
         }
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        if (ip.row != 2)
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         return cell;
     }
     if (ip.section == HSMyThemes || ip.section == HSImported) {
@@ -1403,37 +1410,21 @@ static NSString *SpacedThemeName(NSString *raw) {
         return;
     }
     if (ip.section == HSOptions) {
-        if (ip.row == 1) {
-            BOOL tinted = [[NSUserDefaults standardUserDefaults]
-                boolForKey:kApolloTintedTabIconsKey];
-
-            __weak typeof(self) weakSelf = self;
-            ApolloSettingsPresentPicker(
-                self,
-                [self.tableView cellForRowAtIndexPath:ip],
-                @"Tab Bar Icons",
-                @[@"Default", @"Tinted"],
-                tinted ? 1 : 0,
-                ^(NSInteger selectedIndex) {
-                    BOOL enabled = selectedIndex == 1;
-                    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-
-                    if ([defaults boolForKey:kApolloTintedTabIconsKey] != enabled) {
-                        [defaults setBool:enabled forKey:kApolloTintedTabIconsKey];
-                        ApolloInactiveTabIconsRefresh();
-                    }
-
-                    [weakSelf.tableView reloadData];
-                }
-            );
-            return;
-        }
+        if (ip.row == 2) return;
 
         BOOL ok = (ip.row == 0) ? ApolloThemeOpenNativeLightDarkFromHub(self)
                                 : ApolloThemeOpenNativeCommentsThemeFromHub(self);
         if (!ok) [self showError:@"Apollo's settings aren't available from here. Go back and reopen Appearance."];
         return;
     }
+}
+
+- (void)apolloTintTabBarIconsChanged:(UISwitch *)sender {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults boolForKey:kApolloTintedTabIconsKey] == sender.isOn) return;
+
+    [defaults setBool:sender.isOn forKey:kApolloTintedTabIconsKey];
+    ApolloInactiveTabIconsRefresh();
 }
 
 - (void)tableView:(UITableView *)tv accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)ip {

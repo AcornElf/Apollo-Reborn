@@ -185,17 +185,14 @@ static void ApolloUpdateTabIcon(UIImageView *icon, BOOL tinted) {
     if (!applyTint) {
         ApolloRestoreTabIcon(icon);
 
-        // A selected tab must retain UIKit's selected appearance.
-        // An inactive tab must display its UITabBarItem's normal image.
-        if (!selected && item.image && icon.image != item.image) {
-            ApolloSetTabIconImage(icon, item.image);
-        }
+        // Restore the image UIKit actually assigned to this image view.
+        // Do not substitute an image from a position-matched tab bar item.
         return;
     }
 
     UIImage *original =
         objc_getAssociatedObject(icon, &kOriginalTabImageKey);
-    if (!original) original = item.image ?: icon.image;
+    if (!original) original = icon.image;
     if (!original) return;
 
     UIColor *color = ApolloInactiveTabIconColor(icon.traitCollection);
