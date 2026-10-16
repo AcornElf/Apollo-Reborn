@@ -42,40 +42,7 @@
 
             view.tintColor = UIColor.magentaColor;
 
-            // UIKit may replace the initial icons after their first update.
-            // Revisit the live tab bar once initial layout has settled.
-            static BOOL scheduledInitialPass = NO;
-            if (!scheduledInitialPass) {
-                scheduledInitialPass = YES;
 
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                              (int64_t)(0.3 * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    if (IsLiquidGlass()) return;
-
-                    NSMutableArray<UIView *> *queue =
-                        [NSMutableArray arrayWithObject:bar];
-
-                    while (queue.count) {
-                        UIView *candidate = queue.lastObject;
-                        [queue removeLastObject];
-
-                        if ([NSStringFromClass(candidate.class)
-                                containsString:@"UITabBarSwappableImageView"]) {
-                            UIImageView *icon = (UIImageView *)candidate;
-
-                            if ([candidate.superview isKindOfClass:UIControl.class] &&
-                                !((UIControl *)candidate.superview).selected &&
-                                icon.image) {
-                                icon.image = [icon.image imageWithRenderingMode:
-                                              UIImageRenderingModeAlwaysTemplate];
-                            }
-                        }
-
-                        [queue addObjectsFromArray:candidate.subviews];
-                    }
-                });
-            }
         }
 
         [pending addObjectsFromArray:view.subviews];
