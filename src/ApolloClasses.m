@@ -83,6 +83,7 @@ Class ApolloClassRDKFlairOption;
 Class ApolloClassRDKGallery;
 Class ApolloClassRDKGalleryItemImage;
 Class ApolloClassRDKLink;
+Class ApolloClassRDKPagination;
 Class ApolloClassRDKMessage;
 Class ApolloClassRDKMultireddit;
 Class ApolloClassRDKMultiredditDescription;
@@ -213,6 +214,7 @@ __attribute__((constructor)) static void ApolloClassesResolve(void) {
     ApolloClassRDKGallery = objc_getClass("RDKGallery");
     ApolloClassRDKGalleryItemImage = objc_getClass("RDKGalleryItemImage");
     ApolloClassRDKLink = objc_getClass("RDKLink");
+    ApolloClassRDKPagination = objc_getClass("RDKPagination");
     ApolloClassRDKMessage = objc_getClass("RDKMessage");
     ApolloClassRDKMultireddit = objc_getClass("RDKMultireddit");
     ApolloClassRDKMultiredditDescription = objc_getClass("RDKMultiredditDescription");

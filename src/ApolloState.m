@@ -19,7 +19,6 @@ NSInteger sAutomaticBackupDestination = 0;
 BOOL sShowDeletedComments = NO;
 BOOL sTapToRevealDeletedComments = NO;
 BOOL sPassiveDeletedComments = NO;
-BOOL sShowRecentlyReadThumbnails = YES;
 BOOL sFeedTextPostThumbnails = YES;
 BOOL sFeedGalleryCarousel = YES;
 BOOL sFeedGalleryEdgeSwipeNav = NO;

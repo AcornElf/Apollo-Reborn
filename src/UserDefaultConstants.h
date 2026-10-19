@@ -152,7 +152,6 @@ static NSString *const UDKeyEnableFlairColors = @"EnableFlairColors";
 static NSString *const UDKeyBoldPostTitles = @"BoldPostTitles";
 static NSString *const ApolloFlairColorsChangedNotification = @"ApolloFlairColorsChangedNotification";
 static NSString *const UDKeyReadPostMaxCount = @"ReadPostMaxCount";
-static NSString *const UDKeyShowRecentlyReadThumbnails = @"ShowRecentlyReadThumbnails";
 static NSString *const UDKeyPreferredGIFFallbackFormat = @"PreferredGIFFallbackFormat";
 static NSString *const UDKeyUnmuteCommentsVideos = @"UnmuteCommentsVideos";
 // "Unmute Videos in Feed": how feed videos behave when they autoplay while
@@ -231,6 +230,8 @@ static NSString *const UDKeyTapToRevealDeletedComments = @"TapToRevealDeletedCom
 // resets when that thread is left. See ApolloDeletedCommentsMenu.xm.
 static NSString *const UDKeyPassiveDeletedComments = @"PassiveDeletedComments";
 static NSString *const UDKeyFilterNSFWRecentlyRead = @"FilterNSFWRecentlyRead";
+// Recently Read's own post size (BOOL, compact when YES); unset follows Apollo's.
+static NSString *const UDKeyRecentlyReadCompactPosts = @"RecentlyReadCompactPosts";
 static NSString *const UDKeyProxyImgurDDG = @"ProxyImgurDDG";
 // Allow non-DDG public text proxies (r.jina.ai, allorigins, codetabs) as a
 // last resort for album metadata when Imgur is unreachable — DDG itself cannot

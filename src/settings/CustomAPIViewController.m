@@ -1901,12 +1901,6 @@ typedef NS_ENUM(NSInteger, Tag) {
 - (ApolloSettingsSection *)buildPostsRecentlyReadSection {
     __weak typeof(self) weakSelf = self;
 
-    ApolloSettingsRow *readThumbnails =
-        [ApolloSettingsRow switchRowWithID:@"gen.readThumbnails"
-                                     title:@"Recently Read Thumbnails"
-                                      isOn:^BOOL { return [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowRecentlyReadThumbnails]; }
-                                  onToggle:^(UISwitch *sender) { [weakSelf showRecentlyReadThumbnailsSwitchToggled:sender]; }];
-
     ApolloSettingsRow *readPostMax =
         [ApolloSettingsRow customRowWithID:@"gen.readPostMax"
                                       cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
@@ -1928,8 +1922,8 @@ typedef NS_ENUM(NSInteger, Tag) {
                                   onToggle:^(UISwitch *sender) { [weakSelf filterNSFWRecentlyReadSwitchToggled:sender]; }];
 
     return [ApolloSettingsSection sectionWithTitle:@"Recently Read"
-                                            footer:@"Show thumbnails on posts you've already read, and cap how many Apollo remembers."
-                                              rows:@[ readThumbnails, readPostMax, filterNSFWRR ]];
+                                            footer:@"Cap how many read posts Apollo remembers."
+                                              rows:@[ readPostMax, filterNSFWRR ]];
 }
 
 // The "Open in App" screen now lives in native General → Open Links — see
@@ -4710,11 +4704,6 @@ static NSDictionary *ApolloWidgetAccountCredentials(void) {
 
 - (void)apollo_refreshFeedShortcutsPreviewAnimated:(BOOL)animated {
     (void)animated;
-}
-
-- (void)showRecentlyReadThumbnailsSwitchToggled:(UISwitch *)sender {
-    sShowRecentlyReadThumbnails = sender.isOn;
-    [[NSUserDefaults standardUserDefaults] setBool:sShowRecentlyReadThumbnails forKey:UDKeyShowRecentlyReadThumbnails];
 }
 
 - (void)collapsePinnedCommentsSwitchToggled:(UISwitch *)sender {

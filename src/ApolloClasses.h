@@ -93,6 +93,7 @@ extern Class ApolloClassRDKFlairOption;
 extern Class ApolloClassRDKGallery;
 extern Class ApolloClassRDKGalleryItemImage;
 extern Class ApolloClassRDKLink;
+extern Class ApolloClassRDKPagination;
 extern Class ApolloClassRDKMessage;
 extern Class ApolloClassRDKMultireddit;
 extern Class ApolloClassRDKMultiredditDescription;
