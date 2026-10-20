@@ -725,7 +725,14 @@ static NSArray<UIBarButtonItem *> *ApolloRecentlyReadBarItems(UINavigationItem *
 @interface _TtC6Apollo19PostsViewController : UIViewController
 @end
 
+static void ApolloRefreshStaleVisiblePosts(id controller);
+
 %hook _TtC6Apollo19PostsViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    ApolloRefreshStaleVisiblePosts(self);
+    %orig;
+}
 
 - (void)hideReadPostsButtonTappedWithSender:(id)sender {
     if (ApolloIsRecentlyReadFeed(self)) return;
@@ -964,6 +971,7 @@ static void ApolloRecentlyReadRemoveLink(RDKLink *link, UIViewController *feed) 
         [[NSUserDefaults standardUserDefaults] setObject:savedIDs forKey:@"ReadPostIDs"];
     }
     ApolloLog(@"[RecentlyRead] Removed %@ from history", fullName);
+
     NSMutableArray<NSString *> *order = [ApolloRecentlyReadOrder() mutableCopy];
     [order removeObject:fullName];
     ApolloRecentlyReadSetOrder(order);
@@ -981,6 +989,49 @@ static void ApolloRecentlyReadRemoveLink(RDKLink *link, UIViewController *feed) 
     BOOL began = ApolloRecentlyReadBeginSizeScope();
     ((void (*)(id, SEL, id))objc_msgSend)(feed, deleted, note);
     ApolloRecentlyReadEndSizeScope(began);
+}
+
+// Refresh visible posts whose cached read state differs from the tracker.
+static void ApolloRefreshStaleVisiblePosts(id controller) {
+    if (ApolloIsRecentlyReadFeed(controller)) return;
+
+    id tableNode = ApolloObjectIvar(controller, "tableNode");
+    if (![tableNode respondsToSelector:@selector(view)] ||
+        ![tableNode respondsToSelector:@selector(nodeForRowAtIndexPath:)]) return;
+
+    UITableView *table = ApolloSendObject(tableNode, @selector(view));
+    if (![table isKindOfClass:[UITableView class]]) return;
+
+    NSSet *readIDs = [NSSet setWithArray:ApolloReadPostIDsSnapshot()];
+
+    for (NSIndexPath *path in table.indexPathsForVisibleRows) {
+        id cell = ((id (*)(id, SEL, id))objc_msgSend)(
+            tableNode, @selector(nodeForRowAtIndexPath:), path);
+
+        NSString *className = NSStringFromClass([cell class]);
+        if (![className containsString:@"PostCellNode"]) continue;
+
+        RDKLink *link = ApolloObjectIvar(cell, "link");
+        Ivar readIvar = class_getInstanceVariable(object_getClass(cell), "isRead");
+        if (!link || !readIvar) continue;
+
+        BOOL cached = NO;
+        memcpy(&cached,
+               (const char *)(__bridge void *)cell + ivar_getOffset(readIvar),
+               sizeof(BOOL));
+
+        BOOL expected = [readIDs containsObject:link.fullName] ||
+                        [readIDs containsObject:ApolloBarePostID(link.fullName)];
+
+        if (cached != expected &&
+            [tableNode respondsToSelector:@selector(reloadRowsAtIndexPaths:withRowAnimation:)]) {
+            ((void (*)(id, SEL, id, NSInteger))objc_msgSend)(
+                tableNode,
+                @selector(reloadRowsAtIndexPaths:withRowAnimation:),
+                @[path],
+                (NSInteger)UITableViewRowAnimationNone);
+        }
+    }
 }
 
 %hook _TtC6Apollo17LargePostCellNode
