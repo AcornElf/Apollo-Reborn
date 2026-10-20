@@ -1082,8 +1082,7 @@ static void ApolloRecentlyReadRegisterMenuRow(void) {
         if (!link) return;
         UIViewController *feed = [objc_getAssociatedObject(controller, &kRecentlyReadMenuFeedKey) anyObject];
         __weak UIViewController *weakFeed = feed;
-        dispatch_block_t remove = ^{ ApolloRecentlyReadRemoveLink(link, weakFeed); };
-        if (!ApolloNativeActionMenuPerformAfterDismissal(controller, remove)) remove();
+        ApolloRecentlyReadRemoveLink(link, weakFeed);
     };
     // Glass menu: first, in its own section. The legacy sheet can only append.
     void (^perform)(id) = spec.perform;
