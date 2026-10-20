@@ -1476,6 +1476,23 @@ static void ApolloCommentsVCTryMarkRead(id commentsVC, const char *trigger) {
         ApolloSchedulePostReadStateDidChange();
     }];
 
+    // Keep open Recently Read feeds current when read history changes.
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:ApolloPostReadStateDidChangeNotification
+                   object:nil
+                    queue:[NSOperationQueue mainQueue]
+               usingBlock:^(__unused NSNotification *note) {
+        NSArray<NSString *> *current = ApolloRecentReadFullNames();
+        NSArray<NSString *> *loaded = ApolloRecentlyReadOrder();
+
+        if ([current isEqualToArray:loaded]) return;
+
+        for (UIViewController *feed in ApolloRecentlyReadOpenFeeds().allObjects) {
+            if (!feed.isViewLoaded) continue;
+            ApolloRecentlyReadReload(feed);
+        }
+    }];
+
     %init;
     ApolloRecentlyReadRegisterMenuRow();
 }
