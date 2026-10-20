@@ -991,46 +991,52 @@ static void ApolloRecentlyReadRemoveLink(RDKLink *link, UIViewController *feed) 
     ApolloRecentlyReadEndSizeScope(began);
 }
 
-// Refresh visible posts whose cached read state differs from the tracker.
+// Refresh cached post nodes, including rows outside the visible area.
 static void ApolloRefreshStaleVisiblePosts(id controller) {
     if (ApolloIsRecentlyReadFeed(controller)) return;
 
     id tableNode = ApolloObjectIvar(controller, "tableNode");
     if (![tableNode respondsToSelector:@selector(view)] ||
-        ![tableNode respondsToSelector:@selector(nodeForRowAtIndexPath:)]) return;
+        ![tableNode respondsToSelector:@selector(nodeForRowAtIndexPath:)] ||
+        ![tableNode respondsToSelector:@selector(reloadRowsAtIndexPaths:withRowAnimation:)]) return;
 
     UITableView *table = ApolloSendObject(tableNode, @selector(view));
     if (![table isKindOfClass:[UITableView class]]) return;
 
     NSSet *readIDs = [NSSet setWithArray:ApolloReadPostIDsSnapshot()];
+    NSMutableArray<NSIndexPath *> *stalePaths = [NSMutableArray array];
 
-    for (NSIndexPath *path in table.indexPathsForVisibleRows) {
-        id cell = ((id (*)(id, SEL, id))objc_msgSend)(
-            tableNode, @selector(nodeForRowAtIndexPath:), path);
+    for (NSInteger section = 0; section < table.numberOfSections; section++) {
+        NSInteger rows = [table numberOfRowsInSection:section];
+        for (NSInteger row = 0; row < rows; row++) {
+            NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:section];
+            id cell = ((id (*)(id, SEL, id))objc_msgSend)(
+                tableNode, @selector(nodeForRowAtIndexPath:), path);
 
-        NSString *className = NSStringFromClass([cell class]);
-        if (![className containsString:@"PostCellNode"]) continue;
+            if (![NSStringFromClass([cell class]) containsString:@"PostCellNode"]) continue;
 
-        RDKLink *link = ApolloObjectIvar(cell, "link");
-        Ivar readIvar = class_getInstanceVariable(object_getClass(cell), "isRead");
-        if (!link || !readIvar) continue;
+            RDKLink *link = ApolloObjectIvar(cell, "link");
+            Ivar readIvar = class_getInstanceVariable(object_getClass(cell), "isRead");
+            if (!link || !readIvar) continue;
 
-        BOOL cached = NO;
-        memcpy(&cached,
-               (const char *)(__bridge void *)cell + ivar_getOffset(readIvar),
-               sizeof(BOOL));
+            BOOL cached = NO;
+            memcpy(&cached,
+                   (const char *)(__bridge void *)cell + ivar_getOffset(readIvar),
+                   sizeof(BOOL));
 
-        BOOL expected = [readIDs containsObject:link.fullName] ||
-                        [readIDs containsObject:ApolloBarePostID(link.fullName)];
+            BOOL expected = [readIDs containsObject:link.fullName] ||
+                            [readIDs containsObject:ApolloBarePostID(link.fullName)];
 
-        if (cached != expected &&
-            [tableNode respondsToSelector:@selector(reloadRowsAtIndexPaths:withRowAnimation:)]) {
-            ((void (*)(id, SEL, id, NSInteger))objc_msgSend)(
-                tableNode,
-                @selector(reloadRowsAtIndexPaths:withRowAnimation:),
-                @[path],
-                (NSInteger)UITableViewRowAnimationNone);
+            if (cached != expected) [stalePaths addObject:path];
         }
+    }
+
+    if (stalePaths.count) {
+        ((void (*)(id, SEL, id, NSInteger))objc_msgSend)(
+            tableNode,
+            @selector(reloadRowsAtIndexPaths:withRowAnimation:),
+            stalePaths,
+            (NSInteger)UITableViewRowAnimationNone);
     }
 }
 
