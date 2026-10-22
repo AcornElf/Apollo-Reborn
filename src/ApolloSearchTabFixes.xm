@@ -91,8 +91,8 @@ extern void ApolloSwiftAssignOptionalStringArray(void *storage, const void *arra
 // MARK: - #646 helpers
 
 // Visible padding between the search bar's bottom hairline and the first suggestions card.
-// Matches what the Liquid Glass variant already shows (~16pt) and the reporter's mock (~14pt).
-static const CGFloat kApolloSearchSuggestionsGap = 16.0;
+// Classic Search spacing adjustment.
+static const CGFloat kApolloSearchSuggestionsGap = 35;
 
 static const void *kApolloSearchBaselineInsetKey = &kApolloSearchBaselineInsetKey;
 static const void *kApolloSearchBaselineBounceKey = &kApolloSearchBaselineBounceKey;
@@ -260,7 +260,7 @@ static BOOL ApolloSearchTabNativeSearching(UIViewController *vc) {
 // Apollo's native text-change batch inserts/deletes exactly one section-3 row.
 // Remove our extra row before entering search, then restore it after Apollo has
 // inserted its native row when returning to the default state.
-static void ApolloSearchTabPrepareForModeTransition(
+static BOOL ApolloSearchTabPrepareForModeTransition(
     UIViewController *vc,
     BOOL nextDefaultState
 ) {
@@ -273,16 +273,18 @@ static void ApolloSearchTabPrepareForModeTransition(
             objc_setAssociatedObject(vc, kApolloSearchRandomNSFWSuppressedKey, @YES,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        return;
+        return enteringSearch;
     }
 
     UITableView *tableView = ApolloSearchTabTableView(vc);
-    if (tableView.numberOfSections <= 3) return;
+    if (tableView.numberOfSections <= 3) return enteringSearch;
     objc_setAssociatedObject(vc, kApolloSearchRandomNSFWSuppressedKey, @YES,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [tableView deleteRowsAtIndexPaths:@[
         [NSIndexPath indexPathForRow:1 inSection:3]
     ] withRowAnimation:UITableViewRowAnimationNone];
+
+    return enteringSearch;
 }
 
 static void ApolloSearchTabFinishModeTransition(
@@ -401,8 +403,6 @@ static UIImage *ApolloThickenedTemplateIcon(UIImage *src) {
 
 %hook _TtC6Apollo20SearchViewController
 
-// MARK: Trending refresh
-
 - (void)viewDidLoad {
     %orig;
 
@@ -452,6 +452,14 @@ static UIImage *ApolloThickenedTemplateIcon(UIImage *src) {
             UIViewController *controller = weakSelf;
             [weakRefresh endRefreshing];
             if (!controller) return;
+
+            // Restore Classic Search's intended top inset after refresh.
+            if (!IsLiquidGlass()) {
+                UISearchBar *bar = ApolloSearchTabSearchBar(controller);
+                if (bar) {
+                    ApolloSearchTabApplyTopInset(controller, bar);
+                }
+            }
             objc_setAssociatedObject(controller, kApolloSearchRefreshInFlightKey, nil,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -491,11 +499,40 @@ static UIImage *ApolloThickenedTemplateIcon(UIImage *src) {
 
 - (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)text {
     BOOL nextDefaultState = text.length == 0;
-    ApolloSearchTabPrepareForModeTransition(self, nextDefaultState);
+    BOOL enteringSearch =
+        ApolloSearchTabPrepareForModeTransition(self, nextDefaultState);
+    BOOL animationsWereEnabled = [UIView areAnimationsEnabled];
+    [UIView setAnimationsEnabled:NO];
     %orig;
+    [UIView setAnimationsEnabled:animationsWereEnabled];
     ApolloSearchTabFinishModeTransition(self, nextDefaultState);
+
+    // Force header geometry calculation before adjusting the top inset.
+    UITableView *geometryTable = ApolloSearchTabTableView(self);
+    if (geometryTable) {
+        if (geometryTable.numberOfSections > 0)
+            (void)[geometryTable rectForHeaderInSection:0];
+        if (geometryTable.numberOfSections > 1)
+            (void)[geometryTable rectForHeaderInSection:1];
+    }
+
     ApolloSearchTabApplyTopInset(self, bar);
+
     ApolloSearchTabUpdateRefreshAvailability(self);
+    // On the initial default -> search transition, UIKit can retain the
+    // suggestions header's previous 1pt geometry even though Apollo has
+    // already configured its self-sizing header. Rebuild that section once
+    // so the header is measured immediately rather than on the next keystroke.
+    if (enteringSearch) {
+        UITableView *tableView = ApolloSearchTabTableView(self);
+        if (tableView.numberOfSections > 1) {
+            BOOL animationsWereEnabled = [UIView areAnimationsEnabled];
+            [UIView setAnimationsEnabled:NO];
+            [tableView reloadSections:[NSIndexSet indexSetWithIndex:1]
+                     withRowAnimation:UITableViewRowAnimationNone];
+            [UIView setAnimationsEnabled:animationsWereEnabled];
+        }
+    }
 }
 
 - (void)searchBarCancelButtonClicked:(UISearchBar *)bar {
