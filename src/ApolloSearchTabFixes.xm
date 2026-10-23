@@ -323,7 +323,7 @@ static void ApolloSearchTabApplyTopInset(UIViewController *vc, UISearchBar *bar)
 
     CGFloat target = (CGFloat)baseline.doubleValue;
     BOOL searching = bar.text.length > 0;
-    if (searching && !IsLiquidGlass() && tv.numberOfSections > 0) {
+    if (searching && tv.numberOfSections > 0) {
         // The suggestions section carries an *empty* self-sizing header (Apollo's spacer),
         // so the first visible content is row 0, resting at content-y == that header's
         // height (35pt today). Measure it rather than assume, in case UIKit resizes it.
