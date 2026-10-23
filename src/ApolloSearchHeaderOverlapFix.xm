@@ -64,9 +64,9 @@ static UILabel *apollo_firstNonEmptyLabel(UIView *v) {
 - (double)tableView:(UITableView *)tableView heightForHeaderInSection:(long long)section {
     double height = %orig;
 
-    // Keep the empty Classic Search page's first spacer header
-    // consistent before and after dismissing the search field.
-    if (!IsLiquidGlass() && section == 0 &&
+    // Keep the empty search page's first spacer header consistent
+    // before and after dismissing the search field.
+    if (section == 0 &&
         [tableView numberOfRowsInSection:0] == 0) {
         return 17.666667;
     }
