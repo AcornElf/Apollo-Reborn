@@ -22,6 +22,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import "settings/ApolloSettingsTableViewController.h"
 #import <objc/runtime.h>
 
 #import "ApolloCommon.h"
@@ -118,6 +119,7 @@ static UIView *ApolloPFSectionHeaderView(NSString *title) {
     label.translatesAutoresizingMaskIntoConstraints = NO;
     label.text = title.uppercaseString;
     label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    ApolloSettingsApplySectionHeaderTypography(label);
     label.textColor = [UIColor secondaryLabelColor];
     label.numberOfLines = 0;
     [container addSubview:label];
@@ -237,6 +239,11 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
     return cell;
 }
 
+- (void)tableView:(UITableView *)tableView willDisplayHeaderView:(UIView *)view forSection:(NSInteger)section {
+    %orig;
+    ApolloSettingsApplySectionHeaderTypography(view);
+}
+
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
     NSInteger native = [self apollo_pfNativeSectionCount:tableView];
     if (section < native) {
@@ -245,7 +252,9 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
             // toggle + its users read as one continuous rounded group.
             return [[UIView alloc] init];
         }
-        return %orig;
+        UIView *header = %orig;
+        ApolloSettingsApplySectionHeaderTypography(header);
+        return header;
     }
     NSString *title;
     if (section == native) title = @"Subreddit-Specific Filters";
@@ -409,13 +418,14 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
         tf.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
     __weak UIAlertController *weakAlert = alert;
+    __weak __typeof__(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         NSString *sub = [ApolloPostFilterStore normalizeSubreddit:weakAlert.textFields.firstObject.text];
         if (sub.length == 0) return;
         [ApolloPostFilterStore ensureSubreddit:sub];
         [tableView reloadData];
-        [self apollo_pfOpenDetailForSubreddit:sub fromTable:tableView];
+        [weakSelf apollo_pfOpenDetailForSubreddit:sub fromTable:tableView];
     }]];
     [(UIViewController *)self presentViewController:alert animated:YES completion:nil];
 }
@@ -449,15 +459,13 @@ static UIView *ApolloPFSectionFooterView(NSString *text) {
 // Users toggle uses.
 %new
 - (UITableViewCell *)apollo_tfCellForTable:(UITableView *)tableView row:(NSInteger)row {
-    UITableViewCell *cell;
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     if (row == ApolloTFRowOverrides) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         cell.textLabel.text = @"Per-Subreddit Overrides";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         cell.textLabel.enabled = sTagFilterEnabled;
     } else {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *sw = [[UISwitch alloc] init];
         switch (row) {

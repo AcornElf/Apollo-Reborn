@@ -23,10 +23,13 @@
 #import <objc/runtime.h>
 
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
+#import "ApolloFeedGalleryGesturePolicy.h"
 #import "ApolloState.h"
 #import "ApolloThemeRuntime.h"
 #import "Tweak.h"
 #import "UserDefaultConstants.h"
+#import "ApolloClasses.h"
 
 struct ApolloFeedGallerySizeRange { CGSize min; CGSize max; };
 
@@ -165,24 +168,12 @@ static ApolloFeedGalleryOwnerBox *sApolloFeedGalleryOpeningCarousel;
 @implementation ApolloFeedGalleryApplyState
 @end
 
-static id ApolloFeedGalleryObjectIvar(id object, const char *name) {
-    if (!object || !name) return nil;
-    Ivar ivar = class_getInstanceVariable([object class], name);
-    if (!ivar) return nil;
-    @try {
-        return object_getIvar(object, ivar);
-    } @catch (__unused NSException *exception) {
-        return nil;
-    }
-}
-
 // Swift.Bool occupies one byte at the runtime ivar offset. This is only used
 // for the two documented Bool fields on AlbumThumbnailsNode/RichMediaNode; no
 // Swift value-type/object bridging is attempted here. The type-encoding guard
 // makes an Apollo-update field retype degrade to "carousel stays native"
 // instead of silently reading a byte of an adjacent field.
-static BOOL ApolloFeedGalleryBoolIvar(id object, const char *name) {
-    if (!object || !name) return NO;
+static APOLLO_IVAR_NAME BOOL ApolloFeedGalleryBoolIvar(id object, const char *name) {
     Ivar ivar = class_getInstanceVariable([object class], name);
     if (!ivar) return NO;
     const char *encoding = ivar_getTypeEncoding(ivar);
@@ -219,13 +210,13 @@ static id ApolloFeedGalleryRichMediaNode(id albumNode) {
     id node = albumNode;
     for (NSInteger depth = 0; node && depth < 4; depth++) {
         node = [node respondsToSelector:@selector(supernode)] ? [node supernode] : nil;
-        if ([NSStringFromClass([node class]) isEqualToString:@"_TtC6Apollo13RichMediaNode"]) return node;
+        if ([node isKindOfClass:ApolloClassRichMediaNode]) return node;
     }
     return nil;
 }
 
 static RDKLink *ApolloFeedGalleryLink(id albumNode) {
-    return ApolloFeedGalleryObjectIvar(ApolloFeedGalleryRichMediaNode(albumNode), "link");
+    return ApolloObjectIvar(ApolloFeedGalleryRichMediaNode(albumNode), "link");
 }
 
 // Reddit preview arrays are normally ascending by width. Select the smallest
@@ -250,8 +241,8 @@ static NSURL *ApolloFeedGalleryPreviewURL(RDKGalleryItem *item) {
 // fail-safe renderer. The returned dictionaries contain only immutable values
 // safe to carry from Texture's background layout thread onto the main thread.
 static NSArray<NSDictionary *> *ApolloFeedGalleryItems(id albumNode) {
-    RDKGallery *gallery = ApolloFeedGalleryObjectIvar(albumNode, "redditGallery");
-    if (![gallery isKindOfClass:NSClassFromString(@"RDKGallery")]) return nil;
+    RDKGallery *gallery = ApolloObjectIvar(albumNode, "redditGallery");
+    if (![gallery isKindOfClass:ApolloClassRDKGallery]) return nil;
     if (![gallery.items isKindOfClass:[NSArray class]] || gallery.items.count < 2) return nil;
 
     // RDKGallery is immutable for a post. Texture may measure the same node
@@ -263,24 +254,21 @@ static NSArray<NSDictionary *> *ApolloFeedGalleryItems(id albumNode) {
     NSMutableArray<NSDictionary *> *result = [NSMutableArray arrayWithCapacity:gallery.items.count];
     for (id rawItem in gallery.items) {
         if (![rawItem respondsToSelector:@selector(image)]) {
-            objc_setAssociatedObject(gallery, &kApolloFeedGalleryItemsCacheKey, NSNull.null,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            return nil;
+            result = nil;
+            break;
         }
         RDKGalleryItem *item = rawItem;
         RDKGalleryItemImage *source = item.image;
         // Mixed/video galleries stay native for this first scope. A static
         // poster is not an honest representation of a playable gallery page.
-        if (![source isKindOfClass:NSClassFromString(@"RDKGalleryItemImage")] || source.mp4URL) {
-            objc_setAssociatedObject(gallery, &kApolloFeedGalleryItemsCacheKey, NSNull.null,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            return nil;
+        if (![source isKindOfClass:ApolloClassRDKGalleryItemImage] || source.mp4URL) {
+            result = nil;
+            break;
         }
         NSURL *previewURL = ApolloFeedGalleryPreviewURL(item);
         if (![previewURL isKindOfClass:[NSURL class]]) {
-            objc_setAssociatedObject(gallery, &kApolloFeedGalleryItemsCacheKey, NSNull.null,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            return nil;
+            result = nil;
+            break;
         }
         double aspect = (source.width > 0.0 && source.height > 0.0)
             ? source.height / source.width : 0.0;
@@ -306,32 +294,6 @@ static UINavigationController *ApolloFeedGalleryAncestorNavigationController(UIV
     return nil;
 }
 
-// A drag that ends pulled at least this far past the first/last page commits
-// to navigation on release. UIScrollView rubber-banding roughly halves finger
-// travel in the overscroll region, so 16pt of offset is ~32pt of finger — a
-// deliberate pull, but far less than a page turn.
-static const CGFloat kApolloFeedGalleryReleaseHandOffOverscroll = 16.0;
-
-// The begin-time hand-off only acts on an unambiguous velocity: below this
-// floor the hysteresis reading is jitter, and a wrong-sign blip would hand
-// the touch away and navigate — the one failure mode worse than a bounce.
-// Marginal drags simply fall through to the release-past-edge path, which
-// decides from release position and needs no velocity at all.
-static const CGFloat kApolloFeedGalleryHandOffMinimumVelocity = 150.0;
-
-// Flick criterion for the release path. A real flick past the first/last page
-// releases almost immediately, before rubber-band travel reaches the 16pt
-// positional threshold above — the finger is gone while the overscroll is
-// still small, so the positional test alone reads the release as a bounce.
-// (Synthetic sim drags always release fully displaced, which is why the miss
-// only shows up on device.) UIScrollView's willEndDragging velocity is
-// reliable at release (unlike the begin-time hysteresis read), so a release
-// that is past the edge at all AND still moving past it commits too. Values:
-// same 150pt/s floor as the begin path, expressed in UIScrollView's pt/ms;
-// 2pt of overscroll to ignore boundary-pixel noise on a stationary release.
-static const CGFloat kApolloFeedGalleryReleaseFlickVelocity = 0.15;
-static const CGFloat kApolloFeedGalleryReleaseFlickOverscroll = 2.0;
-
 // ApolloNavigationController keeps the pages popped by swipe-back in a Swift
 // [UIViewController] ivar named poppedViewControllers; its goForward command
 // and right-side navigation pan re-push from it (RE: the class's ivar list and
@@ -341,7 +303,7 @@ static const CGFloat kApolloFeedGalleryReleaseFlickOverscroll = 2.0;
 // ivar on a future Apollo, nil/empty array) returns NO, which keeps the
 // carousel's native rubber-band.
 static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationController) {
-    id popped = ApolloFeedGalleryObjectIvar(navigationController, "poppedViewControllers");
+    id popped = ApolloObjectIvar(navigationController, "poppedViewControllers");
     if (![popped respondsToSelector:@selector(count)]) return NO;
     @try {
         return ((NSUInteger (*)(id, SEL))objc_msgSend)(popped, @selector(count)) > 0;
@@ -364,53 +326,42 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
     if (gestureRecognizer == self.panGestureRecognizer && sFeedGalleryEdgeSwipeNav) {
-        // The carousel owns a horizontal drag only while it still has a page
-        // to show in that direction. At the first/last page the drag could
-        // only rubber-band, so decline it: the failure requirements wired in
-        // didMoveToWindow then release Apollo's own back/forward navigation
-        // pans (ApolloNavigationController's left/right pan recognizers) to
-        // take over the same touch. Only decline when that navigation can
-        // actually act; otherwise keep the native bounce.
-        //
-        // Direction comes from the velocity sign (translationInView: is still
-        // zero at pan-hysteresis time), taken only above a magnitude floor:
-        // hysteresis velocity can read as zero or momentarily backwards for
-        // real fingers, and a false hand-off navigates the user away, which
-        // is worse than a bounce. Anything below the floor falls through to
-        // the deterministic release-past-edge path in the scroll delegate.
+        // Decide ownership once, while UIKit can still let Apollo's native
+        // recognizers follow the finger. The carousel consumes gestures that
+        // can page its content and yields clear outward boundary pans so the
+        // feed's vote/action pans and navigation pans arbitrate normally.
+        // There is deliberately no release-time fallback: navigating after a
+        // rubber-band has snapped back is delayed, non-interactive, and can
+        // jump to an unrelated controller from Apollo's forward history.
         UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
-        CGFloat velocityX = [pan velocityInView:self].x;
+        CGPoint velocity = [pan velocityInView:self];
         CGFloat maximumOffset = self.contentSize.width - CGRectGetWidth(self.bounds);
-        if (maximumOffset > 0.5 &&
-            fabs(velocityX) >= kApolloFeedGalleryHandOffMinimumVelocity) {
-            // Pages are laid out left-to-right in every locale (see
-            // layoutSubviews), so the first image sits at offset 0 even under
-            // RTL. Only the NAVIGATION meaning of pulling past an edge
-            // mirrors with the layout direction, not the edges themselves.
-            BOOL atFirstPage = self.contentOffset.x <= 0.5;
-            BOOL atLastPage = self.contentOffset.x >= maximumOffset - 0.5;
-            BOOL pullingPastLeading = atFirstPage && velocityX > 0.0;
-            BOOL pullingPastTrailing = atLastPage && velocityX < 0.0;
-            BOOL rightToLeft = self.effectiveUserInterfaceLayoutDirection ==
-                UIUserInterfaceLayoutDirectionRightToLeft;
-            BOOL wantsBack = rightToLeft ? pullingPastTrailing : pullingPastLeading;
-            BOOL wantsForward = rightToLeft ? pullingPastLeading : pullingPastTrailing;
-            if (wantsBack || wantsForward) {
-                UINavigationController *navigationController =
-                    ApolloFeedGalleryAncestorNavigationController(self);
-                // Never hand off while a transition is already running (the
-                // carousel can be asked again mid-pop as its screen animates
-                // away; a second decline would double-pop).
-                BOOL navigationCanAct = navigationController.transitionCoordinator == nil &&
-                    (wantsBack
-                    ? navigationController.viewControllers.count > 1
-                    : ApolloFeedGalleryCanGoForward(navigationController));
-                if (navigationCanAct) {
-                    ApolloLog(@"[FeedGallery] handing %@ swipe to navigation (offset=%.0f)",
-                              wantsBack ? @"back" : @"forward", self.contentOffset.x);
-                    return NO;
-                }
-            }
+        UINavigationController *navigationController =
+            ApolloFeedGalleryAncestorNavigationController(self);
+        BOOL navigationIdle = navigationController.transitionCoordinator == nil;
+        BOOL canGoBack = navigationIdle && navigationController.viewControllers.count > 1;
+        BOOL canGoForward = navigationIdle && ApolloFeedGalleryCanGoForward(navigationController);
+        UIView *coordinateView = self.window ?: self;
+        CGFloat currentX = [pan locationInView:coordinateView].x;
+        CGFloat translationX = [pan translationInView:coordinateView].x;
+        CGFloat touchX = ApolloFeedGalleryGestureOriginX(currentX, translationX);
+        CGFloat viewWidth = CGRectGetWidth(coordinateView.bounds);
+        BOOL rightToLeft = self.effectiveUserInterfaceLayoutDirection ==
+            UIUserInterfaceLayoutDirectionRightToLeft;
+        ApolloFeedGalleryPanDisposition disposition =
+            ApolloFeedGalleryPanDispositionForGesture(self.contentOffset.x,
+                                                       maximumOffset,
+                                                       velocity.x,
+                                                       velocity.y,
+                                                       touchX,
+                                                       viewWidth,
+                                                       rightToLeft,
+                                                       canGoBack,
+                                                       canGoForward);
+        if (disposition == ApolloFeedGalleryPanDispositionYield) {
+            ApolloLog(@"[FeedGallery] yielding outward pan to Apollo (offset=%.0f velocity=(%.0f,%.0f) touchX=%.0f)",
+                      self.contentOffset.x, velocity.x, velocity.y, touchX);
+            return NO;
         }
     }
     return [super gestureRecognizerShouldBegin:gestureRecognizer];
@@ -451,8 +402,9 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
             preferredOver++;
         }
     }
-    ApolloLog(@"[FeedGallery] carousel attached; preferred over %lu ancestor pans",
-              (unsigned long)preferredOver);
+    // Once per gallery cell shown: debug level.
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [FeedGallery] carousel attached; preferred over %lu ancestor pans",
+                 (unsigned long)preferredOver);
 }
 
 @end
@@ -473,12 +425,6 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
 @property (nonatomic) BOOL contentIsObscured;
 @property (nonatomic) CGSize lastLayoutSize;
 @property (nonatomic) BOOL needsPageGeometry;
-@property (nonatomic) BOOL dragBeganAtLeadingEdge;
-@property (nonatomic) BOOL dragBeganAtTrailingEdge;
-// UIScrollView's release velocity (points/ms, sign = direction contentOffset
-// is heading), captured in scrollViewWillEndDragging for the release-time
-// hand-off below. Reset when a new drag begins.
-@property (nonatomic) CGFloat releaseVelocityX;
 - (void)configureWithItems:(NSArray<NSDictionary *> *)items
                  albumNode:(id)albumNode
                       nsfw:(BOOL)nsfw
@@ -508,9 +454,7 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     _scrollView.showsVerticalScrollIndicator = NO;
     _scrollView.alwaysBounceHorizontal = YES;
     _scrollView.delegate = self;
-    if (@available(iOS 11.0, *)) {
-        _scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-    }
+    _scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
     [self addSubview:_scrollView];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(apollo_pageTapped:)];
@@ -521,7 +465,7 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     [_scrollView addGestureRecognizer:tap];
 
     _pageControl = [[UIPageControl alloc] initWithFrame:CGRectZero];
-    if (@available(iOS 14.0, *)) _pageControl.backgroundStyle = UIPageControlBackgroundStyleMinimal;
+    _pageControl.backgroundStyle = UIPageControlBackgroundStyleMinimal;
     _pageControl.currentPageIndicatorTintColor = ApolloFeedGalleryPageIndicatorColor(YES);
     _pageControl.pageIndicatorTintColor = ApolloFeedGalleryPageIndicatorColor(NO);
     [_pageControl addTarget:self action:@selector(apollo_pageControlChanged:)
@@ -729,7 +673,7 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     if (self.contentIsObscured || index < 0 || index >= (NSInteger)self.items.count) return;
 
     id richMediaNode = ApolloFeedGalleryRichMediaNode(self.albumNode);
-    RDKLink *link = ApolloFeedGalleryObjectIvar(richMediaNode, "link");
+    RDKLink *link = ApolloObjectIvar(richMediaNode, "link");
 
     // Apollo's tap route maps the sender's identity against thumbnailNode1..3
     // to pick the opening page, builds the viewer's placeholder dictionary as
@@ -741,9 +685,9 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     // page image and the tapped page's on-screen rect.
     const char *senderNames[3] = { "thumbnailNode1", "thumbnailNode2", "thumbnailNode3" };
     id senderNode = index <= 2
-        ? ApolloFeedGalleryObjectIvar(self.albumNode, senderNames[index]) : nil;
+        ? ApolloObjectIvar(self.albumNode, senderNames[index]) : nil;
     BOOL senderMapsNatively = senderNode != nil;
-    if (!senderNode) senderNode = ApolloFeedGalleryObjectIvar(self.albumNode, "thumbnailNode1");
+    if (!senderNode) senderNode = ApolloObjectIvar(self.albumNode, "thumbnailNode1");
     if (!richMediaNode || !senderNode || !link ||
         ![richMediaNode respondsToSelector:@selector(albumThumbnailButtonTappedWithSender:)]) {
         ApolloLog(@"[FeedGallery] cannot open native viewer: missing owner/thumbnail/link");
@@ -904,88 +848,18 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     if (!scrollView.isDecelerating) [self apollo_loadNearIndex:index];
 }
 
-- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
-    if (scrollView != self.scrollView) return;
-    CGFloat maximumOffset = scrollView.contentSize.width - CGRectGetWidth(scrollView.bounds);
-    self.dragBeganAtLeadingEdge = maximumOffset > 0.5 && scrollView.contentOffset.x <= 0.5;
-    self.dragBeganAtTrailingEdge = maximumOffset > 0.5 &&
-        scrollView.contentOffset.x >= maximumOffset - 0.5;
-    self.releaseVelocityX = 0.0;
-}
-
 - (void)scrollViewWillEndDragging:(UIScrollView *)scrollView
                      withVelocity:(CGPoint)velocity
               targetContentOffset:(inout CGPoint *)targetContentOffset {
     if (scrollView != self.scrollView || !targetContentOffset) return;
-    self.releaseVelocityX = velocity.x;
+    (void)velocity;
     CGFloat width = CGRectGetWidth(scrollView.bounds);
     if (width <= 0.0) return;
     [self apollo_loadNearIndex:[self apollo_clampIndex:(NSInteger)llround(targetContentOffset->x / width)]];
 }
 
-// Deterministic companion to the begin-time handoff above: when that decline
-// misses (a real finger's velocity at pan-hysteresis can read as zero or
-// momentarily backwards, so the carousel takes the drag and rubber-bands),
-// releasing while still pulled past the first/last page commits to the same
-// navigation. Release-time state is unambiguous — no velocity guessing.
-- (void)apollo_navigateIfReleasedPastEdge:(UIScrollView *)scrollView {
-    if (!sFeedGalleryEdgeSwipeNav) return;
-    if (!self.dragBeganAtLeadingEdge && !self.dragBeganAtTrailingEdge) return;
-    CGFloat maximumOffset = scrollView.contentSize.width - CGRectGetWidth(scrollView.bounds);
-    if (maximumOffset <= 0.5) return;
-    CGFloat offset = scrollView.contentOffset.x;
-    CGFloat velocityX = self.releaseVelocityX;
-    // Two ways a release past the edge commits: a deliberate pull held 16pt of
-    // overscroll deep, or a flick — barely past the edge but still moving past
-    // it at release (see the flick constants above for why both are needed).
-    BOOL pastLeading = self.dragBeganAtLeadingEdge &&
-        (offset < -kApolloFeedGalleryReleaseHandOffOverscroll ||
-         (offset < -kApolloFeedGalleryReleaseFlickOverscroll &&
-          velocityX <= -kApolloFeedGalleryReleaseFlickVelocity));
-    BOOL pastTrailing = self.dragBeganAtTrailingEdge &&
-        (offset > maximumOffset + kApolloFeedGalleryReleaseHandOffOverscroll ||
-         (offset > maximumOffset + kApolloFeedGalleryReleaseFlickOverscroll &&
-          velocityX >= kApolloFeedGalleryReleaseFlickVelocity));
-    if (!pastLeading && !pastTrailing) {
-        // An edge-started drag that released overscrolled but didn't qualify is
-        // exactly the case that separates "feature off/unavailable" from "the
-        // thresholds missed a real gesture" in user logs — keep it visible.
-        BOOL overLeading = self.dragBeganAtLeadingEdge && offset < -0.5;
-        BOOL overTrailing = self.dragBeganAtTrailingEdge && offset > maximumOffset + 0.5;
-        if (overLeading || overTrailing) {
-            ApolloLog(@"[FeedGallery] edge release below thresholds (overscroll=%.1f velocity=%.2fpt/ms)",
-                      overLeading ? -offset : offset - maximumOffset, velocityX);
-        }
-        return;
-    }
-
-    BOOL rightToLeft = self.effectiveUserInterfaceLayoutDirection ==
-        UIUserInterfaceLayoutDirectionRightToLeft;
-    BOOL wantsBack = rightToLeft ? pastTrailing : pastLeading;
-    UINavigationController *navigationController =
-        ApolloFeedGalleryAncestorNavigationController(self);
-    // A transition already in flight means an earlier gesture won this
-    // navigation; firing again would double-pop.
-    if (navigationController.transitionCoordinator) return;
-    if (wantsBack) {
-        if (navigationController.viewControllers.count <= 1) return;
-        ApolloLog(@"[FeedGallery] released past edge; navigating back (overscroll=%.1f velocity=%.2f)",
-                  pastLeading ? -offset : offset - maximumOffset, velocityX);
-        [navigationController popViewControllerAnimated:YES];
-    } else {
-        if (!ApolloFeedGalleryCanGoForward(navigationController)) return;
-        if (![navigationController respondsToSelector:@selector(goForward)]) return;
-        ApolloLog(@"[FeedGallery] released past edge; navigating forward (overscroll=%.1f velocity=%.2f)",
-                  pastLeading ? -offset : offset - maximumOffset, velocityX);
-        ((void (*)(id, SEL))objc_msgSend)(navigationController, @selector(goForward));
-    }
-}
-
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
     if (scrollView != self.scrollView) return;
-    [self apollo_navigateIfReleasedPastEdge:scrollView];
-    self.dragBeganAtLeadingEdge = NO;
-    self.dragBeganAtTrailingEdge = NO;
     if (!decelerate) [self apollo_finishPaging];
 }
 
@@ -1009,6 +883,34 @@ static BOOL ApolloFeedGalleryCanGoForward(UINavigationController *navigationCont
     if (self.window && !self.contentIsObscured) [self apollo_loadNearIndex:self.currentIndex];
 }
 
+// The carousel owns every touch that lands inside it; none may reach the feed
+// cell. The page scroll view already keeps its own (UIScrollView does not
+// forward touches up the responder chain), but the page dots did not.
+// UIPageControl drives its taps and scrubbing with gesture recognizers and
+// opts out of UIControl tracking (shouldTrack is NO on iOS 26 and 27), and an
+// untracked UIControl passes touchesBegan/Moved/Ended to its next responder
+// but never touchesCancelled. So the feed's UITableView saw a touch start on
+// the dots, recorded this post as its pending selection, and was never told
+// when another gesture (the image context menu's long press, for one)
+// cancelled that touch. UITableView only records a new pending row while none
+// is set, so the next tap on ANY post opened this gallery's thread instead
+// (#949); a touch lifted on the dots also opened the post. Ending the chain
+// here leaves the dots' own gestures, which never depended on forwarding,
+// working as before.
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [FeedGallery] kept a carousel touch from the feed row (%{public}@)",
+                   NSStringFromClass(touches.anyObject.view.class));
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+}
+
 @end
 
 #pragma mark - Texture host and live setting refresh
@@ -1029,7 +931,7 @@ static ASDisplayNode *ApolloFeedGalleryEnsureHostNode(id albumNode) {
     @synchronized (albumNode) {
         host = objc_getAssociatedObject(albumNode, &kApolloFeedGalleryHostNodeKey);
         if (!host) {
-            Class nodeClass = NSClassFromString(@"ASDisplayNode");
+            Class nodeClass = ApolloClassASDisplayNode;
             if (!nodeClass) return nil;
             host = [[nodeClass alloc] init];
             host.userInteractionEnabled = YES;
@@ -1091,8 +993,8 @@ static void ApolloFeedGalleryScheduleApply(ASDisplayNode *host,
         if (objc_getAssociatedObject(host, &kApolloFeedGalleryApplyStateKey) != state) return;
         for (NSString *name in @[ @"thumbnailNode1", @"thumbnailNode2", @"thumbnailNode3",
                                   @"totalImagesNode", @"obscuredContentInfoOverlayNode" ]) {
-            ASDisplayNode *node = ApolloFeedGalleryObjectIvar(albumNode, name.UTF8String);
-            if (node) node.hidden = enabled;
+            ASDisplayNode *node = ApolloObjectIvar(albumNode, name.UTF8String);
+            node.hidden = enabled;
         }
         host.hidden = !enabled;
         if (!enabled) {
@@ -1144,7 +1046,7 @@ static void ApolloFeedGallerySettingChanged(void) {
     // when the child's background layout pass starts. Capture the owner from
     // the parent BEFORE its original layout triggers child measurement; a weak
     // box avoids a RichMedia <-> album cycle.
-    id albumNode = ApolloFeedGalleryObjectIvar(self, "albumThumbnailsNode");
+    id albumNode = ApolloObjectIvar(self, "albumThumbnailsNode");
     if (albumNode) {
         ApolloFeedGalleryOwnerBox *box = objc_getAssociatedObject(albumNode, &kApolloFeedGalleryOwnerBoxKey);
         if (!box) {
@@ -1196,14 +1098,14 @@ static void ApolloFeedGallerySettingChanged(void) {
     }
 
     ASDisplayNode *host = existingHost ?: ApolloFeedGalleryEnsureHostNode(self);
-    Class ratioClass = NSClassFromString(@"ASRatioLayoutSpec");
+    Class ratioClass = ApolloClassASRatioLayoutSpec;
     if (!host || !ratioClass) return %orig;
 
     BOOL nsfw = ApolloFeedGalleryBoolIvar(self, "isNSFW");
     BOOL spoiler = ApolloFeedGalleryBoolIvar(self, "isSpoiler");
     if (!existingHost) {
-        ApolloLog(@"[FeedGallery] installing carousel count=%lu obscured=%d",
-                  (unsigned long)items.count, (int)(nsfw || spoiler));
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [FeedGallery] installing carousel count=%lu obscured=%d",
+                     (unsigned long)items.count, (int)(nsfw || spoiler));
     }
     ApolloFeedGalleryScheduleApply(host, self, items, YES, nsfw, spoiler);
 
@@ -1237,7 +1139,7 @@ static void ApolloFeedGalleryRememberViewerPage(UIPageViewController *pager) {
     UIViewController *child = pager.viewControllers.firstObject;
     // NSStringFromClass demangles Swift names ("Apollo.MediaViewerController"),
     // so comparing it with the encoded runtime name rejects every native page.
-    Class viewerClass = NSClassFromString(@"_TtC6Apollo21MediaViewerController");
+    Class viewerClass = ApolloClassMediaViewerController;
     if (!viewerClass || ![child isKindOfClass:viewerClass]) return;
     Ivar ivar = class_getInstanceVariable(child.class, "index");
     if (!ivar) return;
@@ -1251,7 +1153,7 @@ static void ApolloFeedGalleryRememberViewerPage(UIPageViewController *pager) {
     if (carousel && index >= (NSInteger)carousel.items.count) return;
     objc_setAssociatedObject(link, &kApolloFeedGalleryRememberedIndexKey, @(index), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [carousel apollo_restoreViewedIndex:index];
-    ApolloLogDebug(@"[FeedGallery] restored viewed album page=%ld", (long)index);
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [FeedGallery] restored viewed album page=%ld", (long)index);
 }
 
 %hook _TtC6Apollo23MediaPageViewController
@@ -1274,9 +1176,9 @@ static void ApolloFeedGalleryRememberViewerPage(UIPageViewController *pager) {
     if (sApolloFeedGalleryOpeningCarousel) {
         objc_setAssociatedObject(self, &kApolloFeedGalleryReturnCarouselKey,
                                  sApolloFeedGalleryOpeningCarousel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        ApolloLogDebug(@"[FeedGallery] bound fullscreen return carousel");
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [FeedGallery] bound fullscreen return carousel");
     }
-    RDKLink *link = ApolloFeedGalleryObjectIvar(self, "link");
+    RDKLink *link = ApolloObjectIvar(self, "link");
     ApolloFeedGalleryPendingSelection *selection = objc_getAssociatedObject(
         link, &kApolloFeedGalleryPendingViewerIndexKey);
     if ([selection isKindOfClass:[ApolloFeedGalleryPendingSelection class]]) {

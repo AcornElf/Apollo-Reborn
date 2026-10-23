@@ -59,6 +59,14 @@
 // (verified in the simulator: the widget renders logged-out), only
 // write-actions inside the widget are inert.
 //
+// User actions: an app acting AS the user (Subscriber Goal's "Subscribe to
+// r/X", posting or commenting) first needs Reddit's one-time permission
+// prompt, which the page draws outside the devvit element; the crop lets it
+// through and the probe sizes the widget for it. A subscription the app then
+// makes server-side is mirrored into Apollo's own account state (see
+// "Subscription sync") so the Join pill, the ⋯ menu and the Subscriptions
+// list agree with Reddit.
+//
 // Height: devvit posts render at a fixed CSS height chosen by the app
 // ("tall" = 512pt for matchpal; a finished match card collapses to ~100pt).
 // The last measured height per post persists across launches; a post never
@@ -82,12 +90,17 @@
 #import <objc/message.h>
 #import "Tweak.h"
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
 #import "ApolloState.h"
 #import "UserDefaultConstants.h"
 #import "ApolloTextureDecls.h"
 #import "ApolloWebSessionStore.h"
 #import "ApolloDirectChatWeb.h"
 #import "ApolloDevvitPosts.h"
+#import "ApolloAccountCredentials.h"
+#import "ApolloAccountSubscriptions.h"
+#import "ApolloWebJSON.h"
+#import "ApolloClasses.h"
 
 static void ApolloDevvitHeightDidChangeForFullName(NSString *fullName);
 static void ApolloDevvitScheduleStaleSweep(void);
@@ -425,11 +438,24 @@ static NSString *const kApolloDevvitCropScript = @""
        devvit elements' shadow trees are untouched by document styles. */
 "    + 'body *:not(devvit2-custom-post):not(devvit2-custom-post *)'"
 "    + ':not(shreddit-devvit-ui-loader):not(shreddit-devvit-ui-loader *)'"
-"    + ':not(devvit-blocks-renderer):not(devvit-blocks-renderer *) { visibility: hidden !important; }'"
+"    + ':not(devvit-blocks-renderer):not(devvit-blocks-renderer *)'"
+"    + ':not([id^=\"devvit-app-permission-consent-dialog\"])'"
+"    + ':not([id^=\"devvit-app-permission-consent-dialog\"] *) { visibility: hidden !important; }'"
 "    + 'devvit2-custom-post, shreddit-devvit-ui-loader, devvit-blocks-renderer {'"
 "    + '  visibility: visible !important; position: fixed !important;'"
 "    + '  top: 0 !important; left: 0 !important; right: 0 !important; width: 100vw !important;'"
 "    + '  margin: 0 !important; z-index: 2147483000 !important; }'"
+    /* Reddit's one-time "Give <app> limited access to your Reddit Account"
+       prompt (Deny / Allow). An app asks for it (canRunAsUser) before it first
+       acts as the user — Subscriber Goal's "Subscribe to r/X", posting or
+       commenting as them — and the page shows it OUTSIDE the devvit element:
+       <devvit-app-permissions-consent-dialog> is only a placeholder, the sheet
+       itself is portaled to div#devvit-app-permission-consent-dialog-<post>
+       under <shreddit-app>. Crop-hidden, the app just waited on a prompt
+       nobody could see, so the button "did nothing". Shown here, it opens as
+       a modal over the widget, which the probe grows to the tall size while
+       it is up. */
+"    + '[id^=\"devvit-app-permission-consent-dialog\"] { visibility: visible !important; }'"
 "    + '#credential_picker_container, #credential_picker_iframe { display: none !important; }'"
     /* Overlays that escape the visibility crop by promoting into the top
        layer (dialog.showModal): the "View in Reddit App" xpromo sheet and
@@ -514,6 +540,17 @@ static NSString *const kApolloDevvitProbeScript = @""
 "      }"
 "    })(el, 0);"
 "  } catch (e) {}"
+    /* Reddit's app-permission prompt (see the crop CSS) is a modal too, but
+       it renders outside the devvit element, where the walk above never
+       looks. The placeholder's rpl-dialog carries the open attribute for as
+       long as the sheet is up (dropped on Allow, Deny or close), so read
+       that; the sheet needs the tall size to show its text and both buttons. */
+"  var consent = 0;"
+"  try {"
+"    var cd = document.querySelector('devvit-app-permissions-consent-dialog');"
+"    var rd = cd && cd.shadowRoot ? cd.shadowRoot.querySelector('rpl-dialog') : null;"
+"    if (rd && rd.hasAttribute('open')) { consent = 1; modal = 1; }"
+"  } catch (e) {}"
     /* Offsite-link confirmation fix (#959): tapping an external link makes
        the devvit platform show devvit2-navigate-offsite-dialog, which is
        broken twice over on narrow viewports (both halves reproduce on mobile
@@ -596,7 +633,7 @@ static NSString *const kApolloDevvitProbeScript = @""
 "      }"
 "    })(el, 0);"
 "  } catch (e) {}"
-"  return JSON.stringify({ found: 1, h: h, w: Math.round(r.width), hostH: Math.round(r.height), deep: Math.round(deep), modal: modal, err: err, frames: frames, blocks: blocks, tag: el.tagName.toLowerCase() });"
+"  return JSON.stringify({ found: 1, h: h, w: Math.round(r.width), hostH: Math.round(r.height), deep: Math.round(deep), modal: modal, consent: consent, err: err, frames: frames, blocks: blocks, tag: el.tagName.toLowerCase() });"
 "})();";
 
 // Click the page's own retry control inside the devvit surface (the error
@@ -805,6 +842,136 @@ static NSString *ApolloDevvitCurrentIdentity(NSString **cookieHeaderOut) {
             username.lowercaseString ?: @"<anon>", (unsigned long)cookieHeader.hash];
 }
 
+#pragma mark - Subscription sync
+
+// A Devvit app can subscribe the user to the subreddit it is installed in
+// (reddit.subscribeToCurrentSubreddit(): Subscriber Goal's "Subscribe to r/X",
+// games' join buttons). That runs on Reddit's servers as the user, so nothing
+// on Apollo's side hears about it: the Join pill, the ⋯ menu's
+// Subscribe/Unsubscribe row and the Subscriptions list all kept saying "not
+// subscribed", with no way to leave again short of a relaunch. After a tap in
+// a widget whose subreddit the account's list doesn't include, ask Reddit (as
+// the active account) whether that changed, and file a new subscription into
+// Apollo's state the way its own Subscribe does. Apps cannot unsubscribe a
+// user, so only this direction exists.
+//
+// Each tap re-arms the sequence (the permission prompt's Allow is a tap too),
+// so a burst of taps in a game costs one short sequence after the last one,
+// and a rolling cap bounds a subreddit that never changes.
+static const NSTimeInterval kApolloDevvitSubscriptionCheckDelays[] = {2.0, 5.0, 12.0};
+static const NSUInteger kApolloDevvitSubscriptionChecksPerWindow = 12;
+static const NSTimeInterval kApolloDevvitSubscriptionCheckWindow = 600.0;
+// Main thread only. Keyed by lowercased subreddit name; an entry lives only
+// while its sequence is pending (generations come from one serial, so a
+// removed-and-re-armed key can never match a stale block).
+static NSInteger sDevvitSubscriptionCheckSerial;
+static NSMutableDictionary<NSString *, NSNumber *> *sDevvitSubscriptionCheckGenerations;
+static NSMutableDictionary<NSString *, NSMutableArray<NSNumber *> *> *sDevvitSubscriptionCheckTimes;
+
+// "/r/<name>/comments/<id>/…" → <name>; nil for anything else.
+static NSString *ApolloDevvitSubredditOfPermalink(NSURL *permalink) {
+    NSArray<NSString *> *parts = permalink.pathComponents;
+    NSUInteger index = [parts indexOfObject:@"r"];
+    if (index == NSNotFound || index + 1 >= parts.count) return nil;
+    NSString *name = parts[index + 1];
+    return name.length > 0 ? name : nil;
+}
+
+// Spends one check from the subreddit's rolling window, or returns NO.
+// Windows that have fully aged out are dropped on the way.
+static BOOL ApolloDevvitTakeSubscriptionCheck(NSString *key) {
+    if (!sDevvitSubscriptionCheckTimes) sDevvitSubscriptionCheckTimes = [NSMutableDictionary dictionary];
+    CFTimeInterval now = CACurrentMediaTime();
+    for (NSString *other in sDevvitSubscriptionCheckTimes.allKeys) {
+        NSNumber *newest = sDevvitSubscriptionCheckTimes[other].lastObject;
+        if (!newest || now - newest.doubleValue > kApolloDevvitSubscriptionCheckWindow) {
+            [sDevvitSubscriptionCheckTimes removeObjectForKey:other];
+        }
+    }
+    NSMutableArray<NSNumber *> *times = sDevvitSubscriptionCheckTimes[key];
+    if (!times) {
+        times = [NSMutableArray array];
+        sDevvitSubscriptionCheckTimes[key] = times;
+    }
+    while (times.count > 0 && now - times.firstObject.doubleValue > kApolloDevvitSubscriptionCheckWindow) {
+        [times removeObjectAtIndex:0];
+    }
+    if (times.count >= kApolloDevvitSubscriptionChecksPerWindow) return NO;
+    [times addObject:@(now)];
+    return YES;
+}
+
+static BOOL ApolloDevvitSubscriptionCheckIsCurrent(NSString *key, NSInteger generation) {
+    return sDevvitSubscriptionCheckGenerations[key].integerValue == generation;
+}
+
+static void ApolloDevvitEndSubscriptionChecks(NSString *key, NSInteger generation) {
+    if (ApolloDevvitSubscriptionCheckIsCurrent(key, generation)) {
+        [sDevvitSubscriptionCheckGenerations removeObjectForKey:key];
+    }
+}
+
+static void ApolloDevvitRunSubscriptionCheck(NSString *subreddit, NSString *key, NSInteger generation,
+                                             BOOL lastCheck, id client) {
+    if (!ApolloDevvitSubscriptionCheckIsCurrent(key, generation)) return;  // re-armed or done
+    if (lastCheck) ApolloDevvitEndSubscriptionChecks(key, generation);
+    if (ApolloActiveAccountClient() != client) return;  // account switched since the tap
+    BOOL subscribed = NO;
+    if (ApolloAccountSubscriptionListState(subreddit, &subscribed) && subscribed) {
+        ApolloDevvitEndSubscriptionChecks(key, generation);  // Apollo knows already
+        return;
+    }
+    // An optional read, like the header's info fetch: while Reddit is
+    // rate-limiting the web session (API-Key-Free accounts sign these with
+    // it), stand down rather than add to the window everything else waits on.
+    if (ApolloWebJSONOptionalReadBackoff(ApolloActiveWebSessionUsername()) > 0) return;
+    if (!ApolloDevvitTakeSubscriptionCheck(key)) return;
+    SEL fetch = @selector(subredditWithName:completion:);
+    if (![client respondsToSelector:fetch]) return;
+    // RDKClient's completion: ^(RDKSubreddit *subreddit, NSError *error), with
+    // `subscriber` (getter isSubscriber) as the account that asked sees it.
+    void (^completion)(id, NSError *) = ^(id fetched, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error || ![fetched respondsToSelector:@selector(isSubscriber)]) return;
+            if (!((BOOL (*)(id, SEL))objc_msgSend)(fetched, @selector(isSubscriber))) return;
+            if (ApolloActiveAccountClient() != client) return;
+            // The last check ends the sequence before its request goes out,
+            // so an answer from it still counts; a newer tap's sequence wins.
+            NSNumber *current = sDevvitSubscriptionCheckGenerations[key];
+            if (current && current.integerValue != generation) return;
+            [sDevvitSubscriptionCheckGenerations removeObjectForKey:key];
+            ApolloLog(@"[Devvit] an interactive post subscribed the account to r/%@; updating Apollo", subreddit);
+            // The list stores names as Reddit spells them; the permalink's
+            // spelling is only a fallback.
+            id displayName = [fetched respondsToSelector:@selector(name)]
+                ? ((id (*)(id, SEL))objc_msgSend)(fetched, @selector(name)) : nil;
+            ApolloAccountApplySubscriptionChange([displayName isKindOfClass:[NSString class]] && [displayName length] > 0
+                                                     ? displayName : subreddit, YES);
+        });
+    };
+    ((id (*)(id, SEL, id, id))objc_msgSend)(client, fetch, subreddit, [completion copy]);
+}
+
+static void ApolloDevvitScheduleSubscriptionCheck(NSURL *permalink) {
+    NSString *subreddit = ApolloDevvitSubredditOfPermalink(permalink);
+    id client = ApolloActiveAccountClient();
+    if (subreddit.length == 0 || !client) return;  // logged out: nobody an app could subscribe
+    BOOL subscribed = NO;
+    if (ApolloAccountSubscriptionListState(subreddit, &subscribed) && subscribed) return;
+    NSString *key = subreddit.lowercaseString;
+    if (!sDevvitSubscriptionCheckGenerations) sDevvitSubscriptionCheckGenerations = [NSMutableDictionary dictionary];
+    NSInteger generation = ++sDevvitSubscriptionCheckSerial;
+    sDevvitSubscriptionCheckGenerations[key] = @(generation);
+    size_t count = sizeof(kApolloDevvitSubscriptionCheckDelays) / sizeof(kApolloDevvitSubscriptionCheckDelays[0]);
+    for (size_t i = 0; i < count; i++) {
+        BOOL lastCheck = (i + 1 == count);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kApolloDevvitSubscriptionCheckDelays[i] * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            ApolloDevvitRunSubscriptionCheck(subreddit, key, generation, lastCheck, client);
+        });
+    }
+}
+
 #pragma mark - ApolloDevvitWidgetView
 
 // The embedded widget: WKWebView cropped to the devvit element + a native
@@ -870,6 +1037,8 @@ static NSString *ApolloDevvitCurrentIdentity(NSString **cookieHeaderOut) {
 // the retry cover rather than reloading on every scroll pass.
 @property (nonatomic) CFTimeInterval failedAt;
 @property (nonatomic, strong) UIImageView *retryIcon;
+// Reddit's app-permission prompt was open at the last probe (log transitions).
+@property (nonatomic) BOOL consentShowing;
 // In the keep-alive pool (no host; page still live) — see ApolloDevvitParkWidget.
 @property (nonatomic) BOOL parked;
 @property (nonatomic) CFTimeInterval parkedAt;
@@ -967,11 +1136,9 @@ static const NSUInteger kApolloDevvitMaxLiveWidgets = 4;
     // whole cover tappable (see coverTapped).
     UIImageView *retryIcon = [UIImageView new];
     retryIcon.translatesAutoresizingMaskIntoConstraints = NO;
-    if (@available(iOS 13.0, *)) {
-        retryIcon.image = [UIImage systemImageNamed:@"arrow.clockwise"
-                                  withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22.0
-                                                                                                    weight:UIImageSymbolWeightMedium]];
-    }
+    retryIcon.image = [UIImage systemImageNamed:@"arrow.clockwise"
+                              withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22.0
+                                                                                                weight:UIImageSymbolWeightMedium]];
     retryIcon.tintColor = status.textColor;
     retryIcon.hidden = YES;
     [cover addSubview:retryIcon];
@@ -1069,6 +1236,8 @@ static const NSUInteger kApolloDevvitMaxLiveWidgets = 4;
     // polling briskly while the height is still settling.
     NSInteger gen = ++self.pollGeneration;
     [self pollAfter:kApolloDevvitTapProbeDelay attempt:0 generation:gen];
+    // Any tap can be the one that subscribes the user (Subscription sync).
+    ApolloDevvitScheduleSubscriptionCheck(self.permalinkURL);
 }
 
 - (void)coverTapped {
@@ -1283,6 +1452,11 @@ static const NSUInteger kApolloDevvitMaxLiveWidgets = 4;
     // A viewport-filling dialog is only as tall as we let the page be — give
     // it the "tall" size so the expanded view actually fits (see the probe).
     if (found && [info[@"modal"] boolValue] && h < kApolloDevvitModalHeight) h = kApolloDevvitModalHeight;
+    BOOL consent = found && [info[@"consent"] boolValue];
+    if (consent != self.consentShowing) {
+        self.consentShowing = consent;
+        ApolloLog(@"[Devvit] %@ app permission prompt %@", self.fullName, consent ? @"opened" : @"closed");
+    }
 
     if (!self.revealed) {
         // "Prove your humanity" interstitial: its clearance cookie lands in
@@ -1493,7 +1667,6 @@ static const NSUInteger kApolloDevvitMaxLiveWidgets = 4;
     ApolloDevvitHeightDidChangeForFullName(self.fullName);
 }
 
-
 - (void)teardown {
     self.pollGeneration += 1;  // cancels any queued poll blocks
     self.stashedForReadopt = NO;
@@ -1613,7 +1786,7 @@ static NSURL *ApolloDevvitNormalizedPermalink(NSURL *url) {
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)nav withError:(NSError *)error {
     if (error.code == NSURLErrorCancelled) return;
-    ApolloLog(@"[Devvit] provisional load failed: %@", error.localizedDescription);
+    ApolloLogError(@"[Devvit] provisional load failed: %@", error.localizedDescription);
     [self showFailure];
 }
 
@@ -1998,7 +2171,7 @@ static ASDisplayNode *ApolloDevvitEnsureHostNode(id parentNode) {
     @synchronized (parentNode) {
         host = objc_getAssociatedObject(parentNode, kApolloDevvitHostNodeKey);
         if (!host) {
-            Class nodeClass = NSClassFromString(@"ASDisplayNode");
+            Class nodeClass = ApolloClassASDisplayNode;
             if (!nodeClass) return nil;
             host = [nodeClass new];
             host.clipsToBounds = YES;
@@ -2249,7 +2422,7 @@ static void ApolloDevvitRegisterFeedTable(UITableView *table) {
 }
 
 static id ApolloDevvitNodeForRow(UITableView *table, NSIndexPath *indexPath) {
-    SEL sel = NSSelectorFromString(@"nodeForRowAtIndexPath:");
+    SEL sel = @selector(nodeForRowAtIndexPath:);
     if (!table || !indexPath || ![table respondsToSelector:sel]) return nil;
     @try { return ((id (*)(id, SEL, NSIndexPath *))objc_msgSend)(table, sel, indexPath); }
     @catch (__unused id e) { return nil; }
@@ -2516,13 +2689,9 @@ static void ApolloDevvitInterfaceSizeChanged(void) {
 
 static void ApolloDevvitHeightDidChangeForFullName(NSString *fullName) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        Class richMediaClass = NSClassFromString(@"_TtC6Apollo13RichMediaNode");
+        Class richMediaClass = ApolloClassRichMediaNode;
         for (id parent in sDevvitHostParents.allObjects) {
-            RDKLink *link = nil;
-            @try {
-                Ivar iv = class_getInstanceVariable(object_getClass(parent), "link");
-                if (iv) link = object_getIvar(parent, iv);
-            } @catch (__unused id e) {}
+            RDKLink *link = ApolloDevvitLinkOfParent(parent);
             if (fullName && link && ![ApolloDevvitFullName(link) isEqualToString:fullName]) continue;
             ASDisplayNode *host = objc_getAssociatedObject(parent, kApolloDevvitHostNodeKey);
             CGFloat target = ApolloDevvitHeightForFullName(fullName);
@@ -2566,8 +2735,8 @@ static void ApolloDevvitHeightDidChangeForFullName(NSString *fullName) {
 // way a committed Texture row changes shape — see the row-reload section).
 static void ApolloDevvitRelayoutHosts(BOOL feedOnly) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        Class richMediaClass = NSClassFromString(@"_TtC6Apollo13RichMediaNode");
-        Class cellClass = NSClassFromString(@"_TtC6Apollo17LargePostCellNode");
+        Class richMediaClass = ApolloClassRichMediaNode;
+        Class cellClass = ApolloClassLargePostCellNode;
         // Registered hosts (the surfaces currently showing a widget host):
         // comments headers re-measure in place, feed rows reload.
         for (id parent in sDevvitHostParents.allObjects) {
@@ -2596,9 +2765,7 @@ static void ApolloDevvitRelayoutHosts(BOOL feedOnly) {
                     if (!cellClass || ![node isKindOfClass:cellClass]) continue;
                     RDKLink *link = ApolloDevvitLinkOfParent(node);
                     if (!ApolloDevvitLinkIsInteractive(link)) continue;
-                    id mediaNode = nil;
-                    Ivar iv = class_getInstanceVariable(object_getClass(node), "richMediaNode");
-                    if (iv) mediaNode = object_getIvar(node, iv);
+                    id mediaNode = ApolloObjectIvar(node, "richMediaNode");
                     if (mediaNode && ApolloDevvitWidgetInHost(objc_getAssociatedObject(mediaNode, kApolloDevvitHostNodeKey))) continue;
                     ApolloDevvitScheduleRowReload(table, indexPath, ApolloDevvitFullName(link), 0);
                 }
@@ -2627,7 +2794,7 @@ static void ApolloDevvitRelayoutHosts(BOOL feedOnly) {
 // clone copies the original's own direction/justify values, so no local enum
 // constants are needed).
 static ASStackLayoutSpec *ApolloDevvitRebuildStack(ASStackLayoutSpec *stack, NSArray *children) {
-    Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
+    Class stackClass = ApolloClassASStackLayoutSpec;
     ASStackLayoutSpec *s = [stackClass stackLayoutSpecWithDirection:stack.direction
                                                             spacing:stack.spacing
                                                      justifyContent:stack.justifyContent
@@ -2644,9 +2811,9 @@ static ASStackLayoutSpec *ApolloDevvitRebuildStack(ASStackLayoutSpec *stack, NSA
 // the host after the title instead (index 1). Returns nil when nothing could
 // be placed (caller then returns the original spec untouched).
 static ASStackLayoutSpec *ApolloDevvitSpliceIntoStack(ASStackLayoutSpec *stack, id hostSpec, NSUInteger depth) {
-    Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
+    Class stackClass = ApolloClassASStackLayoutSpec;
     if (![stack isKindOfClass:stackClass] || depth > 4) return nil;
-    Class markdownClass = NSClassFromString(@"_TtC6Apollo12MarkdownNode");
+    Class markdownClass = ApolloClassMarkdownNode;
     NSArray *children = stack.children ?: @[];
 
     for (NSUInteger i = 0; i < children.count; i++) {
@@ -2686,8 +2853,8 @@ static ASStackLayoutSpec *ApolloDevvitSpliceIntoStack(ASStackLayoutSpec *stack, 
 static BOOL sDevvitPhoneIdiom;
 
 static id ApolloDevvitPlaceInSpec(id rootSpec, id hostSpec, NSUInteger depth) {
-    Class insetClass = NSClassFromString(@"ASInsetLayoutSpec");
-    Class stackClass = NSClassFromString(@"ASStackLayoutSpec");
+    Class insetClass = ApolloClassASInsetLayoutSpec;
+    Class stackClass = ApolloClassASStackLayoutSpec;
     if (depth > 4 || !rootSpec) return nil;
     if (depth == 0 && sDevvitPhoneIdiom && [rootSpec isKindOfClass:insetClass]) {
         UIEdgeInsets root = ((ASInsetLayoutSpec *)rootSpec).insets;
@@ -2807,7 +2974,7 @@ static id ApolloDevvitPlaceInSpec(id rootSpec, id hostSpec, NSUInteger depth) {
         }
         ApolloDevvitSetNodeHeight(host, ApolloDevvitHeightForFullName(ApolloDevvitFullName(link)));
         ApolloDevvitRegisterHostParent(self);
-        Class insetClass = NSClassFromString(@"ASInsetLayoutSpec");
+        Class insetClass = ApolloClassASInsetLayoutSpec;
         if (!insetClass) return %orig;
         return [insetClass insetLayoutSpecWithInsets:UIEdgeInsetsZero child:host];
     } @catch (__unused id e) {}
@@ -2843,9 +3010,7 @@ static id ApolloDevvitPlaceInSpec(id rootSpec, id hostSpec, NSUInteger depth) {
     @try {
         RDKLink *link = MSHookIvar<RDKLink *>(self, "link");
         if (!ApolloDevvitLinkIsInteractive(link)) return;
-        id mediaNode = nil;
-        Ivar iv = class_getInstanceVariable(object_getClass(self), "richMediaNode");
-        if (iv) mediaNode = object_getIvar(self, iv);
+        id mediaNode = ApolloObjectIvar(self, "richMediaNode");
         if (!mediaNode) return;
         ASDisplayNode *host = objc_getAssociatedObject(mediaNode, kApolloDevvitHostNodeKey);
         ApolloDevvitRegisterFeedTable(ApolloDevvitTableViewForNode(mediaNode));
@@ -2877,9 +3042,7 @@ static id ApolloDevvitPlaceInSpec(id rootSpec, id hostSpec, NSUInteger depth) {
 - (void)didExitPreloadState {
     %orig;
     @try {
-        id mediaNode = nil;
-        Ivar iv = class_getInstanceVariable(object_getClass(self), "richMediaNode");
-        if (iv) mediaNode = object_getIvar(self, iv);
+        id mediaNode = ApolloObjectIvar(self, "richMediaNode");
         if (!mediaNode) return;
         ASDisplayNode *host = objc_getAssociatedObject(mediaNode, kApolloDevvitHostNodeKey);
         if ([host isNodeLoaded]) ApolloDevvitRemoveGhost(host.view);
@@ -2893,12 +3056,7 @@ static id ApolloDevvitPlaceInSpec(id rootSpec, id hostSpec, NSUInteger depth) {
 #pragma mark - Comments screen lifecycle (handoff + keep-alive)
 
 static RDKLink *ApolloDevvitLinkOfParent(id parent) {
-    RDKLink *link = nil;
-    @try {
-        Ivar iv = class_getInstanceVariable(object_getClass(parent), "link");
-        if (iv) link = object_getIvar(parent, iv);
-    } @catch (__unused id e) {}
-    return link;
+    return ApolloObjectIvar(parent, "link");
 }
 
 // Mount a widget into every registered comments-header host under `root`
@@ -2908,7 +3066,7 @@ static RDKLink *ApolloDevvitLinkOfParent(id parent) {
 // feed row's live widget (iPhone), then a fresh load.
 static void ApolloDevvitMountCommentsHeadersInView(UIView *root) {
     if (!root) return;
-    Class richMediaClass = NSClassFromString(@"_TtC6Apollo13RichMediaNode");
+    Class richMediaClass = ApolloClassRichMediaNode;
     for (id parent in sDevvitHostParents.allObjects) {
         if (richMediaClass && [parent isKindOfClass:richMediaClass]) continue;  // feed rows
         if (![parent isNodeLoaded] || ![[parent view] isDescendantOfView:root]) continue;
@@ -2933,7 +3091,7 @@ static void ApolloDevvitReleaseCommentsWidgetsInView(UIView *root) {
     if (!root) return;
     NSArray<ApolloDevvitWidgetView *> *widgets;
     @synchronized ([ApolloDevvitWidgetView class]) { widgets = sDevvitLiveWidgets.allObjects; }
-    Class richMediaClass = NSClassFromString(@"_TtC6Apollo13RichMediaNode");
+    Class richMediaClass = ApolloClassRichMediaNode;
     for (ApolloDevvitWidgetView *w in widgets) {
         if (w.feedContext || !w.webView || w.parked || w.stashedForReadopt) continue;
         if (![w isDescendantOfView:root]) continue;

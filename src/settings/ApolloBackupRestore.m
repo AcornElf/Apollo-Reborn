@@ -26,6 +26,9 @@ static BOOL ApolloBackupOwnsKeychainIdentity(id service, id account) {
     if (![service isKindOfClass:NSString.class] || ![account isKindOfClass:NSString.class] ||
         ![account length] || [account rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound ||
         [service rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
+    // The Search tab's Kagi Session Link (ApolloKagiSearch.m). Replayed with the
+    // default AfterFirstUnlock class, the one it's written with.
+    if ([service isEqualToString:@"com.christianselig.Apollo.kagi"]) return [account isEqualToString:@"sessionToken"];
     if ([service isEqualToString:@"com.christianselig.Apollo.webjson"]) {
         if ([@[@"sessionCookieHeader", @"sessionModhash", @"sessionUsername"] containsObject:account]) return YES;
         return [account rangeOfString:@"^websession:[^:\\s\\p{Cc}]+:(cookie|modhash)$"
@@ -771,7 +774,6 @@ BOOL ApolloBackupRestoreRestoreFromZipURL(NSURL *zipURL, NSString **outErrorTitl
     if (sPerPostCommentSort && [defaults boolForKey:UDKeyApolloRememberSubredditCommentsSort]) {
         [defaults setBool:NO forKey:UDKeyApolloRememberSubredditCommentsSort];
     }
-    sShowRecentlyReadThumbnails = [defaults boolForKey:UDKeyShowRecentlyReadThumbnails];
     sEnableFlairColors = [defaults boolForKey:UDKeyEnableFlairColors];
     sPreferredGIFFallbackFormat = ([defaults integerForKey:UDKeyPreferredGIFFallbackFormat] == 0) ? 0 : 1;
     sUnmuteCommentsVideos = [defaults integerForKey:UDKeyUnmuteCommentsVideos];

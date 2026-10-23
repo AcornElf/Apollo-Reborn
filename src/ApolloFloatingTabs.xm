@@ -83,6 +83,7 @@
 #import "ApolloFloatingTabsCrests.h"
 #import "ApolloActionMenu.h"
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloState.h"
 #import "ApolloSubredditInfoCache.h"
 #import "ApolloThemeRuntime.h"
@@ -195,15 +196,14 @@ typedef NS_ENUM(NSInteger, ApolloFTCrestState) {
 // Post identity of a live CommentsViewController, before or after its first
 // fetch: the `link` ivar once Apollo holds the RDKLink (feed opens, or a URL
 // open that has loaded), else the `linkID` Swift String ivar the URL router
-// seeds — the bare post id loadComments fetches with. Definitions of the two
-// link helpers live with the menu plumbing further down.
-static id ApolloFTIvarObject(id object, const char *name);
+// seeds — the bare post id loadComments fetches with. The link-info helper's
+// definition lives with the menu plumbing further down.
 static BOOL ApolloFTLinkInfoForLink(id link, NSString **outLinkKey, NSString **outPermalink,
                                     NSString **outTitle, NSString **outSubreddit);
 
 static NSString *ApolloFTLinkKeyForVC(id vc) {
     NSString *linkKey = nil;
-    if (ApolloFTLinkInfoForLink(ApolloFTIvarObject(vc, "link"), &linkKey, NULL, NULL, NULL)) return linkKey;
+    if (ApolloFTLinkInfoForLink(ApolloObjectIvar(vc, "link"), &linkKey, NULL, NULL, NULL)) return linkKey;
     NSString *postID = ApolloReadSwiftStringIvar(vc, "linkID");
     if ([postID hasPrefix:@"t3_"]) postID = [postID substringFromIndex:3];
     if (postID.length == 0) return nil;
@@ -606,9 +606,17 @@ static ApolloFloatingTabsController *sFTController = nil;
     if (!self) return nil;
     _tabs = [NSMutableArray array];
     _bubbles = [NSMapTable strongToStrongObjectsMapTable];
+    // Bubble icons draw at ~28pt and thumbnails at ~44pt, so a couple of MB
+    // each covers every tab the user can have.
     _iconCache = [[NSCache alloc] init];
+    _iconCache.countLimit = 60;
+    _iconCache.totalCostLimit = 2 * 1024 * 1024;
+    ApolloMemoryRegisterPurgableCache(@"floating-tab-icons", _iconCache);
     _iconFetchesInFlight = [NSMutableSet set];
     _thumbCache = [[NSCache alloc] init];
+    _thumbCache.countLimit = 60;
+    _thumbCache.totalCostLimit = 3 * 1024 * 1024;
+    ApolloMemoryRegisterPurgableCache(@"floating-tab-thumbs", _thumbCache);
     _thumbFetchesInFlight = [NSMutableSet set];
     _crestCache = [[NSCache alloc] init];
     _crestCache.countLimit = kFTMaxTabs * 2;
@@ -654,6 +662,9 @@ static ApolloFloatingTabsController *sFTController = nil;
     }
     ApolloFloatingTabsWindow *window = scene
         ? [[ApolloFloatingTabsWindow alloc] initWithWindowScene:scene]
+        // TODO: Modernization - no foreground-active window scene was found, so
+        // this sceneless fallback window still assumes the main screen's bounds.
+        // It should instead defer creating the window until a scene activates.
         : [[ApolloFloatingTabsWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     window.windowLevel = UIWindowLevelNormal + 50; // above app UI, below alerts/keyboard (PiP's slot)
     window.backgroundColor = [UIColor clearColor];
@@ -1286,7 +1297,7 @@ static UIImage *ApolloFTComposeCrestPair(UIImage *home, UIImage *away) {
             [innerSelf.iconFetchesInFlight removeObject:key];
             UIImage *image = data ? [UIImage imageWithData:data] : nil;
             if (!image) return;
-            [innerSelf.iconCache setObject:image forKey:key];
+            [innerSelf.iconCache setObject:image forKey:key cost:ApolloImageByteCost(image)];
             [innerSelf refreshAllIdentities];
         });
     }];
@@ -1309,7 +1320,7 @@ static UIImage *ApolloFTComposeCrestPair(UIImage *home, UIImage *away) {
         [strongSelf.thumbFetchesInFlight removeObject:urlString];
         UIImage *image = data ? [UIImage imageWithData:data] : nil;
         if (!image) return; // face falls back to the subreddit icon
-        [strongSelf.thumbCache setObject:image forKey:urlString];
+        [strongSelf.thumbCache setObject:image forKey:urlString cost:ApolloImageByteCost(image)];
         [strongSelf refreshAllIdentities];
     });
 }
@@ -2335,15 +2346,6 @@ static __weak UIViewController *sApolloFTArmedLinkPresenter = nil;  // cap-alert
 static CFAbsoluteTime sApolloFTArmedLinkAt = 0;
 static char kApolloFTMenuOwnerLinkKey;
 
-static id ApolloFTIvarObject(id object, const char *name) {
-    if (!object || !name) return nil;
-    for (Class cls = [object class]; cls && cls != [NSObject class]; cls = class_getSuperclass(cls)) {
-        Ivar ivar = class_getInstanceVariable(cls, name);
-        if (ivar) return object_getIvar(object, ivar);
-    }
-    return nil;
-}
-
 static id ApolloFTMenuOwnerForController(id actionController) {
     if (!actionController) return nil;
     NSHashTable *holder = objc_getAssociatedObject(actionController, &kApolloFTMenuOwnerVCKey);
@@ -2394,11 +2396,11 @@ static NSString *ApolloFTStringFromSelector(id object, SEL selector) {
 // values (same validation as Recently Read's thumbnail path).
 static NSString *ApolloFTThumbnailURLStringForLink(id link) {
     if (!link) return nil;
-    SEL nsfwSel = NSSelectorFromString(@"isNSFW");
+    SEL nsfwSel = @selector(isNSFW);
     if ([link respondsToSelector:nsfwSel] && ((BOOL (*)(id, SEL))objc_msgSend)(link, nsfwSel)) return nil;
-    SEL spoilerSel = NSSelectorFromString(@"isSpoiler");
+    SEL spoilerSel = @selector(isSpoiler);
     if ([link respondsToSelector:spoilerSel] && ((BOOL (*)(id, SEL))objc_msgSend)(link, spoilerSel)) return nil;
-    SEL thumbSel = NSSelectorFromString(@"thumbnailURL");
+    SEL thumbSel = @selector(thumbnailURL);
     if (![link respondsToSelector:thumbSel]) return nil;
     id value = ((id (*)(id, SEL))objc_msgSend)(link, thumbSel);
     NSString *urlString = [value isKindOfClass:[NSURL class]] ? [(NSURL *)value absoluteString]
@@ -2439,7 +2441,7 @@ static BOOL ApolloFTLinkInfoForLink(id link, NSString **outLinkKey, NSString **o
 // Same, from a CommentsViewController's RDKLink ivar.
 static BOOL ApolloFTLinkInfoForVC(id vc, NSString **outLinkKey, NSString **outPermalink,
                                   NSString **outTitle, NSString **outSubreddit) {
-    return ApolloFTLinkInfoForLink(ApolloFTIvarObject(vc, "link"),
+    return ApolloFTLinkInfoForLink(ApolloObjectIvar(vc, "link"),
                                    outLinkKey, outPermalink, outTitle, outSubreddit);
 }
 
@@ -2504,7 +2506,7 @@ static void ApolloFTKeepOrToggleForVC(id vc) {
     }
     NSString *permalink = nil, *title = nil, *subreddit = nil;
     ApolloFTLinkInfoForVC(vc, &linkKey, &permalink, &title, &subreddit);
-    NSString *thumbnailURL = ApolloFTThumbnailURLStringForLink(ApolloFTIvarObject(vc, "link"));
+    NSString *thumbnailURL = ApolloFTThumbnailURLStringForLink(ApolloObjectIvar(vc, "link"));
     [controller addTabWithLinkKey:linkKey permalink:permalink title:title
                         subreddit:subreddit thumbnailURL:thumbnailURL
                    viewController:(UIViewController *)vc];
@@ -2603,7 +2605,7 @@ static void ApolloFTMenuPerform(id actionController) {
 // plain ObjC `link` ivar — verified via Hopper .cxx_destruct.)
 static void ApolloFTArmFromPostCellNode(id node) {
     if (!sFloatingPostTabs) return;
-    id link = ApolloFTIvarObject(node, "link");
+    id link = ApolloObjectIvar(node, "link");
     if (!link) return;
     sApolloFTArmedLink = link;
     sApolloFTArmedLinkAt = CFAbsoluteTimeGetCurrent();
@@ -2653,14 +2655,7 @@ static void ApolloFTArmFromPostCellNode(id node) {
 // invalidated by the next sort pick). Read through the Swift runtime's weak
 // loader so the state dump can show whether a tab's screen is still polling.
 static NSTimer *ApolloFTDebugLiveTimer(id vc) {
-    if (!vc) return nil;
-    Ivar ivar = class_getInstanceVariable(object_getClass(vc), "liveSortTimer");
-    if (!ivar) return nil;
-    static void *(*weakLoadStrong)(void *) = NULL;
-    if (!weakLoadStrong) weakLoadStrong = (void *(*)(void *))dlsym(RTLD_DEFAULT, "swift_unknownObjectWeakLoadStrong");
-    if (!weakLoadStrong) return nil;
-    void *ref = (uint8_t *)(__bridge void *)vc + ivar_getOffset(ivar);
-    id timer = (__bridge_transfer id)weakLoadStrong(ref);   // +1 from the loader, balanced by ARC
+    id timer = ApolloReadSwiftWeakObjectIvar(vc, "liveSortTimer");
     return [timer isKindOfClass:[NSTimer class]] ? (NSTimer *)timer : nil;
 }
 

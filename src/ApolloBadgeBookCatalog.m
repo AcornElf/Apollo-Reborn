@@ -1,5 +1,6 @@
 #import "ApolloBadgeBookCatalog.h"
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 
 #pragma mark - Bundled asset directory resolution
 
@@ -54,11 +55,13 @@ static NSCache<NSString *, UIImage *> *ApolloBadgeBookImageCache(void) {
         cache = [[NSCache alloc] init];
         // The ~7KB PNG8 files decode to 32bpp bitmaps — a 200px icon holds
         // ~160KB once decoded, so the full 291-icon catalogue would pin ~46MB.
-        // Insertions carry the decoded byte count as their cost, and the cost
-        // limit keeps the resident set bounded (and evictable under pressure)
-        // on the iOS 14-era 2GB devices this tweak still supports.
-        cache.countLimit = 400;
-        cache.totalCostLimit = 32 * 1024 * 1024;
+        // The budget has to clear the 79 prewarmed achievement icons (~13MB),
+        // because the achievements grid renders all of them at once and a
+        // tighter limit would evict icons that are still on screen. Trophies
+        // decode on demand on top of that and evict first.
+        cache.countLimit = 300;
+        cache.totalCostLimit = 14 * 1024 * 1024;
+        ApolloMemoryRegisterPurgableCache(@"badge-catalogue-icons", cache);
     });
     return cache;
 }
@@ -223,7 +226,7 @@ static NSString *ApolloBadgeBookURLBasename(NSString *urlString) {
     NSError *err = nil;
     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
     if (![json isKindOfClass:[NSDictionary class]]) {
-        ApolloLog(@"[BadgeBook] catalogue json parse failed: %@", err.localizedDescription);
+        ApolloLogError(@"[BadgeBook] catalogue json parse failed: %@", err.localizedDescription);
         return;
     }
 

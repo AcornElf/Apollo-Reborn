@@ -2,6 +2,7 @@
 #import "ApolloBadgeBookCatalog.h"
 #import "ApolloBadgeBookScraper.h"
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloThemeRuntime.h"
 #import "ApolloAccountCredentials.h"   // ApolloActiveAccountUsername() — locked-note wording
 #import <ImageIO/ImageIO.h>
@@ -20,8 +21,9 @@ static NSCache<NSString *, UIImage *> *ApolloBBRemoteImageCache(void) {
     static NSCache *cache; static dispatch_once_t once;
     dispatch_once(&once, ^{
         cache = [[NSCache alloc] init];
-        cache.countLimit = 120;
-        cache.totalCostLimit = 16 * 1024 * 1024;   // decoded thumbs; evictable under pressure
+        cache.countLimit = 60;
+        cache.totalCostLimit = 4 * 1024 * 1024;   // decoded thumbs; evictable under pressure
+        ApolloMemoryRegisterPurgableCache(@"badge-remote-thumbs", cache);
     });
     return cache;
 }
@@ -37,9 +39,9 @@ static NSMutableDictionary<NSString *, NSMutableArray *> *ApolloBBRemoteImagePen
     return pending;
 }
 
-static void ApolloBBLoadRemoteImage(NSString *urlString, CGFloat pointSize, void (^completion)(UIImage *)) {
+static void ApolloBBLoadRemoteImage(NSString *urlString, CGFloat pointSize, UITraitCollection *traitCollection, void (^completion)(UIImage *)) {
     if (urlString.length == 0) { if (completion) completion(nil); return; }
-    CGFloat scale = UIScreen.mainScreen.scale;
+    CGFloat scale = traitCollection.displayScale;
     CGFloat maxPixels = MAX(64.0, pointSize * scale);
     // Keyed by URL AND decode size: the grid warms 64pt thumbs, and serving one
     // of those to the 132pt detail card is a visibly soft upscale at 3x.
@@ -174,7 +176,12 @@ static UIImage *ApolloBBPlaceholderCircleImage(UIColor *fill, UITraitCollection 
     NSString *key = [NSString stringWithFormat:@"%.3f-%.3f-%.3f", r, g, b];
 
     static NSCache<NSString *, UIImage *> *cache; static dispatch_once_t once;
-    dispatch_once(&once, ^{ cache = [[NSCache alloc] init]; cache.countLimit = 12; });
+    dispatch_once(&once, ^{
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 8;
+        cache.totalCostLimit = 3 * 1024 * 1024;
+        ApolloMemoryRegisterPurgableCache(@"badge-placeholders", cache);
+    });
     UIImage *cached = [cache objectForKey:key];
     if (cached) return cached;
 
@@ -201,7 +208,7 @@ static UIImage *ApolloBBPlaceholderCircleImage(UIColor *fill, UITraitCollection 
         [outside fill];
         CGContextRestoreGState(c);
     }];
-    [cache setObject:image forKey:key];
+    [cache setObject:image forKey:key cost:ApolloImageByteCost(image)];
     return image;
 }
 
@@ -261,6 +268,17 @@ static CGFloat ApolloBBTitleHeight(void) {
         _statusBadge.contentMode = UIViewContentModeScaleAspectFit;
         _statusBadge.hidden = YES;
         [self.contentView addSubview:_statusBadge];
+
+        // The remote art is decoded at a pixel size derived from the display scale
+        // (apollo_loadRemoteArt): re-apply the last item when that scale changes.
+        if (@available(iOS 17.0, *)) {
+            [self registerForTraitChanges:@[UITraitDisplayScale.class]
+                              withHandler:^(__kindof UIView *v, __unused UITraitCollection *previous) {
+                ApolloBadgeCell *cell = (ApolloBadgeCell *)v;
+                if (!cell->_appliedItem) return;
+                [cell applyItem:cell->_appliedItem state:cell->_appliedState accent:cell->_appliedAccent artURL:cell->_appliedArtURL];
+            }];
+        }
     }
     return self;
 }
@@ -356,7 +374,7 @@ static CGFloat ApolloBBTitleHeight(void) {
     NSString *key = remote;
     self.loadingImageKey = key;
     __weak typeof(self) ws = self;
-    ApolloBBLoadRemoteImage(key, 64.0, ^(UIImage *image) {
+    ApolloBBLoadRemoteImage(key, 64.0, self.traitCollection, ^(UIImage *image) {
         typeof(self) ss = ws; if (!ss || !image) return;
         if (![ss.loadingImageKey isEqualToString:key]) return;  // cell reused
         ss.iconView.image = image;
@@ -540,7 +558,7 @@ static CMMotionManager *ApolloBBSharedMotionManager(void) {
                                                object:nil];
     UIColor *background = _background ?: [UIColor systemGroupedBackgroundColor];
     UIColor *surface = _surface ?: [UIColor secondarySystemGroupedBackgroundColor];
-    Class glassClass = NSClassFromString(@"UIGlassEffect");
+    Class glassClass = objc_getClass("UIGlassEffect");
     BOOL useGlass = IsLiquidGlass() && glassClass != nil;
     // On Liquid Glass builds the sheet supplies its own glass drawer material —
     // painting an opaque background over it would flatten the whole presentation.
@@ -631,7 +649,7 @@ static CMMotionManager *ApolloBBSharedMotionManager(void) {
                 typeof(self) ss = ws; if (!ss) return;
                 if (image) { icon.image = image; ss->_iconShowsPlaceholder = NO; return; }
                 if (remote.length) {
-                    ApolloBBLoadRemoteImage(remote, 140.0, ^(UIImage *art) {
+                    ApolloBBLoadRemoteImage(remote, 140.0, ss.view.traitCollection, ^(UIImage *art) {
                         typeof(self) ss2 = ws; if (!ss2 || !art) return;
                         icon.image = art; ss2->_iconShowsPlaceholder = NO;
                     });
@@ -641,7 +659,9 @@ static CMMotionManager *ApolloBBSharedMotionManager(void) {
             icon.image = placeholder;
             _iconShowsPlaceholder = YES;
             __weak typeof(self) ws = self;
-            ApolloBBLoadRemoteImage(remote, 140.0, ^(UIImage *image) {
+            // TODO: Modernization - the decoded art is sized for the scale at viewDidLoad; there is
+            // no standalone art-loading method to re-run on a display-scale change (it's inline here).
+            ApolloBBLoadRemoteImage(remote, 140.0, self.view.traitCollection, ^(UIImage *image) {
                 typeof(self) ss = ws; if (!ss || !image) return;
                 icon.image = image; ss->_iconShowsPlaceholder = NO;
             });
@@ -1086,12 +1106,10 @@ static NSString *const kHeaderID = @"header";
     self.segmented = [[UISegmentedControl alloc] initWithItems:@[@"Achievements", @"Trophy Case"]];
     self.segmented.selectedSegmentIndex = 0;
     self.segmented.tintColor = accent;
-    if (@available(iOS 13.0, *)) {
-        self.segmented.selectedSegmentTintColor = accent;
-        UIColor *selectedText = ApolloColorIsLight(accent) ? [UIColor blackColor] : [UIColor whiteColor];
-        [self.segmented setTitleTextAttributes:@{ NSForegroundColorAttributeName: selectedText }
-                                      forState:UIControlStateSelected];
-    }
+    self.segmented.selectedSegmentTintColor = accent;
+    UIColor *selectedText = ApolloColorIsLight(accent) ? [UIColor blackColor] : [UIColor whiteColor];
+    [self.segmented setTitleTextAttributes:@{ NSForegroundColorAttributeName: selectedText }
+                                  forState:UIControlStateSelected];
     [self.segmented addTarget:self action:@selector(apollo_modeChanged) forControlEvents:UIControlEventValueChanged];
     if (IsLiquidGlass()) {
         // The Liquid Glass nav bar wraps an INTERACTIVE (UIControl) titleView in
@@ -1386,9 +1404,7 @@ void ApolloBadgeBookPresentForUsername(NSString *username, UIViewController *fro
 //   seed <user> <n>                 seed a cached result with the first n
 //                                   achievements earned (tests placeholders live)
 static UIViewController *ApolloBBSimTopVC(void) {
-    UIWindow *key = nil;
-    for (UIWindow *w in ApolloAllWindows()) { if (w.isKeyWindow) { key = w; break; } }
-    if (!key) key = ApolloAllWindows().firstObject;
+    UIWindow *key = ApolloKeyWindow() ?: ApolloAllWindows().firstObject;
     UIViewController *vc = key.rootViewController;
     while (vc.presentedViewController) vc = vc.presentedViewController;
     return vc;
@@ -1421,7 +1437,7 @@ static void ApolloBBSimHandleCommand(NSString *raw) {
         UINavigationController *nav = content.navigationController
             ?: ([top isKindOfClass:[UINavigationController class]] ? (UINavigationController *)top : top.navigationController);
         UIView *bar = nav.navigationBar ?: top.view.window;
-        SEL sel = NSSelectorFromString(@"recursiveDescription");
+        SEL sel = @selector(recursiveDescription);
         NSString *desc = bar ? ((NSString *(*)(id, SEL))objc_msgSend)(bar, sel) : @"(no bar)";
         [desc writeToFile:@"/tmp/apollofix-navdump.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         ApolloLog(@"[BadgeBook][sim] nav dump written (%lu chars)", (unsigned long)desc.length);

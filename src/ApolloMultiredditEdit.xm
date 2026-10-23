@@ -5,11 +5,14 @@
 #import <objc/message.h>
 
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloFollowingSection.h"
 #import "ApolloState.h"
 #import "UserDefaultConstants.h"
 #import "ApolloAccountCredentials.h"
 #import "ApolloSubredditCustomIconCache.h"
+#import "ApolloClasses.h"
 
 // MARK: - Multireddit Rename & Descriptions
 //
@@ -88,7 +91,6 @@
 
 @interface RedditListViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 // The %new methods this module adds, declared so in-module calls type-check.
-- (void)apolloMultiEditPresentEditorFor:(RDKMultireddit *)multireddit;
 - (void)apolloMultiEditPresentEditorFor:(RDKMultireddit *)multireddit prefillName:(NSString *)prefillName prefillDescription:(NSString *)prefillDescription;
 - (void)apolloMultiEditSave:(RDKMultireddit *)multireddit name:(NSString *)newName descriptionText:(NSString *)newDescription;
 - (void)apolloMultiEditShowError:(NSString *)message;
@@ -189,14 +191,8 @@ static NSString *ApolloMultiEditSectionTitle(id delegate, UITableView *tableView
     return text.length > 0 ? text.uppercaseString : nil;
 }
 
-static id ApolloMultiEditObjectIvar(id object, const char *name) {
-    if (!object || !name) return nil;
-    Ivar ivar = class_getInstanceVariable(object_getClass(object), name);
-    return ivar ? object_getIvar(object, ivar) : nil;
-}
-
 static UITableView *ApolloMultiEditTableView(UIViewController *viewController) {
-    UITableView *tableView = (UITableView *)ApolloMultiEditObjectIvar(viewController, "tableView");
+    UITableView *tableView = (UITableView *)ApolloObjectIvar(viewController, "tableView");
     return [tableView isKindOfClass:[UITableView class]] ? tableView : nil;
 }
 
@@ -204,17 +200,8 @@ static UITableView *ApolloMultiEditTableView(UIViewController *viewController) {
 // ObjC-class-typed Swift stored properties are real runtime ivars under their
 // Swift names, so plain ivar access is safe (unlike Swift struct fields).
 static UILabel *ApolloMultiEditCellLabel(UITableViewCell *cell, const char *name) {
-    UILabel *label = (UILabel *)ApolloMultiEditObjectIvar(cell, name);
+    UILabel *label = (UILabel *)ApolloObjectIvar(cell, name);
     return [label isKindOfClass:[UILabel class]] ? label : nil;
-}
-
-static Class ApolloMultiEditListCellClass(void) {
-    static Class cls = Nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        cls = objc_getClass("_TtC6Apollo23RedditListTableViewCell");
-    });
-    return cls;
 }
 
 // MARK: - Custom icons
@@ -255,8 +242,13 @@ static UIImage *ApolloMultiEditDisplayIconForKey(NSString *key, CGSize targetSiz
     UIImage *resized = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
         [stored drawInRect:CGRectMake(0, 0, targetSize.width, targetSize.height)];
     }];
-    if (!sMultiEditDisplayIconCache) sMultiEditDisplayIconCache = [[NSCache alloc] init];
-    [sMultiEditDisplayIconCache setObject:resized forKey:cacheKey];
+    if (!sMultiEditDisplayIconCache) {
+        sMultiEditDisplayIconCache = [[NSCache alloc] init];
+        sMultiEditDisplayIconCache.countLimit = 40;
+        sMultiEditDisplayIconCache.totalCostLimit = 1024 * 1024;
+        ApolloMemoryRegisterPurgableCache(@"multireddit-icons", sMultiEditDisplayIconCache);
+    }
+    [sMultiEditDisplayIconCache setObject:resized forKey:cacheKey cost:ApolloImageByteCost(resized)];
     return resized;
 }
 
@@ -546,7 +538,7 @@ static BOOL ApolloMultiEditCanBuildEnvelope(id entry, NSString *expectedKind,
     // exception boundary, so both a thrown transformer and a nil model are
     // filtered before the private parser sees the envelope.
     @try {
-        Class builderClass = objc_getClass("RDKObjectBuilder");
+        Class builderClass = ApolloClassRDKObjectBuilder;
         SEL builderSelector = @selector(objectFromJSON:);
         if (!builderClass || ![builderClass respondsToSelector:builderSelector]) {
             if (reasonOut) *reasonOut = @"builder:unavailable";
@@ -554,8 +546,8 @@ static BOOL ApolloMultiEditCanBuildEnvelope(id entry, NSString *expectedKind,
         }
         id model = ((id (*)(id, SEL, id))objc_msgSend)(builderClass, builderSelector, envelope);
         Class expectedClass = [expectedKind isEqualToString:@"LabeledMultiDescription"]
-            ? NSClassFromString(@"RDKMultiredditDescription")
-            : NSClassFromString(@"RDKMultireddit");
+            ? ApolloClassRDKMultiredditDescription
+            : ApolloClassRDKMultireddit;
         if (model && (!expectedClass || [model isKindOfClass:expectedClass])) return YES;
         if (reasonOut) *reasonOut = @"builder:nil-or-wrong-class";
     } @catch (__unused NSException *exception) {
@@ -822,11 +814,18 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
         return;
     }
 
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    // indexPath arrives in Apollo's NATIVE section space (ApolloFollowingSection
+    // translates before calling through), which is what the section-title check
+    // below wants. The table itself speaks the visible layout, so its own calls
+    // get the visible path back: with Multireddits moved from its default slot,
+    // the native path looked up some other row's cell (no bound model, so the
+    // editor never opened).
+    NSIndexPath *visiblePath = ApolloFollowingVisibleIndexPathForNative(tableView, indexPath);
+    if (visiblePath) [tableView deselectRowAtIndexPath:visiblePath animated:YES];
 
     if (![ApolloMultiEditSectionTitle(self, tableView, indexPath.section) isEqualToString:@"MULTIREDDITS"]) return;
 
-    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    UITableViewCell *cell = visiblePath ? [tableView cellForRowAtIndexPath:visiblePath] : nil;
     NSString *title = ApolloMultiEditTrim(ApolloMultiEditCellLabel(cell, "redditTitleLabel").text);
     // The model this exact row was built from — never a fresh title match,
     // which would resolve two same-titled rows to the same multireddit and
@@ -841,7 +840,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
         ApolloLog(@"[MultiEdit] '%@' is not editable (copied/unowned); ignoring tap", title);
         return;
     }
-    [(RedditListViewController *)self apolloMultiEditPresentEditorFor:multireddit];
+    [(RedditListViewController *)self apolloMultiEditPresentEditorFor:multireddit prefillName:nil prefillDescription:nil];
 }
 
 // A multireddit row's subtitle is the joined list of its subreddits. Swap in
@@ -854,7 +853,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
     UITableViewCell *cell = %orig;
     sMultiEditListTable = tableView;
 
-    Class cellClass = ApolloMultiEditListCellClass();
+    Class cellClass = ApolloClassRedditListTableViewCell;
     if (!cellClass || ![cell isKindOfClass:cellClass]) return cell;
 
     UILabel *subtitleLabel = ApolloMultiEditCellLabel(cell, "subtitleLabel");
@@ -871,7 +870,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
     // Cells are reused, so an unresolved row must clear the old binding.
     objc_setAssociatedObject(cell, &kApolloMultiEditRowModelKey, multireddit, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    UIImageView *iconView = (UIImageView *)ApolloMultiEditObjectIvar(cell, "subredditIconImageView");
+    UIImageView *iconView = (UIImageView *)ApolloObjectIvar(cell, "subredditIconImageView");
     if ([iconView isKindOfClass:[UIImageView class]]) {
         NSString *iconKey = multireddit ? ApolloMultiEditIconKey(multireddit) : nil;
         UIImage *stored = iconKey ? [[ApolloSubredditCustomIconCache sharedCache] cachedIconForSubreddit:iconKey] : nil;
@@ -905,11 +904,6 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
 
 // MARK: Editor
 
-%new
-- (void)apolloMultiEditPresentEditorFor:(RDKMultireddit *)multireddit {
-    [self apolloMultiEditPresentEditorFor:multireddit prefillName:nil prefillDescription:nil];
-}
-
 // prefillName/prefillDescription carry the editor's UNSAVED field contents
 // across a round trip through the icon picker (or an icon removal), so
 // typed-but-not-saved text is never lost; nil means "show the model's values".
@@ -933,10 +927,13 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
     }];
 
     __weak typeof(self) weakSelf = self;
+    // The handlers read the text fields back; a strong capture would make
+    // alert -> action -> handler -> alert a retain cycle.
+    __weak UIAlertController *weakAlert = alert;
     [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *newName = ApolloMultiEditTrim(alert.textFields.firstObject.text);
+        NSString *newName = ApolloMultiEditTrim(weakAlert.textFields.firstObject.text);
         if (newName.length == 0) newName = currentName; // a multireddit can't be nameless
-        NSString *newDescription = ApolloMultiEditTrim(alert.textFields.lastObject.text) ?: @"";
+        NSString *newDescription = ApolloMultiEditTrim(weakAlert.textFields.lastObject.text) ?: @"";
         if ([newName isEqualToString:currentName] && [newDescription isEqualToString:currentDescription]) return;
         [weakSelf apolloMultiEditSave:multireddit name:newName descriptionText:newDescription];
     }]];
@@ -944,13 +941,13 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
         // Alert actions dismiss the alert, so hand the unsaved field contents
         // to the picker flow — the editor reopens with them afterwards.
         [weakSelf apolloMultiEditPickIconFor:multireddit
-                                 pendingName:alert.textFields.firstObject.text
-                          pendingDescription:alert.textFields.lastObject.text];
+                                 pendingName:weakAlert.textFields.firstObject.text
+                          pendingDescription:weakAlert.textFields.lastObject.text];
     }]];
     if (ApolloMultiEditCustomIcon(multireddit)) {
         [alert addAction:[UIAlertAction actionWithTitle:@"Remove Icon" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-            NSString *pendingName = alert.textFields.firstObject.text;
-            NSString *pendingDescription = alert.textFields.lastObject.text;
+            NSString *pendingName = weakAlert.textFields.firstObject.text;
+            NSString *pendingDescription = weakAlert.textFields.lastObject.text;
             NSString *key = ApolloMultiEditIconKey(multireddit);
             if (key) [[ApolloSubredditCustomIconCache sharedCache] removeIconForSubreddit:key];
             [sMultiEditDisplayIconCache removeAllObjects];
@@ -1016,10 +1013,10 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
                         ApolloLog(@"[MultiEdit] saved custom icon for %@ (%.0fx%.0f)", [multireddit path], scaled.size.width, scaled.size.height);
                         [(ApolloMultiEditTableView((UIViewController *)weakSelf) ?: sMultiEditListTable) reloadData];
                     } else {
-                        ApolloLog(@"[MultiEdit] icon save failed for %@: %@", [multireddit path], saveError);
+                        ApolloLogError(@"[MultiEdit] icon save failed for %@: %@", [multireddit path], saveError);
                     }
                 } else {
-                    ApolloLog(@"[MultiEdit] icon load failed: %@", error);
+                    ApolloLogError(@"[MultiEdit] icon load failed: %@", error);
                 }
                 reopenEditor();
             });
@@ -1056,7 +1053,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
     void (^completion)(NSHTTPURLResponse *, id, NSError *) = ^(NSHTTPURLResponse *response, id responseObject, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error) {
-                ApolloLog(@"[MultiEdit] save failed for %@: %@", path, error);
+                ApolloLogError(@"[MultiEdit] save failed for %@: %@", path, error);
                 [(RedditListViewController *)weakSelf apolloMultiEditShowError:@"Reddit rejected the change. Please try again."];
                 return;
             }
@@ -1104,7 +1101,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
 
 - (void)prepareForReuse {
     %orig;
-    UIImageView *iconView = (UIImageView *)ApolloMultiEditObjectIvar(self, "subredditIconImageView");
+    UIImageView *iconView = (UIImageView *)ApolloObjectIvar(self, "subredditIconImageView");
     if ([iconView isKindOfClass:[UIImageView class]]) {
         objc_setAssociatedObject(iconView, &kApolloMultiEditIconEnforceKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     }
@@ -1121,7 +1118,6 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
     %init;
 
     Class listClass = objc_getClass("Apollo.RedditListViewController");
-    if (!listClass) listClass = NSClassFromString(@"Apollo.RedditListViewController");
     if (listClass) {
         %init(ApolloMultiEditList, RedditListViewController = listClass);
         ApolloLog(@"[MultiEdit] list hooks installed on %@", NSStringFromClass(listClass));
@@ -1129,7 +1125,7 @@ static id ApolloMultiEditIssue858InjectedResponse(id responseObject, NSString *m
         ApolloLog(@"[MultiEdit] RedditListViewController class missing; multireddit editing unavailable");
     }
 
-    Class cellClass = ApolloMultiEditListCellClass();
+    Class cellClass = ApolloClassRedditListTableViewCell;
     if (cellClass) {
         %init(ApolloMultiEditCell, RedditListTableViewCell = cellClass);
     } else {

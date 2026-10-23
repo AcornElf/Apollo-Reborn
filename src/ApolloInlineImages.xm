@@ -4,17 +4,21 @@
 // Renders image URLs inside Apollo's selftext / comment markdown bodies as
 // actual inline images, replacing the URL text in-place. Tap opens
 // MediaViewer (via Apollo's tappedLinkAttribute path); long-press shows
-// Copy Link / Share / Open in Safari / Inline Media Settings
+// Copy Image / Save Image / Share / Inline Media Settings
 // (UIContextMenuInteraction wins over Apollo's cell-level menu since it's
 // installed on the deeper view).
 //
 
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
 #import "ApolloGiphyClient.h"
 #import "ApolloImageChestResolver.h"
+#import "ApolloInlineImageMetadata.h"
 #import "ApolloMediaAutoplay.h"
 #import "ApolloMemoryDiagnostics.h"
 #import "ApolloState.h"
+#import "ApolloImageActions.h"
+#import "ApolloSaveAllMedia.h"
 #import "Tweak.h"
 #import "UserDefaultConstants.h"
 #import "settings/ApolloSettingsRouter.h"
@@ -29,6 +33,7 @@
 #import <math.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import "ApolloClasses.h"
 
 // MARK: - Minimal Texture forward declarations
 // We don't import AsyncDisplayKit headers (the build doesn't have them on the
@@ -158,6 +163,7 @@ static char kApolloImageNodesByURLKey;         // NSMutableDictionary<NSString U
 static char kApolloImageCacheKey;              // NSString stable cache key (set even before deferred image URLs resolve)
 static char kApolloInlineMediaLeafKey;         // Non-nil permanent identity marker for tweak-created image/video leaves
 static char kApolloImageURLKey;                // NSURL on the imageNode AND mirrored on the imageNode's view
+static char kApolloImageExportURLKey;          // Resolved image/GIF file; survives the GIF pipeline clearing node.URL
 static char kApolloOriginalImageURLKey;        // NSURL for tap/long-press when different from the loaded URL (e.g. album URL)
 static char kApolloInlineVideoThumbnailKey;    // NSNumber(BOOL): use player-card sizing instead of tall-image sizing
 static char kApolloAspectRatioKey;             // NSNumber height/width — NIL if unknown (no URL params yet, no DIDLOAD yet)
@@ -196,8 +202,8 @@ static char kApolloImageChestItemsKey;         // NSArray<NSDictionary *> direct
 static ASDisplayNode *ApolloInlineHostForNode(id node) {
     ASDisplayNode *cursor =
         [node respondsToSelector:@selector(supernode)] ? [node supernode] : nil;
-    Class markdownNodeClass = objc_getClass("_TtC6Apollo12MarkdownNode");
-    Class linkButtonNodeClass = objc_getClass("_TtC6Apollo14LinkButtonNode");
+    Class markdownNodeClass = ApolloClassMarkdownNode;
+    Class linkButtonNodeClass = ApolloClassLinkButtonNode;
     for (NSUInteger depth = 0; cursor && depth < 24; depth++, cursor = cursor.supernode) {
         if ((markdownNodeClass && [cursor isKindOfClass:markdownNodeClass]) ||
             (linkButtonNodeClass && [cursor isKindOfClass:linkButtonNodeClass])) {
@@ -237,33 +243,6 @@ static NSDictionary *ApolloMediaMetadataForHostWithState(ASDisplayNode *hostMark
                                                           BOOL *foundHostModelOut);
 static NSDictionary *ApolloMediaMetadataForHost(ASDisplayNode *hostMarkdownNode);
 
-// MARK: - Class lookups (cached)
-
-static Class ApolloASStackLayoutSpecClass(void) {
-    static Class c; static dispatch_once_t once;
-    dispatch_once(&once, ^{ c = NSClassFromString(@"ASStackLayoutSpec"); });
-    return c;
-}
-static Class ApolloASRatioLayoutSpecClass(void) {
-    static Class c; static dispatch_once_t once;
-    dispatch_once(&once, ^{ c = NSClassFromString(@"ASRatioLayoutSpec"); });
-    return c;
-}
-static Class ApolloASInsetLayoutSpecClass(void) {
-    static Class c; static dispatch_once_t once;
-    dispatch_once(&once, ^{ c = NSClassFromString(@"ASInsetLayoutSpec"); });
-    return c;
-}
-static Class ApolloASTextNodeClass(void) {
-    static Class c; static dispatch_once_t once;
-    dispatch_once(&once, ^{ c = NSClassFromString(@"ASTextNode"); });
-    return c;
-}
-static Class ApolloASNetworkImageNodeClass(void) {
-    static Class c; static dispatch_once_t once;
-    dispatch_once(&once, ^{ c = NSClassFromString(@"ASNetworkImageNode"); });
-    return c;
-}
 static NSMutableSet<NSString *> *ApolloInlineSuppressionKeys(void) {
     static NSMutableSet<NSString *> *keys;
     static dispatch_once_t once;
@@ -281,6 +260,12 @@ static NSString *ApolloInlineSuppressionPathKey(NSURL *url) {
     NSString *host = [[url host] lowercaseString];
     NSString *path = [url path];
     if (host.length == 0 || path.length == 0) return nil;
+    // Apollo's link card shows a Reddit media link as "redd.it/<file>", and on
+    // iOS 26+ ApolloGetLinkButtonNodeURLString can only read that display text,
+    // so the card's URL comes back without the i./preview. subdomain. Key the
+    // three hosts alike so a card measured detached (an inserted or reloaded
+    // row) still matches the image the cell inlined.
+    if ([host isEqualToString:@"i.redd.it"] || [host isEqualToString:@"preview.redd.it"]) host = @"redd.it";
     return [NSString stringWithFormat:@"path:%@%@", host, path];
 }
 
@@ -568,7 +553,7 @@ static void ApolloFetchImgurEndpointAtIndex(NSArray<NSURL *> *endpoints, NSUInte
             ApolloFetchImgurEndpointAtIndex(endpoints, index + 1, cacheKey);
             return;
         }
-        ApolloLogDebug(@"[InlineImages] Imgur resolved key=%@ url=%@ size=%@x%@",
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] Imgur resolved key=%{public}@ url=%{public}@ size=%{public}@x%{public}@",
                        cacheKey, result[@"url"], result[@"width"] ?: @"?", result[@"height"] ?: @"?");
         ApolloDeliverImgurResolution(cacheKey, result);
     }];
@@ -620,7 +605,7 @@ static void ApolloResolveImgurURL(NSURL *url, void (^completion)(NSDictionary *r
         return;
     }
     if (shouldStartFetch) {
-        ApolloLogDebug(@"[InlineImages] Imgur resolve START key=%@ endpoints=%lu", cacheKey, (unsigned long)endpoints.count);
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] Imgur resolve START key=%{public}@ endpoints=%lu", cacheKey, (unsigned long)endpoints.count);
         ApolloFetchImgurEndpointAtIndex(endpoints, 0, cacheKey);
     }
 }
@@ -747,10 +732,7 @@ static NSDictionary *ApolloMediaMetadataForHostWithState(ASDisplayNode *hostMark
     if (foundHostModelOut) *foundHostModelOut = NO;
     for (ASDisplayNode *n = hostMarkdownNode; n; n = n.supernode) {
         for (const char *ivarName : (const char *[]){"comment", "link"}) {
-            Ivar ivar = class_getInstanceVariable([n class], ivarName);
-            if (!ivar) continue;
-            id model = nil;
-            @try { model = object_getIvar(n, ivar); } @catch (__unused NSException *e) {}
+            id model = ApolloObjectIvar(n, ivarName);
             if (!model || ![model respondsToSelector:@selector(mediaMetadata)]) continue;
             if (foundHostModelOut) *foundHostModelOut = YES;
             id md = [model performSelector:@selector(mediaMetadata)];
@@ -861,16 +843,16 @@ static void ApolloDashPosterInit(void) {
     dispatch_once(&once, ^{
         sApolloDashPosterCache = [NSCache new];
         sApolloDashPosterCache.name = @"ApolloDashPosterCache";
-        sApolloDashPosterCache.totalCostLimit = 32 * 1024 * 1024;
-        sApolloDashPosterCache.countLimit = 40;
+        // A poster is generated at feed-cell pixel size, so ~3MB each at @3x.
+        // This holds roughly seven video posts of scrollback.
+        sApolloDashPosterCache.totalCostLimit = 24 * 1024 * 1024;
+        sApolloDashPosterCache.countLimit = 24;
         sApolloDashPosterFailures = [NSMutableDictionary dictionary];
         sApolloDashPosterFailureOrder = [NSMutableOrderedSet orderedSet];
         sApolloDashPosterPending = [NSMutableDictionary dictionary];
         sApolloDashPosterQueuedStarts = [NSMutableArray array];
         sApolloDashPosterQueue = dispatch_queue_create("ca.jeffrey.apollo.dashposter", DISPATCH_QUEUE_SERIAL);
-        ApolloMemoryRegisterPurgeHandler(@"dash-posters", ^{
-            [sApolloDashPosterCache removeAllObjects];
-        });
+        ApolloMemoryRegisterPurgableCache(@"dash-posters", sApolloDashPosterCache);
     });
 }
 
@@ -1449,8 +1431,24 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
 
 @end
 
+// Carry the loaded image and zoom origin through an inline tap. The native
+// pager retains this context if its view loads after the tap returns.
+@interface ApolloInlineMediaOpeningContext : NSObject
+@property (nonatomic, strong) UIImage *image;
+@property (nonatomic, strong) UIView *sourceView;
+@end
+@implementation ApolloInlineMediaOpeningContext
+@end
+
+static ApolloInlineMediaOpeningContext *sApolloInlineMediaOpeningContext;
+static char kApolloInlineMediaOpeningContextKey;
+
+// Swift owns assignment and release of the native [Int: UIImage] dictionary.
+extern "C" void ApolloHiddenMediaAssignThumbnail(void *, NSInteger, const void *);
+
 @interface ApolloImageChestAlbumViewController : UIViewController <UIScrollViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic) BOOL profileBannerPresentation;
+@property (nonatomic, strong) UIImage *initialPreviewImage;
 @property (nonatomic, strong) id previewFeedback;
 @property (nonatomic, copy) NSArray<NSDictionary *> *items;
 @property (nonatomic) NSInteger initialIndex;
@@ -1543,7 +1541,7 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
                                   withIntermediateDirectories:YES
                                                    attributes:nil
                                                         error:&directoryError]) {
-        ApolloLog(@"[InlineImages] viewer temp directory failed: %@", directoryError.localizedDescription);
+        ApolloLogError(@"[InlineImages] viewer temp directory failed: %@", directoryError.localizedDescription);
     }
 
     self.scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
@@ -1570,14 +1568,13 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
         zoomScrollView.showsVerticalScrollIndicator = NO;
         zoomScrollView.backgroundColor = UIColor.blackColor;
         zoomScrollView.panGestureRecognizer.enabled = NO;
-        if (@available(iOS 11.0, *)) {
-            zoomScrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-        }
+        zoomScrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
 
         UIImageView *imageView = [[UIImageView alloc] initWithFrame:CGRectZero];
         imageView.tag = 3000 + (NSInteger)i;
         imageView.backgroundColor = UIColor.blackColor;
         imageView.contentMode = UIViewContentModeScaleAspectFit;
+        if ((NSInteger)i == self.initialIndex) imageView.image = self.initialPreviewImage;
         [zoomScrollView addSubview:imageView];
         [page addSubview:zoomScrollView];
 
@@ -1729,19 +1726,22 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
     if (![imageView isKindOfClass:[UIImageView class]] || ![zoom isKindOfClass:[UIScrollView class]]) return;
     if (decodedImage) {
         imageView.image = decodedImage;
+        if (page == self.initialIndex) self.initialPreviewImage = nil;
         [self apollo_layoutZoomScrollView:zoom resetZoom:(zoom.zoomScale <= zoom.minimumZoomScale + 0.01)];
         return;
     }
 
     // updateCounterForPage: runs throughout a swipe. Never read and decode the
     // same large file synchronously from each scroll callback.
-    if (imageView.image || [self.decodingImageIndexes containsObject:index]) return;
+    BOOL showingOpeningPreview = page == self.initialIndex && self.initialPreviewImage &&
+        imageView.image == self.initialPreviewImage;
+    if ((imageView.image && !showingOpeningPreview) || [self.decodingImageIndexes containsObject:index]) return;
     NSURL *fileURL = self.imageFileURLsByIndex[index];
     if (!fileURL) return;
     [self.decodingImageIndexes addObject:index];
-    CGFloat displayScale = UIScreen.mainScreen.scale;
+    CGFloat displayScale = self.view.traitCollection.displayScale;
     CGFloat longestViewDimension = MAX(self.view.bounds.size.width, self.view.bounds.size.height);
-    NSUInteger maximumPixelSize = (NSUInteger)ceil(longestViewDimension * MAX(displayScale, 1.0) * 2.0);
+    NSUInteger maximumPixelSize = (NSUInteger)ceil(longestViewDimension * displayScale * 2.0);
     maximumPixelSize = MAX((NSUInteger)2048, MIN((NSUInteger)4096, maximumPixelSize));
 
     __weak typeof(self) weakSelf = self;
@@ -1913,7 +1913,7 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
                     }
                     [owner.failedImageIndexes addObject:index];
                     if ([retry isKindOfClass:[UIButton class]]) retry.hidden = NO;
-                    ApolloLog(@"[InlineImages] viewer download failed page=%ld status=%ld err=%@",
+                    ApolloLogError(@"[InlineImages] viewer download failed page=%ld status=%ld err=%@",
                               (long)page + 1, (long)http.statusCode,
                               error.localizedDescription ?: @"unknown error");
                 }
@@ -1955,6 +1955,7 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
         UIImageView *imageView = (UIImageView *)[self.scrollView viewWithTag:3000 + (NSInteger)i];
         if (![window containsObject:index]) {
             imageView.image = nil;
+            if ((NSInteger)i == self.initialIndex) self.initialPreviewImage = nil;
             UIScrollView *zoom = (UIScrollView *)[self.scrollView viewWithTag:4000 + (NSInteger)i];
             if ([zoom isKindOfClass:[UIScrollView class]]) zoom.zoomScale = zoom.minimumZoomScale;
             continue;
@@ -2065,6 +2066,7 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
         if ((NSInteger)i == current) continue;
         UIImageView *imageView = (UIImageView *)[self.scrollView viewWithTag:3000 + (NSInteger)i];
         imageView.image = nil;
+        if ((NSInteger)i == self.initialIndex) self.initialPreviewImage = nil;
     }
 }
 
@@ -2088,15 +2090,13 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
         }
     }
 
-    CGFloat safeTop = 16.0;
-    if (@available(iOS 11.0, *)) safeTop += self.view.safeAreaInsets.top;
+    CGFloat safeTop = 16.0 + self.view.safeAreaInsets.top;
     self.closeButton.frame = CGRectMake(bounds.size.width - 84.0, safeTop, 68.0, 32.0);
     self.actionButton.frame = CGRectMake(16.0, safeTop, 44.0, 32.0);
     self.counterLabel.frame = CGRectMake((bounds.size.width - 86.0) * 0.5, safeTop, 86.0, 28.0);
     self.loadingLabel.frame = CGRectMake((bounds.size.width - 132.0) * 0.5, CGRectGetMaxY(self.counterLabel.frame) + 8.0, 132.0, 26.0);
     self.progressBar.frame = CGRectMake(24.0, CGRectGetMaxY(self.loadingLabel.frame) + 8.0, bounds.size.width - 48.0, 3.0);
-    CGFloat safeBottom = 24.0;
-    if (@available(iOS 11.0, *)) safeBottom += self.view.safeAreaInsets.bottom;
+    CGFloat safeBottom = 24.0 + self.view.safeAreaInsets.bottom;
     self.toastLabel.frame = CGRectMake((bounds.size.width - 200.0) * 0.5, bounds.size.height - safeBottom - 30.0, 200.0, 28.0);
     [self.scrollView setContentOffset:CGPointMake(bounds.size.width * self.initialIndex, 0.0) animated:NO];
     self.lastLayoutSize = bounds.size;
@@ -2284,8 +2284,8 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
                         // a fresh manager has no wallpaperSavingViewController.
                         // This reports the confirmed Photos result; it performs no save.
                         id manager = owner.profileBannerPresentation
-                            ? [[NSClassFromString(@"Apollo.ShareMediaManager") alloc] init] : nil;
-                        SEL saved = NSSelectorFromString(@"image:didFinishSavingWithError:contextInfo:");
+                            ? [[objc_getClass("_TtC6Apollo17ShareMediaManager") alloc] init] : nil;
+                        SEL saved = @selector(image:didFinishSavingWithError:contextInfo:);
                         if ([manager respondsToSelector:saved]) {
                             owner.toastLabel.alpha = 0.0;
                             ((void (*)(id, SEL, id, id, void *))objc_msgSend)(manager, saved, nil, nil, NULL);
@@ -2294,7 +2294,7 @@ static UIImage *ApolloAlbumCreateDisplayImage(NSURL *fileURL, NSUInteger maximum
                                 : [NSString stringWithFormat:@"Saved %lu images", (unsigned long)files.count]];
                         }
                     } else {
-                        ApolloLog(@"[InlineImages] album save failed: %@", error.localizedDescription);
+                        ApolloLogError(@"[InlineImages] album save failed: %@", error.localizedDescription);
                         [owner apollo_showToast:@"Save failed"];
                     }
                     if (owner.tearingDown) [owner apollo_removeViewerStorageIfPossible];
@@ -2581,11 +2581,41 @@ static void ApolloReleaseVideoCommentAudioSession(NSUInteger generation);
 }
 @end
 
+// Freeze the selected file so cell reuse or album resolution cannot change it.
+@interface ApolloInlineImageMenuContext : NSObject
+@property (nonatomic, copy) NSURL *URL;
+@property (nonatomic, weak) UIViewController *presenter;
+@property (nonatomic, weak) UIView *sourceView;
+@property (nonatomic) BOOL ended;
+@property (nonatomic, copy) dispatch_block_t pendingAction;
+@end
+@implementation ApolloInlineImageMenuContext
+@end
+static char kApolloInlineImageMenuContextKey;
+
+static UIAction *ApolloInlineImageMenuAction(NSString *title, NSString *symbol,
+                                           ApolloInlineImageMenuContext *context,
+                                           dispatch_block_t action) {
+    return [UIAction actionWithTitle:title image:[UIImage systemImageNamed:symbol]
+                         identifier:nil handler:^(__unused UIAction *sender) {
+        // Photos permission and share-sheet presentation must wait for UIKit
+        // to dismiss the context menu. Retain the selection through late taps.
+        if (context.ended) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (context.presenter.viewIfLoaded.window) action();
+            });
+        } else {
+            context.pendingAction = action;
+        }
+    }];
+}
+
 // MARK: - Tap dispatcher + UIContextMenuInteraction delegate (singleton)
 
 @interface ApolloInlineImageDispatcher : NSObject <UIContextMenuInteractionDelegate>
 + (instancetype)shared;
 - (void)imageNodeTapped:(id)sender;
+- (void)apollo_openImageNode:(id)imageNode;
 - (void)imageNode:(id)imageNode didLoadImage:(UIImage *)image;
 - (void)updateAspectRatioForImageNode:(id)imageNode imageSize:(CGSize)size;
 @end
@@ -2660,6 +2690,25 @@ static id ApolloFindResponderForSelector(SEL sel, id imageNode) {
         }
     }
 
+    UIView *sourceView = [imageNode respondsToSelector:@selector(view)] ? [imageNode view] : nil;
+    UIImage *previewImage = ApolloSendObject(imageNode, @selector(image));
+    if (!previewImage) previewImage = objc_getAssociatedObject(imageNode, &kApolloInlineGIFCoverImageKey);
+    ApolloInlineMediaOpeningContext *previousContext = sApolloInlineMediaOpeningContext;
+    ApolloInlineMediaOpeningContext *context = nil;
+    if ([previewImage isKindOfClass:UIImage.class] && sourceView.window) {
+        context = [ApolloInlineMediaOpeningContext new];
+        context.image = previewImage;
+        context.sourceView = sourceView;
+    }
+    sApolloInlineMediaOpeningContext = context;
+    @try {
+        [self apollo_openImageNode:imageNode];
+    } @finally {
+        sApolloInlineMediaOpeningContext = previousContext;
+    }
+}
+
+- (void)apollo_openImageNode:(id)imageNode {
     NSArray *imageChestItems = objc_getAssociatedObject(imageNode, &kApolloImageChestItemsKey);
     if (imageChestItems.count > 0) {
         UIView *view = [imageNode respondsToSelector:@selector(view)] ? [imageNode view] : nil;
@@ -2712,16 +2761,7 @@ static id ApolloFindResponderForSelector(SEL sel, id imageNode) {
 
 // Find the topmost presented view controller from a view in the hierarchy.
 static UIViewController *ApolloTopVCFromView(UIView *v) {
-    UIWindow *window = v.window;
-    if (!window) {
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                if (w.isKeyWindow) { window = w; break; }
-            }
-            if (window) break;
-        }
-    }
+    UIWindow *window = v.window ?: ApolloKeyWindow();
     UIViewController *vc = window.rootViewController;
     while (vc.presentedViewController) vc = vc.presentedViewController;
     return vc;
@@ -2867,6 +2907,9 @@ BOOL ApolloPresentImageChestItemsWithAlbumURL(NSArray<NSDictionary *> *items, UI
 
     ApolloImageChestAlbumViewController *viewer = [[ApolloImageChestAlbumViewController alloc] initWithItems:items initialIndex:initialIndex];
     viewer.albumURL = albumURL;
+    if (sApolloInlineMediaOpeningContext.sourceView == sourceView) {
+        viewer.initialPreviewImage = sApolloInlineMediaOpeningContext.image;
+    }
     [top presentViewController:viewer animated:YES completion:nil];
     return YES;
 }
@@ -2914,6 +2957,49 @@ static BOOL ApolloPresentOrResolveImageChestAlbumURL(NSURL *url, UIView *sourceV
               ?: objc_getAssociatedObject(v, &kApolloImageURLKey);
     if (![url isKindOfClass:[NSURL class]]) return nil;
 
+    id node = ApolloSendObject(v, @selector(asyncdisplaykit_node)) ?: ApolloSendObject(v, @selector(node));
+    // Video posters keep their link menu; images export the resolved file.
+    if (![objc_getAssociatedObject(node, &kApolloInlineVideoThumbnailKey) boolValue]) {
+        NSURL *imageURL = objc_getAssociatedObject(node, &kApolloImageExportURLKey);
+        ApolloInlineImageMenuContext *context = [ApolloInlineImageMenuContext new];
+        context.URL = [imageURL isKindOfClass:NSURL.class] ? imageURL : nil;
+        context.presenter = ApolloTopVCFromView(v);
+        context.sourceView = v;
+        UIContextMenuConfiguration *configuration = [UIContextMenuConfiguration configurationWithIdentifier:nil
+            previewProvider:nil actionProvider:^UIMenu *(__unused NSArray<UIMenuElement *> *suggested) {
+            __weak ApolloInlineImageMenuContext *weakContext = context;
+            UIAction *copy = ApolloInlineImageMenuAction(@"Copy Image", @"doc.on.doc", context, ^{
+                ApolloInlineImageMenuContext *selection = weakContext;
+                ApolloCopyOrShareImage(selection.URL, selection.presenter, selection.sourceView, NO);
+            });
+            UIAction *save = ApolloInlineImageMenuAction(@"Save Image", @"square.and.arrow.down", context, ^{
+                ApolloInlineImageMenuContext *selection = weakContext;
+                if (selection.URL && selection.presenter.viewIfLoaded.window) {
+                    ApolloSaveAllMedia(@[[[ApolloSaveAllMediaItem alloc] initWithURL:selection.URL isVideo:NO]],
+                                       selection.presenter);
+                }
+            });
+            UIAction *share = ApolloInlineImageMenuAction(@"Share", @"square.and.arrow.up", context, ^{
+                ApolloInlineImageMenuContext *selection = weakContext;
+                ApolloCopyOrShareImage(selection.URL, selection.presenter, selection.sourceView, YES);
+            });
+            // An unresolved album cover has no image file to export yet.
+            if (!context.URL) {
+                copy.attributes = UIMenuElementAttributesDisabled;
+                save.attributes = UIMenuElementAttributesDisabled;
+                share.attributes = UIMenuElementAttributesDisabled;
+            }
+            UIAction *settings = ApolloInlineImageMenuAction(@"Inline Media Settings", @"gearshape", context, ^{
+                ApolloSettingsRouteOpen(@"inline-media");
+            });
+            UIMenu *settingsGroup = [UIMenu menuWithTitle:@"" image:nil identifier:nil
+                options:UIMenuOptionsDisplayInline children:@[settings]];
+            return [UIMenu menuWithTitle:@"" children:@[copy, save, share, settingsGroup]];
+        }];
+        objc_setAssociatedObject(configuration, &kApolloInlineImageMenuContextKey, context, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return configuration;
+    }
+
     return [UIContextMenuConfiguration configurationWithIdentifier:nil
                                                    previewProvider:nil
                                                     actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
@@ -2960,8 +3046,23 @@ static BOOL ApolloPresentOrResolveImageChestAlbumURL(NSURL *url, UIView *sourceV
     }];
 }
 
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+      willEndForConfiguration:(UIContextMenuConfiguration *)configuration
+                     animator:(id<UIContextMenuInteractionAnimating>)animator {
+    ApolloInlineImageMenuContext *context = objc_getAssociatedObject(configuration, &kApolloInlineImageMenuContextKey);
+    if (!context) return;
+    dispatch_block_t finish = ^{
+        context.ended = YES;
+        dispatch_block_t pending = context.pendingAction;
+        context.pendingAction = nil;
+        if (context.presenter.viewIfLoaded.window && pending) pending();
+    };
+    if (animator) [animator addCompletion:finish];
+    else dispatch_async(dispatch_get_main_queue(), finish);
+}
+
 - (void)imageNode:(id)imageNode didLoadImage:(UIImage *)image {
-    ApolloLogDebug(@"[InlineImages] DIDLOAD imageNode=%p hasImage=%d size=%@ url=%@",
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] DIDLOAD imageNode=%p hasImage=%d size=%{public}@ url=%{public}@",
               imageNode, image != nil, image ? NSStringFromCGSize(image.size) : @"nil",
               [imageNode respondsToSelector:@selector(URL)] ? [(ASNetworkImageNode *)imageNode URL] : nil);
     if (!image || image.size.width <= 0 || image.size.height <= 0) return;
@@ -2984,18 +3085,18 @@ static BOOL ApolloPresentOrResolveImageChestAlbumURL(NSURL *url, UIView *sourceV
     NSNumber *cur = objc_getAssociatedObject(imageNode, &kApolloAspectRatioKey);
     if (cur && fabs(newRatio - [cur doubleValue]) < 0.01) return;
     objc_setAssociatedObject(imageNode, &kApolloAspectRatioKey, @(newRatio), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ApolloLogDebug(@"[InlineImages] ratio set imageNode=%p ratio=%.3f size=%@",
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] ratio set imageNode=%p ratio=%.3f size=%{public}@",
               imageNode, newRatio, NSStringFromCGSize(size));
 
     // Surface the new size. Prefer the debounced per-host scheduler (one
     // re-measure per burst); fall back to Texture's direct "intrinsic size
     // changed" climb only when the node has no live inline host.
-    if ([imageNode isKindOfClass:[ApolloASNetworkImageNodeClass() class]] &&
+    if ([imageNode isKindOfClass:ApolloClassASNetworkImageNode] &&
         ApolloInlineHostForNode(imageNode)) {
         ApolloScheduleCoalescedHostRelayout((ASNetworkImageNode *)imageNode, nil);
         return;
     }
-    SEL sel = NSSelectorFromString(@"_u_setNeedsLayoutFromAbove");
+    SEL sel = @selector(_u_setNeedsLayoutFromAbove);
     if (![imageNode respondsToSelector:sel]) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         ((void (*)(id, SEL))objc_msgSend)(imageNode, sel);
@@ -3016,7 +3117,7 @@ static BOOL ApolloPresentOrResolveImageChestAlbumURL(NSURL *url, UIView *sourceV
 // and stays governed by Apollo's native autoplay setting.
 static BOOL ApolloNodeDescendsFromMarkdownNode(ASDisplayNode *node) {
     ASDisplayNode *cursor = node.supernode;
-    Class markdownNodeClass = objc_getClass("_TtC6Apollo12MarkdownNode");
+    Class markdownNodeClass = ApolloClassMarkdownNode;
     int depth = 0;
     while (cursor && depth < 12) {
         if (markdownNodeClass && [cursor isKindOfClass:markdownNodeClass]) return YES;
@@ -3040,7 +3141,7 @@ static void ApolloActivateNativeInlineGIFGate(ASDisplayNode *node) {
             ApolloApplyNativeInlineGIFAutoplayGate(strong);
         }];
     }
-    ApolloLogDebug(@"[AutoplayGIF] native inline GIF gated node=%p class=%@",
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] native inline GIF gated node=%p class=%{public}@",
               node, NSStringFromClass([node class]));
 }
 
@@ -3161,7 +3262,7 @@ static void ApolloGateNativeInlineAnimatedImageIfNeeded(ASDisplayNode *node) {
         if (ready && [anim respondsToSelector:@selector(coverImage)]) {
             cover = [anim valueForKey:@"coverImage"];
         }
-        ApolloLogDebug(@"[InlineImages] _locked_setAnimatedImage imageNode=%p ready=%d coverSize=%@",
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] _locked_setAnimatedImage imageNode=%p ready=%d coverSize=%{public}@",
                   strong, ready, cover ? NSStringFromCGSize(cover.size) : @"nil");
 
         if (cover && cover.size.width > 0 && cover.size.height > 0) {
@@ -3184,7 +3285,7 @@ static void ApolloGateNativeInlineAnimatedImageIfNeeded(ASDisplayNode *node) {
         if ([anim respondsToSelector:@selector(setCoverImageReadyCallback:)]) {
             id capturedAnim = retainedAnim;
             void (^cb)(UIImage *) = ^(UIImage *coverImage) {
-                ApolloLogDebug(@"[InlineImages] coverImageReadyCallback imageNode=%p coverSize=%@",
+                os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] coverImageReadyCallback imageNode=%p coverSize=%{public}@",
                           weakSelf, coverImage ? NSStringFromCGSize(coverImage.size) : @"nil");
                 ASImageNode *s = weakSelf;
                 if (!s || !coverImage || coverImage.size.width <= 0 || !ApolloInlineGIFGenerationMatches(s, generation)) return;
@@ -3273,7 +3374,7 @@ static void ApolloGateNativeInlineAnimatedImageIfNeeded(ASDisplayNode *node) {
     objc_setAssociatedObject(self, &kApolloLastDisplayBoundsKey,
                              [NSValue valueWithCGSize:cur],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ApolloLogDebug(@"[InlineImages] re-display: backing store was rendered at %@ but node is now %@ (node=%p)",
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] re-display: backing store was rendered at %{public}@ but node is now %{public}@ (node=%p)",
               NSStringFromCGSize(last), NSStringFromCGSize(cur), self);
     [(ASDisplayNode *)self setNeedsDisplay];
 }
@@ -3283,7 +3384,7 @@ static void ApolloGateNativeInlineAnimatedImageIfNeeded(ASDisplayNode *node) {
         ![objc_getAssociatedObject(self, &kApolloInlineGIFReloadInFlightKey) boolValue]) {
         NSURL *previous = [self respondsToSelector:@selector(URL)] ? [self URL] : nil;
         if ((previous && URL && ![previous isEqual:URL]) || (previous && !URL)) {
-            ApolloLogDebug(@"[AutoplayGIF] clearing GIF state on URL change node=%p", self);
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] clearing GIF state on URL change node=%p", self);
             ApolloClearInlineGIFNodeState(self);
         }
     }
@@ -3345,7 +3446,7 @@ static void ApolloMirrorImageURLsToLoadedView(ASNetworkImageNode *imageNode) {
 
 // Record the URL the user actually posted (different from the loaded
 // CDN URL after normalization, or different from the resolved image
-// URL after Imgur album lookup). Used for tap routing + Copy Link.
+// URL after Imgur album lookup). Used for tap routing to the full album.
 static void ApolloSetOriginalImageURL(ASNetworkImageNode *imageNode, NSURL *originalURL) {
     if (![originalURL isKindOfClass:[NSURL class]]) return;
     objc_setAssociatedObject(imageNode, &kApolloOriginalImageURLKey, originalURL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3354,8 +3455,8 @@ static void ApolloSetOriginalImageURL(ASNetworkImageNode *imageNode, NSURL *orig
 
 // Apply an async album resolution result to an imageNode. Sets the load
 // URL, captures aspect ratio if available, and triggers cell relayout.
-// Preserves kApolloOriginalImageURLKey so copy/share still use the user
-// posted album URL instead of only the resolved cover image.
+// Preserves kApolloOriginalImageURLKey so tapping still opens the full album;
+// image export actions read the resolved cover's own URL.
 // Applies a resolved album result to the node (load URL, tap-routing keys,
 // aspect ratio, stacked card) WITHOUT scheduling any relayout. Use directly
 // when the resolution comes from cache during the same layout pass that is
@@ -3369,6 +3470,7 @@ static BOOL ApolloApplyResolvedAlbumImageContent(ASNetworkImageNode *imageNode, 
     if (![imageURL isKindOfClass:[NSURL class]]) return NO;
 
     imageNode.URL = imageURL;
+    objc_setAssociatedObject(imageNode, &kApolloImageExportURLKey, imageURL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSArray *images = [result[@"images"] isKindOfClass:[NSArray class]] ? result[@"images"] : nil;
     if (images.count > 0) {
         objc_setAssociatedObject(imageNode, &kApolloImageChestItemsKey, images, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3436,16 +3538,12 @@ static void ApolloHostRelayoutPerform(ASDisplayNode *host) {
     ASDisplayNode *cellNode = nil;
     while (n) {
         NSString *cls = NSStringFromClass([n class]);
-        if ([n respondsToSelector:@selector(invalidateCalculatedLayout)]) {
-            [n invalidateCalculatedLayout];
-        }
-        if ([n respondsToSelector:@selector(setNeedsLayout)]) {
-            [n setNeedsLayout];
-        }
+        [n invalidateCalculatedLayout];
+        [n setNeedsLayout];
         if ([cls containsString:@"CellNode"]) cellNode = n;
         n = n.supernode;
     }
-    SEL relayoutSel = NSSelectorFromString(@"_u_setNeedsLayoutFromAbove");
+    SEL relayoutSel = @selector(_u_setNeedsLayoutFromAbove);
     id target = cellNode ?: host;
     if ([target respondsToSelector:relayoutSel]) {
         ((void (*)(id, SEL))objc_msgSend)(target, relayoutSel);
@@ -3551,7 +3649,6 @@ static UIImage *ApolloPlayOverlayImage(void) {
     });
     return image;
 }
-
 
 // The small corner badges for tap-to-play GIFs — play triangle while paused,
 // pause bars while playing. Same visual language as the video play circle,
@@ -3735,8 +3832,7 @@ static void ApolloTrackInlineGIFPendingPolicyBlock(ASDisplayNode *node, dispatch
 
 static NSUInteger ApolloInlineGIFGenerationForNode(id node) {
     if (!node) return 0;
-    NSNumber *generation = objc_getAssociatedObject(node, &kApolloInlineGIFGenerationKey);
-    return generation ? generation.unsignedIntegerValue : 0;
+    return [objc_getAssociatedObject(node, &kApolloInlineGIFGenerationKey) unsignedIntegerValue];
 }
 
 static NSUInteger ApolloInlineGIFBumpGeneration(id node) {
@@ -3784,23 +3880,22 @@ static void ApolloClearInlineGIFNodeState(ASNetworkImageNode *node) {
 static BOOL ApolloInlineGIFImageNodeIsLiveForRefresh(ASNetworkImageNode *node) {
     if (!ApolloInlineGIFNodeIsRegistryEligible(node)) {
         if (node) ApolloUnregisterInlineGIFNode(node);
-        ApolloLogDebug(@"[AutoplayGIF] live-check node=%p ineligible", node);
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] live-check node=%p ineligible", node);
         return NO;
     }
-    if (!node) return NO;
     if (![objc_getAssociatedObject(node, &kApolloInlineAnimatedGIFKey) boolValue]) {
         ApolloUnregisterInlineGIFNode(node);
-        ApolloLogDebug(@"[AutoplayGIF] live-check node=%p no-anim-flag", node);
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] live-check node=%p no-anim-flag", node);
         return NO;
     }
     @try {
         if (![node respondsToSelector:@selector(isNodeLoaded)] || ![node isNodeLoaded]) {
-            ApolloLogDebug(@"[AutoplayGIF] live-check node=%p not-loaded", node);
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] live-check node=%p not-loaded", node);
             return NO;
         }
         if (!node.supernode) {
             ApolloUnregisterInlineGIFNode(node);
-            ApolloLogDebug(@"[AutoplayGIF] live-check node=%p no-supernode", node);
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] live-check node=%p no-supernode", node);
             return NO;
         }
         // Deliberately no node.URL requirement: the tweak's GIF pipeline loads
@@ -3808,7 +3903,7 @@ static BOOL ApolloInlineGIFImageNodeIsLiveForRefresh(ASNetworkImageNode *node) {
         // check disqualified every hosted GIF from settings-refresh handling.
         return YES;
     } @catch (NSException *exception) {
-        ApolloLog(@"[AutoplayGIF] live-check failed node=%p class=%@ reason=%@",
+        ApolloLogError(@"[AutoplayGIF] live-check failed node=%p class=%@ reason=%@",
                   node, NSStringFromClass([node class]), exception.reason);
         ApolloUnregisterInlineGIFNode(node);
         return NO;
@@ -4036,7 +4131,7 @@ BOOL ApolloPauseInlineGIFNodeForAutoplay(id imageNode) {
     @try {
         ApolloPauseInlineGIFNode(node, cover);
     } @catch (NSException *exception) {
-        ApolloLog(@"[AutoplayGIF] pause failed node=%p class=%@ reason=%@",
+        ApolloLogError(@"[AutoplayGIF] pause failed node=%p class=%@ reason=%@",
                   node, NSStringFromClass([node class]), exception.reason);
         ApolloUnregisterInlineGIFNode(node);
         return NO;
@@ -4054,7 +4149,7 @@ BOOL ApolloReloadInlineGIFImageNodeForAutoplay(id imageNode) {
 
     ApolloRemovePlayOverlayFromNode(node);
     if (ApolloResumeInlineGIFPlaybackIfPossible(node)) {
-        ApolloLogDebug(@"[AutoplayGIF] resume-only node=%p", node);
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] resume-only node=%p", node);
         return NO;
     }
     // No live FLAnimatedImageView to resume (the pause's cover swap tears the
@@ -4066,11 +4161,11 @@ BOOL ApolloReloadInlineGIFImageNodeForAutoplay(id imageNode) {
         @try {
             [(id)node setAnimatedImage:storedAnim];
         } @catch (NSException *exception) {
-            ApolloLog(@"[AutoplayGIF] reload reinject failed node=%p reason=%@", node, exception.reason);
+            ApolloLogError(@"[AutoplayGIF] reload reinject failed node=%p reason=%@", node, exception.reason);
             ApolloUnregisterInlineGIFNode(node);
             return NO;
         }
-        ApolloLogDebug(@"[AutoplayGIF] reload reinject node=%p", node);
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] reload reinject node=%p", node);
         return YES;
     }
 
@@ -4098,7 +4193,7 @@ BOOL ApolloReloadInlineGIFImageNodeForAutoplay(id imageNode) {
         [node setURL:nil];
         [node setURL:url];
     } @catch (NSException *exception) {
-        ApolloLog(@"[AutoplayGIF] reload failed node=%p class=%@ reason=%@",
+        ApolloLogError(@"[AutoplayGIF] reload failed node=%p class=%@ reason=%@",
                   node, NSStringFromClass([node class]), exception.reason);
         reloadOK = NO;
     }
@@ -4107,7 +4202,7 @@ BOOL ApolloReloadInlineGIFImageNodeForAutoplay(id imageNode) {
         ApolloUnregisterInlineGIFNode(node);
         return NO;
     }
-    ApolloLogDebug(@"[AutoplayGIF] reload node=%p url=%@", node, url.host ?: url.absoluteString);
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] reload node=%p url=%{public}@", node, url.host ?: url.absoluteString);
     return YES;
 }
 
@@ -4178,7 +4273,7 @@ static void ApolloApplyInlineGIFPlaybackPolicyWithCover(ASNetworkImageNode *imag
         if (shouldPlay) {
             ApolloUpdateInlineGIFOverlayForNode(strong);
             if (ApolloResumeInlineGIFPlaybackIfPossible(strong)) {
-                ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=1 forced=%d",
+                os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=1 forced=%d",
                           strong, (unsigned long)retryIndex, forcedPlay);
                 return;
             }
@@ -4197,18 +4292,18 @@ static void ApolloApplyInlineGIFPlaybackPolicyWithCover(ASNetworkImageNode *imag
                 });
                 ApolloTrackInlineGIFPendingPolicyBlock(strong, retryBlock);
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), retryBlock);
-                ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=0 scheduling=%lu forced=%d",
+                os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=0 scheduling=%lu forced=%d",
                           strong, (unsigned long)retryIndex, (unsigned long)(retryIndex + 1), forcedPlay);
                 return;
             }
-            ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=0 forced=%d",
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu shouldPlay=1 resume=0 forced=%d",
                       strong, (unsigned long)retryIndex, forcedPlay);
             return;
         }
 
         if (cover) {
             ApolloPauseInlineGIFNode(strong, cover);
-            ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu staticCover=1 shouldPlay=0",
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu staticCover=1 shouldPlay=0",
                       strong, (unsigned long)retryIndex);
             return;
         }
@@ -4228,13 +4323,13 @@ static void ApolloApplyInlineGIFPlaybackPolicyWithCover(ASNetworkImageNode *imag
             });
             ApolloTrackInlineGIFPendingPolicyBlock(strong, retryBlock);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), retryBlock);
-            ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu waitingForCover=%lu shouldPlay=0",
+            os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu waitingForCover=%lu shouldPlay=0",
                       strong, (unsigned long)retryIndex, (unsigned long)(retryIndex + 1));
             return;
         }
 
         ApolloPauseInlineGIFNode(strong, nil);
-        ApolloLogDebug(@"[AutoplayGIF] policy node=%p retry=%lu pausedNoCover=1 shouldPlay=0",
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] policy node=%p retry=%lu pausedNoCover=1 shouldPlay=0",
                   strong, (unsigned long)retryIndex);
     });
     ApolloTrackInlineGIFPendingPolicyBlock(imageNode, block);
@@ -4274,7 +4369,7 @@ static BOOL ApolloResumeInlineGIFPlaybackIfPossible(ASNetworkImageNode *imageNod
     // Autoplay resume drops the overlay; a user-forced (tap-to-play) resume
     // swaps the play button for the corner pause badge.
     ApolloUpdateInlineGIFOverlayForNode(imageNode);
-    ApolloLogDebug(@"[AutoplayGIF] resume node=%p animView=%p forced=%d", imageNode, animView, forcedPlay);
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [AutoplayGIF] resume node=%p animView=%p forced=%d", imageNode, animView, forcedPlay);
     return YES;
 }
 
@@ -4306,7 +4401,7 @@ static void ApolloStartInlineGIFPlayback(ASNetworkImageNode *imageNode) {
                 ApolloLog(@"[AutoplayGIF] userPlay node=%p reinject=1", imageNode);
                 return;
             } @catch (NSException *exception) {
-                ApolloLog(@"[AutoplayGIF] userPlay reinject failed node=%p reason=%@", imageNode, exception.reason);
+                ApolloLogError(@"[AutoplayGIF] userPlay reinject failed node=%p reason=%@", imageNode, exception.reason);
             }
         }
 
@@ -4403,7 +4498,7 @@ static void ApolloInstallStackedCardForImageNode(ASNetworkImageNode *imageNode) 
 // in layout immediately, then resolves the real poster URL + ratio
 // asynchronously in didLoad (after Texture connects the supernode chain).
 static ASNetworkImageNode *ApolloMakeInlineVideoThumbnailNode(NSURL *videoURL) {
-    Class imageNodeClass = ApolloASNetworkImageNodeClass();
+    Class imageNodeClass = ApolloClassASNetworkImageNode;
     if (!imageNodeClass) return nil;
 
     ASNetworkImageNode *imageNode = [[imageNodeClass alloc] init];
@@ -4476,13 +4571,18 @@ static ASNetworkImageNode *ApolloMakeInlineVideoThumbnailNode(NSURL *videoURL) {
                     }
                 }
                 if (dashURL && assetID.length) {
-                    CGFloat displayScale = v.window.screen.scale ?: UIScreen.mainScreen.scale;
+                    CGFloat displayScale = v.traitCollection.displayScale;
                     CGSize displayPoints = v.bounds.size;
                     if (displayPoints.width < 1.0 || displayPoints.height < 1.0) {
+                        // TODO: Modernization - this runs from onDidLoad, before the
+                        // node's view is sized or attached to a window, so neither
+                        // v.window nor a sized superview is reliably reachable here.
+                        // Still assumes the main screen as the poster's upper bound;
+                        // ideally the caller would pass the container width.
                         displayPoints = UIScreen.mainScreen.bounds.size;
                     }
-                    CGSize targetPixels = CGSizeMake(displayPoints.width * MAX(displayScale, 1.0),
-                                                     displayPoints.height * MAX(displayScale, 1.0));
+                    CGSize targetPixels = CGSizeMake(displayPoints.width * displayScale,
+                                                     displayPoints.height * displayScale);
                     ApolloFetchDashPoster(assetID, dashURL, targetPixels, ^(UIImage *poster) {
                         ASNetworkImageNode *strong = weakImage;
                         if (!strong) return;
@@ -4520,7 +4620,7 @@ static ASNetworkImageNode *ApolloMakeInlineVideoThumbnailNode(NSURL *videoURL) {
 
 static ASNetworkImageNode *ApolloMakeInlineImageNode(NSURL *normalizedURL,
                                                       ASDisplayNode *hostMarkdownNode) {
-    Class imageNodeClass = ApolloASNetworkImageNodeClass();
+    Class imageNodeClass = ApolloClassASNetworkImageNode;
     if (!imageNodeClass) return nil;
 
     // Imgur/ImageChest album URLs need an API roundtrip or page fetch to resolve to a
@@ -4536,6 +4636,7 @@ static ASNetworkImageNode *ApolloMakeInlineImageNode(NSURL *normalizedURL,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!deferredAlbum) {
         imageNode.URL = normalizedURL;
+        objc_setAssociatedObject(imageNode, &kApolloImageExportURLKey, normalizedURL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     imageNode.shouldRenderProgressImages = YES;
     // aspectFit always: container ratio may be clamped (very tall/wide
@@ -4564,6 +4665,22 @@ static ASNetworkImageNode *ApolloMakeInlineImageNode(NSURL *normalizedURL,
 
     CGFloat ratio = ApolloAspectRatioFromURL(normalizedURL);
     if (ratio <= 0) {
+        // Reddit includes authoritative source dimensions in media_metadata.
+        // Use them during the first Texture measurement so a comment reserves
+        // the image's final space before the network image finishes loading.
+        // The helper requires a matching Reddit asset and deliberately ignores
+        // external hosts, whose existing load-then-layout behavior is unchanged.
+        NSDictionary *mediaMetadata = ApolloMediaMetadataForHost(hostMarkdownNode);
+        ratio = (CGFloat)ApolloInlineImageAspectRatioFromMediaMetadata(normalizedURL,
+                                                                       mediaMetadata);
+        // That first measurement normally runs before the MarkdownNode joins
+        // its CommentCellNode, so the host lookup above cannot reach the model.
+        // Fall back to dimensions captured when Reddit parsed that model.
+        if (ratio <= 0) {
+            ratio = (CGFloat)ApolloInlineImageAspectRatioFromRegisteredMetadata(normalizedURL);
+        }
+    }
+    if (ratio <= 0) {
         // A previous node instance already loaded this image and recorded its
         // real ratio — reuse it so a rebuilt cell measures the row
         // correctly on the FIRST pass instead of hiding the image and growing
@@ -4572,7 +4689,8 @@ static ASNetworkImageNode *ApolloMakeInlineImageNode(NSURL *normalizedURL,
         if (known) ratio = known.doubleValue;
     }
     // kApolloAspectRatioKey is only set when we have real ratio info (URL
-    // query params now, a prior load's cached ratio, or didLoadImage later).
+    // query params now, matching Reddit media_metadata, a prior load's cached
+    // ratio, or didLoadImage later).
     // Nil means "unknown" → the wrapper omits the image from layout to avoid
     // wrong-ratio races.
 
@@ -4583,8 +4701,8 @@ static ASNetworkImageNode *ApolloMakeInlineImageNode(NSURL *normalizedURL,
     if (!deferredAlbum) {
         objc_setAssociatedObject(imageNode, &kApolloImageURLKey, normalizedURL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else {
-        // For album URLs, record the album URL as "original" so
-        // copy/share/open actions keep what the user posted.
+        // For album URLs, record the album URL as "original" so tapping
+        // opens the full album instead of only its cover image.
         objc_setAssociatedObject(imageNode, &kApolloOriginalImageURLKey, normalizedURL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (ratio > 0) {
@@ -4698,7 +4816,7 @@ static void ApolloRefreshInlineMediaLayout(void) {
     @synchronized (sApolloInlineMediaLayoutNodes) {
         nodes = sApolloInlineMediaLayoutNodes.allObjects;
     }
-    SEL relayoutSel = NSSelectorFromString(@"_u_setNeedsLayoutFromAbove");
+    SEL relayoutSel = @selector(_u_setNeedsLayoutFromAbove);
     NSUInteger relaid = 0;
     for (ASDisplayNode *node in nodes) {
         if (![node respondsToSelector:relayoutSel]) continue;
@@ -4708,10 +4826,16 @@ static void ApolloRefreshInlineMediaLayout(void) {
             relaid++;
         } @catch (__unused NSException *exception) {}
     }
-    ApolloLogDebug(@"[InlineImages] media layout refresh nodes=%lu relaid=%lu",
+    os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] media layout refresh nodes=%lu relaid=%lu",
               (unsigned long)nodes.count, (unsigned long)relaid);
 }
 
+// TODO: Modernization - the viewport height cap below still reads
+// UIScreen.mainScreen.bounds. Both callers are Texture layoutSpecThatFits:
+// passes that can run off the main thread, where no UIView/UIWindow may be
+// touched, and rowMaxWidth (constrainedSize) carries no height. A correct fix
+// captures the hosting window's height on main (e.g. when the host node
+// enters the visible state) and threads it in as a parameter.
 static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
                                                    CGFloat rowMaxWidth) {
     ApolloRegisterInlineMediaLayoutNode((ASDisplayNode *)imageNode);
@@ -4746,6 +4870,8 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
         if (sInlineMediaSizePercent > 0 && sInlineMediaSizePercent < 100) {
             sizedWidth *= sInlineMediaSizePercent / 100.0;
         }
+        // TODO: Modernization - main-screen viewport height; see the note on
+        // ApolloWrapImageNodeForLayout (off-main layout, no window reachable).
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
         CGFloat viewportRatioCap = (screenHeight * kApolloMaxScreenHeightFraction)
                                  / MAX(sizedWidth, 1.0);
@@ -4760,6 +4886,8 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
         // to image-tight (no letterbox) unless that would make the
         // container too narrow, in which case pin to a min width and
         // letterbox inside (still height-capped).
+        // TODO: Modernization - main-screen viewport height; see the note on
+        // ApolloWrapImageNodeForLayout (off-main layout, no window reachable).
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
         CGFloat maxContainerHeight = MIN(rowMaxWidth * kApolloMaxContainerRatio,
                                           screenHeight * kApolloMaxScreenHeightFraction);
@@ -4783,6 +4911,8 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
         // Normal aspect. Tight-wrap, but enforce the screen height cap
         // so a landscape-wide normal image (e.g. 16:9 at full row width)
         // doesn't dominate the viewport.
+        // TODO: Modernization - main-screen viewport height; see the note on
+        // ApolloWrapImageNodeForLayout (off-main layout, no window reachable).
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
         CGFloat heightCap = screenHeight * kApolloMaxScreenHeightFraction;
         CGFloat naturalHeight = rowMaxWidth * naturalRatio;
@@ -4802,7 +4932,7 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
         imageNode.borderWidth = 0.0;
     }
 
-    ASRatioLayoutSpec *ratioSpec = [ApolloASRatioLayoutSpecClass() ratioLayoutSpecWithRatio:containerRatio child:imageNode];
+    ASRatioLayoutSpec *ratioSpec = [ApolloClassASRatioLayoutSpec ratioLayoutSpecWithRatio:containerRatio child:imageNode];
     [[ratioSpec style] setValue:@(ApolloASStackLayoutAlignSelfStretch) forKey:@"alignSelf"];
 
     // User-selected inline media size (100/75/50% of the row width). Applied
@@ -4828,7 +4958,7 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
         rightInset = slack * 0.5;
     }
     UIEdgeInsets insets = UIEdgeInsetsMake(4, leftInset, 4, rightInset);
-    ASInsetLayoutSpec *insetSpec = [ApolloASInsetLayoutSpecClass() insetLayoutSpecWithInsets:insets child:ratioSpec];
+    ASInsetLayoutSpec *insetSpec = [ApolloClassASInsetLayoutSpec insetLayoutSpecWithInsets:insets child:ratioSpec];
     [[insetSpec style] setValue:@(ApolloASStackLayoutAlignSelfStretch) forKey:@"alignSelf"];
     return insetSpec;
 }
@@ -4852,7 +4982,7 @@ static ASLayoutSpec *ApolloWrapImageNodeForLayout(ASNetworkImageNode *imageNode,
 // loading, but reserving no space — which preserves the old "appears once the
 // ratio is known" behavior via the didLoadImage → relayout-from-above pass.
 static ASLayoutSpec *ApolloHiddenInlineLeafSpec(ASDisplayNode *leaf) {
-    ASInsetLayoutSpec *spec = [ApolloASInsetLayoutSpecClass() insetLayoutSpecWithInsets:UIEdgeInsetsZero child:leaf];
+    ASInsetLayoutSpec *spec = [ApolloClassASInsetLayoutSpec insetLayoutSpecWithInsets:UIEdgeInsetsZero child:leaf];
     [[spec style] setValue:[NSValue valueWithCGSize:CGSizeZero] forKey:@"preferredSize"];
     return spec;
 }
@@ -4900,15 +5030,11 @@ static void ApolloRequestMarkdownRelayout(ASDisplayNode *hostMarkdownNode) {
     dispatch_async(dispatch_get_main_queue(), ^{
         ASDisplayNode *n = hostMarkdownNode;
         while (n) {
-            if ([n respondsToSelector:@selector(invalidateCalculatedLayout)]) {
-                [n invalidateCalculatedLayout];
-            }
-            if ([n respondsToSelector:@selector(setNeedsLayout)]) {
-                [n setNeedsLayout];
-            }
+            [n invalidateCalculatedLayout];
+            [n setNeedsLayout];
             n = n.supernode;
         }
-        SEL relayoutSel = NSSelectorFromString(@"_u_setNeedsLayoutFromAbove");
+        SEL relayoutSel = @selector(_u_setNeedsLayoutFromAbove);
         if ([hostMarkdownNode respondsToSelector:relayoutSel]) {
             ((void (*)(id, SEL))objc_msgSend)(hostMarkdownNode, relayoutSel);
         }
@@ -4973,7 +5099,7 @@ static void ApolloScheduleInlineGIFMetadataRetry(ASDisplayNode *hostMarkdownNode
                 // so the /player URL is reclassified as a GIF on the next layout.
                 objc_setAssociatedObject(host, &kApolloCachedOrigChildrenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 ApolloRequestMarkdownRelayout(host);
-                ApolloLogDebug(@"[InlineImages] reddit GIF metadata arrived — rebuilding decomposition host=%p attempt=%lu",
+                os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] reddit GIF metadata arrived — rebuilding decomposition host=%p attempt=%lu",
                                host, (unsigned long)attempt);
                 return;
             }
@@ -5144,10 +5270,8 @@ static NSArray *ApolloBuildLeavesForTextNode(ASTextNode *textNode,
                 ? ApolloVideoThumbnailNodeForURL(urls[leafIndex], hostMarkdownNode)
                 : ApolloImageNodeForURL(urls[leafIndex], hostMarkdownNode);
             if (img) {
-                // Route tap/long-press to the original posted URL when
-                // it differs from the loaded URL — Copy Link returns
-                // what the user shared, and album taps route to the
-                // album viewer instead of just the cover image.
+                // Keep the original posted URL for taps so albums open
+                // their full viewer. Image actions export the resolved file.
                 NSURL *original = originalURLs[leafIndex];
                 if (original && ![original.absoluteString isEqualToString:urls[leafIndex].absoluteString]) {
                     ApolloSetOriginalImageURL(img, original);
@@ -5327,20 +5451,6 @@ static BOOL ApolloChildrenContentMatches(NSArray *a, NSArray *b) {
     return YES;
 }
 
-static id ApolloModelFromNodeIvar(ASDisplayNode *node, const char *ivarName) {
-    if (!node || !ivarName) return nil;
-    Ivar ivar = class_getInstanceVariable([node class], ivarName);
-    if (!ivar) return nil;
-    id model = nil;
-    @try {
-        model = object_getIvar(node, ivar);
-    } @catch (NSException *e) {
-        ApolloLog(@"[InlineImages] ivar read failed node=%@ ivar=%s err=%@",
-                  NSStringFromClass([node class]), ivarName, e.reason ?: e.name);
-    }
-    return model;
-}
-
 static BOOL ApolloModelRepresentsInlineHost(id model, BOOL isComment) {
     if (!model) return NO;
     if (isComment) return YES;
@@ -5370,12 +5480,12 @@ static NSUInteger ApolloUniqueImageChestPostLinkCount(NSAttributedString *attr) 
 
 static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
     for (ASDisplayNode *n = linkButtonNode; n; n = n.supernode) {
-        id comment = ApolloModelFromNodeIvar(n, "comment");
+        id comment = ApolloObjectIvar(n, "comment");
         if (ApolloModelRepresentsInlineHost(comment, YES)) {
             return YES;
         }
 
-        id link = ApolloModelFromNodeIvar(n, "link");
+        id link = ApolloObjectIvar(n, "link");
         if (ApolloModelRepresentsInlineHost(link, NO)) {
             return YES;
         }
@@ -5405,7 +5515,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
 - (id)layoutSpecThatFits:(struct CDStruct_90e057aa)constrainedSize {
     id origSpec = %orig;
     if (!sEnableInlineImages) return origSpec;
-    if (![origSpec isKindOfClass:ApolloASStackLayoutSpecClass()]) return origSpec;
+    if (![origSpec isKindOfClass:ApolloClassASStackLayoutSpec]) return origSpec;
 
     ASStackLayoutSpec *stack = (ASStackLayoutSpec *)origSpec;
     NSArray *origChildren = stack.children;
@@ -5444,7 +5554,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
         objc_setAssociatedObject(self, &kApolloCachedOrigChildrenKey, origChildren, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         decomp = rekeyed.count > 0 ? rekeyed : nil;
         identityMatches = YES; // content is stable — skip the rebuild below
-        ApolloLogDebug(@"[InlineImages] vote-stable relayout: reused decomposition across pointer churn (md=%p leaves=%lu) — no rebuild, no flicker",
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] vote-stable relayout: reused decomposition across pointer churn (md=%p leaves=%lu) — no rebuild, no flicker",
                   self, (unsigned long)rekeyed.count);
     }
 
@@ -5463,8 +5573,8 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
         // node instance twice in one layout, which crashes the layout
         // transition (see ApolloBuildLeavesForTextNode).
         NSMutableSet<NSString *> *seenAbs = [NSMutableSet set];
-        Class textNodeCls = ApolloASTextNodeClass();
-        Class imageNodeCls = ApolloASNetworkImageNodeClass();
+        Class textNodeCls = ApolloClassASTextNode;
+        Class imageNodeCls = ApolloClassASNetworkImageNode;
         for (id child in origChildren) {
             if (![child isKindOfClass:textNodeCls]) continue;
             NSArray *leaves = ApolloBuildLeavesForTextNode((ASTextNode *)child, (ASDisplayNode *)self, seenAbs);
@@ -5496,7 +5606,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
             for (NSString *cachedURL in cachedURLs) {
                 if (![referencedURLs containsObject:cachedURL]) {
                     ASNetworkImageNode *staleNode = imageCache[cachedURL];
-                    if ([staleNode isKindOfClass:[ApolloASNetworkImageNodeClass() class]]) {
+                    if ([staleNode isKindOfClass:ApolloClassASNetworkImageNode]) {
                         ApolloClearInlineGIFNodeState(staleNode);
                     }
                     [imageCache removeObjectForKey:cachedURL];
@@ -5526,7 +5636,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
     // so ASM inserts them into the tree and they start loading; DIDLOAD then
     // triggers a layout-from-above and they get their real size on that pass.
     NSMutableArray *augmented = [NSMutableArray arrayWithCapacity:origChildren.count];
-    Class imageNodeCls = ApolloASNetworkImageNodeClass();
+    Class imageNodeCls = ApolloClassASNetworkImageNode;
     CGFloat rowMaxWidth = constrainedSize.max.width;
     // Invariant: no node instance may appear twice in one layout — a node
     // occupies a single _subnodes slot, so a duplicate desyncs the layout
@@ -5542,7 +5652,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
         }
         for (id leaf in leaves) {
             if ([usedLeaves containsObject:leaf]) {
-                ApolloLogDebug(@"[InlineImages] skipping duplicate leaf instance %p in one layout pass (host=%p)", leaf, self);
+                os_log_debug(ApolloFixLog(), "[ApolloFix] [InlineImages] skipping duplicate leaf instance %p in one layout pass (host=%p)", leaf, self);
                 continue;
             }
             [usedLeaves addObject:leaf];
@@ -5556,7 +5666,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
         }
     }
 
-    ASStackLayoutSpec *newSpec = [ApolloASStackLayoutSpecClass() stackLayoutSpecWithDirection:stack.direction
+    ASStackLayoutSpec *newSpec = [ApolloClassASStackLayoutSpec stackLayoutSpecWithDirection:stack.direction
                                                                                       spacing:stack.spacing
                                                                                // Override Apollo's spaceBetween — it spreads our
                                                                                // multi-child augmented layout when slack is available.
@@ -5599,7 +5709,7 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
         BOOL alreadyInlined = ApolloLinkButtonHasInlineHost((ASDisplayNode *)self)
                            || ApolloInlineSuppressionContainsURL(url);
         if (alreadyInlined) {
-            Class layoutSpecCls = NSClassFromString(@"ASLayoutSpec");
+            Class layoutSpecCls = ApolloClassASLayoutSpec;
             if (layoutSpecCls) {
                 ASLayoutSpec *empty = [[layoutSpecCls alloc] init];
                 [[empty style] setValue:[NSValue valueWithCGSize:CGSizeZero] forKey:@"preferredSize"];
@@ -5628,12 +5738,57 @@ static BOOL ApolloLinkButtonHasInlineHost(ASDisplayNode *linkButtonNode) {
                               || ApolloInlineSuppressionContainsURL(url);
     if (!haveInlineReplacement) return %orig;
 
-    Class layoutSpecCls = NSClassFromString(@"ASLayoutSpec");
+    Class layoutSpecCls = ApolloClassASLayoutSpec;
     if (!layoutSpecCls) return %orig;
 
     ASLayoutSpec *empty = [[layoutSpecCls alloc] init];
     [[empty style] setValue:[NSValue valueWithCGSize:CGSizeZero] forKey:@"preferredSize"];
     return empty;
+}
+
+%end
+
+// Capture the inline tap's preview on its native pager before the view loads.
+%hook _TtC6Apollo23MediaPageViewController
+
++ (id)allocWithZone:(struct _NSZone *)zone {
+    id page = %orig;
+    if (NSThread.isMainThread && sApolloInlineMediaOpeningContext) {
+        objc_setAssociatedObject(page, &kApolloInlineMediaOpeningContextKey,
+                                 sApolloInlineMediaOpeningContext, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return page;
+}
+
+- (void)viewDidLoad {
+    ApolloInlineMediaOpeningContext *context = objc_getAssociatedObject(self, &kApolloInlineMediaOpeningContextKey);
+    objc_setAssociatedObject(self, &kApolloInlineMediaOpeningContextKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (context.image && context.sourceView.window) {
+        Class pageClass = object_getClass(self);
+        Ivar thumbnails = class_getInstanceVariable(pageClass, "thumbnails");
+        Ivar selectedIndex = class_getInstanceVariable(pageClass, "selectedThumbnailIndex");
+        Ivar originView = class_getInstanceVariable(pageClass, "originView");
+        Ivar originCell = class_getInstanceVariable(pageClass, "originCellNode");
+        if (thumbnails && selectedIndex && originView && originCell &&
+            ivar_getOffset(selectedIndex) - ivar_getOffset(thumbnails) == sizeof(void *) &&
+            ivar_getOffset(originCell) - ivar_getOffset(originView) == sizeof(void *)) {
+            uint8_t *base = (uint8_t *)(__bridge void *)self;
+            ApolloHiddenMediaAssignThumbnail(base + ivar_getOffset(thumbnails), 0,
+                                            (__bridge const void *)context.image);
+            // originView is a Swift-owned strong UIView? slot. The native
+            // deinitializer releases it; explicitly transfer the +1 and drop
+            // the previous value, as object_setIvar cannot own a Swift slot.
+            void **slot = (void **)(base + ivar_getOffset(originView));
+            void *oldView = *slot;
+            *slot = (void *)CFRetain((__bridge CFTypeRef)context.sourceView);
+            if (oldView) CFRelease(oldView);
+            ApolloLog(@"[InlineImages] opening native viewer with inline preview and attached zoom origin");
+        } else {
+            ApolloLog(@"[InlineImages] native preview layout unavailable; keeping original media presentation");
+        }
+    }
+    // Seed thumbnails[0] before the native load constructs its first viewer.
+    %orig;
 }
 
 %end

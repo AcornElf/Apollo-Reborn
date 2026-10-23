@@ -44,22 +44,31 @@ KSCRASH_FILES := \
 # ApolloFavoriteConfirm.xm must stay after ApolloSubredditIndexPolish.xm and
 # ApolloFollowingSection.xm so its favoriteSubredditButtonTapped: hook is outermost.
 ApolloReborn_FILES = \
+    $(SRC_DIR)/ApolloClasses.m \
     $(SRC_DIR)/ApolloFoundationModels.swift \
     $(SRC_DIR)/ApolloAISummary.xm \
     $(SRC_DIR)/ApolloAICloudBridge.m \
     $(SRC_DIR)/ApolloAutoHideMetaFeeds.xm \
     $(SRC_DIR)/ApolloDevvitPosts.xm \
     $(SRC_DIR)/ApolloWhatsNew.xm \
+    $(SRC_DIR)/ApolloWhatsNewHalloween.m \
     $(WHATS_NEW_GEN_M) \
     $(SRC_DIR)/Tweak.xm \
     $(SRC_DIR)/ApolloCommon.m \
+    $(SRC_DIR)/ApolloSessionState.m \
+    $(SRC_DIR)/ApolloSessionRestoration.xm \
+    $(SRC_DIR)/ApolloInlineImageMetadata.m \
     $(SRC_DIR)/ApolloProfilePagination.xm \
+    $(SRC_DIR)/ApolloListEmptyState.xm \
+    $(SRC_DIR)/ApolloEmptyFeedNextPage.xm \
     $(SRC_DIR)/ApolloWebTextDecoding.m \
+    $(SRC_DIR)/ApolloNitterInstances.m \
     $(SRC_DIR)/ApolloMemoryDiagnostics.m \
     $(SRC_DIR)/settings/ApolloSettingsTableViewController.m \
     $(SRC_DIR)/settings/ApolloSettingsForm.m \
     $(SRC_DIR)/settings/ApolloSettingsShortcutsViewController.m \
     $(SRC_DIR)/settings/ApolloSettingsPinnedPreview.m \
+    $(SRC_DIR)/settings/ApolloProfilePicturesPreview.m \
     $(SRC_DIR)/settings/ApolloContributors.m \
     $(SRC_DIR)/settings/ApolloBackupRestore.m \
     $(SRC_DIR)/settings/ApolloBackupDocument.m \
@@ -79,6 +88,11 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloNotificationBackend.m \
     $(SRC_DIR)/ApolloBarkIconResolver.m \
     $(SRC_DIR)/ApolloUsageHeartbeat.m \
+    $(SRC_DIR)/ApolloAppIcon.m \
+    $(SRC_DIR)/ApolloUpdateManifest.m \
+    $(SRC_DIR)/ApolloUpdateManifestCache.m \
+    $(SRC_DIR)/ApolloUpdatePromptViewController.m \
+    $(SRC_DIR)/ApolloUpdateChecker.m \
     $(SRC_DIR)/ApolloPushNotifications.m \
     $(SRC_DIR)/ApolloLiquidGlassIconIDs.m \
     $(SRC_DIR)/ApolloBarkNotifications.m \
@@ -86,6 +100,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloChatRoomDirectory.m \
     $(SRC_DIR)/ApolloUserProfileCache.m \
     $(SRC_DIR)/ApolloSubredditInfoCache.m \
+    $(SRC_DIR)/ApolloNativeSubredditIcons.m \
     $(SRC_DIR)/ApolloSubredditCustomBannerCache.m \
     $(SRC_DIR)/ApolloSubredditCustomIconCache.m \
     $(SRC_DIR)/ApolloSubredditDefaultAssets.c \
@@ -104,9 +119,12 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSubredditHeaders.xm \
     $(SRC_DIR)/ApolloSubredditHighlights.xm \
     $(SRC_DIR)/ApolloGalleryFeed.m \
+    $(SRC_DIR)/ApolloGallerySource.xm \
     $(SRC_DIR)/ApolloGalleryImageLoader.m \
+    $(SRC_DIR)/ApolloGalleryMediaActions.m \
     $(SRC_DIR)/ApolloGalleryImageViewer.m \
     $(SRC_DIR)/ApolloGalleryViewController.m \
+    $(SRC_DIR)/ApolloGalleryPinchIntroduction.m \
     $(SRC_DIR)/ApolloGalleryVideoExport.xm \
     $(SRC_DIR)/ApolloSaveAllMediaItems.m \
     $(SRC_DIR)/ApolloSaveAllMedia.xm \
@@ -115,6 +133,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloGIFSaveActivity.xm \
     $(SRC_DIR)/ApolloShareMediaHandoff.xm \
     $(SRC_DIR)/ApolloMediaDownloadActions.xm \
+    $(SRC_DIR)/ApolloImageActions.m \
     $(SRC_DIR)/ApolloLinkedAlbumPostControls.xm \
     $(SRC_DIR)/ApolloFeedAlbumMenus.xm \
     $(SRC_DIR)/ApolloGalleryMenu.xm \
@@ -137,18 +156,24 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSafariDarkLoading.xm \
     $(SRC_DIR)/ApolloMedia.xm \
     $(SRC_DIR)/ApolloAsyncDisplayGuard.xm \
+    $(SRC_DIR)/ApolloTiledText.m \
     $(SRC_DIR)/ApolloFeedGalleryCarousel.xm \
     $(SRC_DIR)/ApolloSwipeUpComments.xm \
     $(SRC_DIR)/ApolloMediaMetadata.m \
     $(SRC_DIR)/ApolloMediaAutoplay.m \
     $(SRC_DIR)/ApolloCommentsCollapse.xm \
     $(SRC_DIR)/ApolloCommentHeaderLayout.xm \
+    $(SRC_DIR)/ApolloMaintainerTint.m \
     $(SRC_DIR)/ApolloInboxCommentScroll.xm \
     $(SRC_DIR)/ApolloFindInComments.xm \
     $(SRC_DIR)/ApolloFindInCommentsGlass.xm \
     $(SRC_DIR)/ApolloStatsRowTouch.xm \
     $(SRC_DIR)/ApolloCommentVoteFlicker.xm \
+    $(SRC_DIR)/ApolloThreeStateVoting.xm \
+    $(SRC_DIR)/ApolloFeedSubredditIcons.xm \
     $(SRC_DIR)/ApolloPostedCommentInsert.xm \
+    $(SRC_DIR)/ApolloLoadMoreComments.xm \
+    $(SRC_DIR)/ApolloCommentSubmitFailure.xm \
     $(SRC_DIR)/ApolloLiveCommentsFollow.xm \
     $(SRC_DIR)/settings/ApolloSettingsGeneralTable.xm \
     $(SRC_DIR)/settings/ApolloSettingsNativeInjections.xm \
@@ -160,12 +185,17 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloTabBarTitles.xm \
     $(SRC_DIR)/ApolloScrollEdgePopFix.xm \
     $(SRC_DIR)/ApolloInterruptibleNavTransition.xm \
+    $(SRC_DIR)/ApolloSystemBackSwipeGuard.xm \
     $(SRC_DIR)/ApolloLiquidGlassIconPicker.xm \
+    $(SRC_DIR)/ApolloLiquidGlassSpotlight.m \
     $(SRC_DIR)/ApolloModmailLayout.xm \
     $(SRC_DIR)/ApolloModmailSubjectCounter.xm \
+    $(SRC_DIR)/ApolloCrosspostTitle.xm \
     $(SRC_DIR)/ApolloMessagesKeyboardInset.xm \
+    $(SRC_DIR)/ApolloTrueBlackKeyboard.xm \
     $(SRC_DIR)/ApolloAutoHideTabBar.xm \
     $(SRC_DIR)/ApolloTopBarScrollPresentation.m \
+    $(SRC_DIR)/ApolloCompactTabBarView.m \
     $(SRC_DIR)/ApolloListBottomInsetGuard.xm \
     $(SRC_DIR)/ApolloTabBarHideStyle.xm \
     $(SRC_DIR)/ApolloIPadTabBarBottom.xm \
@@ -175,6 +205,8 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/settings/ApolloSettingsTabMenu.xm \
     $(SRC_DIR)/settings/ApolloShortcutListEditing.xm \
     $(SRC_DIR)/ApolloRecentlyRead.xm \
+    $(SRC_DIR)/ApolloIntelligenceBridge.xm \
+    $(SRC_DIR)/settings/ApolloSiriSettingsViewController.m \
     $(SRC_DIR)/ApolloProfileMoreMenu.xm \
     $(SRC_DIR)/ApolloSaveAllMediaItems.m \
     $(SRC_DIR)/ApolloSaveAllMedia.xm \
@@ -197,10 +229,14 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloActionMenu.xm \
     $(SRC_DIR)/ApolloActionMenuLayout.m \
     $(SRC_DIR)/ApolloHostedVideo.m \
+    $(SRC_DIR)/ApolloRedgifsTokenRefresh.m \
     $(SRC_DIR)/ApolloSportsClipResolver.m \
     $(SRC_DIR)/ApolloSportsClips.xm \
     $(SRC_DIR)/ApolloRedgifsSubdomainFix.xm \
+    $(SRC_DIR)/ApolloRedgifsQueuedFetchesLock.m \
+    $(SRC_DIR)/ApolloSwiftSingletonCapture.m \
     $(SRC_DIR)/ApolloShareAsImageGallery.xm \
+    $(SRC_DIR)/ApolloShareAsImageLinkMode.m \
     $(SRC_DIR)/ApolloShareAsImageLink.xm \
     $(SRC_DIR)/ApolloShareAsVideo.xm \
     $(SRC_DIR)/ApolloShareAsImagePreviewFix.xm \
@@ -216,11 +252,15 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloVideoSwipeFix.xm \
     $(SRC_DIR)/ApolloVideoPlaybackSpeed.xm \
     $(SRC_DIR)/ApolloVideoHoldSpeed.xm \
+    $(SRC_DIR)/ApolloYouTubeCaptions.xm \
     $(SRC_DIR)/ApolloPictureInPicture.xm \
     $(SRC_DIR)/ApolloScrollToTop.xm \
     $(SRC_DIR)/ApolloFloatingTabs.xm \
     $(SRC_DIR)/ApolloFloatingTabsCrests.m \
     $(SRC_DIR)/ApolloMediaPreviewErrorFix.xm \
+    $(SRC_DIR)/ApolloRedgifsMissingDuration.m \
+    $(SRC_DIR)/ApolloRedgifsFailureReason.m \
+    $(SRC_DIR)/ApolloRedgifsErrorCards.xm \
     $(SRC_DIR)/ApolloFeedShortcutsAppearance.m \
     $(SRC_DIR)/ApolloSubredditIndexPolish.xm \
     $(SRC_DIR)/ApolloSubredditListEditing.xm \
@@ -253,8 +293,18 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloSearchNativeBar.xm \
     $(SRC_DIR)/ApolloSearchObserverCleanup.xm \
     $(SRC_DIR)/ApolloJumpBarSuggestionTint.xm \
+    $(SRC_DIR)/ApolloSubredditSwitcherSheet.xm \
     $(SRC_DIR)/ApolloSearchHeaderOverlapFix.xm \
     $(SRC_DIR)/ApolloSearchTabFixes.xm \
+    $(SRC_DIR)/ApolloSearchLandingViewController.m \
+    $(SRC_DIR)/ApolloSearchRecents.m \
+    $(SRC_DIR)/ApolloSearchLandingPreferences.m \
+    $(SRC_DIR)/ApolloSearchVisitRecording.xm \
+    $(SRC_DIR)/ApolloGoogleSearch.m \
+    $(SRC_DIR)/ApolloGoogleSearchViewController.m \
+    $(SRC_DIR)/ApolloGoogleSearchTab.m \
+    $(SRC_DIR)/ApolloKagiSearch.m \
+    $(SRC_DIR)/ApolloKagiSearchParsing.m \
     $(SRC_DIR)/ApolloImageChestResolver.m \
     $(SRC_DIR)/ApolloImgChestUpload.m \
     $(SRC_DIR)/ApolloLinkPreviewModel.m \
@@ -276,16 +326,21 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloVisionOSHover.xm \
     $(SRC_DIR)/ApolloVisionOSMultiwindow.xm \
     $(SRC_DIR)/ApolloWebAuthViewController.m \
+    $(SRC_DIR)/ApolloWebAuthPopupViewController.m \
     $(SRC_DIR)/ApolloWebJSON.m \
+    $(SRC_DIR)/ApolloReduceRateLimiting.m \
+    $(SRC_DIR)/ApolloWebJSONWriteRepair.m \
     $(SRC_DIR)/ApolloWebJSONIdentity.xm \
     $(SRC_DIR)/ApolloWebSessionLoginViewController.m \
     $(SRC_DIR)/ApolloWebSessionStore.m \
+    $(SRC_DIR)/ApolloProfileEditorWebViewController.m \
     $(SRC_DIR)/ApolloPollVoting.xm \
     $(SRC_DIR)/ApolloPollCompose.xm \
     $(SRC_DIR)/settings/ApolloPollSettingsViewController.m \
     $(SRC_DIR)/ApolloSimDebugTap.xm \
     $(SRC_DIR)/ApolloManualSignInViewController.m \
     $(SRC_DIR)/ApolloAccountCredentials.m \
+    $(SRC_DIR)/ApolloAccountSubscriptions.m \
     $(SRC_DIR)/ApolloPerAccountFavorites.m \
     $(SRC_DIR)/ApolloFavoritesSorting.m \
     $(SRC_DIR)/ApolloAccountSwitcherViewController.xm \
@@ -299,6 +354,7 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/settings/ApolloActionMenuSettingsViewController.m \
     $(SRC_DIR)/settings/ApolloAISettingsViewController.m \
     $(SRC_DIR)/settings/ApolloDeletedCommentsSettingsViewController.m \
+    $(SRC_DIR)/settings/ApolloKagiSessionLinkViewController.m \
     $(SRC_DIR)/settings/ApolloProfileLayoutViewController.m \
     $(SRC_DIR)/settings/ApolloLayoutPreviewCard.m \
     $(SRC_DIR)/settings/ApolloLinkPreviewSettingsViewController.m \
@@ -329,6 +385,9 @@ ApolloReborn_FILES = \
     $(KSCRASH_FILES) \
     $(SSZIPARCHIVE_FILES)
 ApolloReborn_FRAMEWORKS = UIKit Security AVFoundation AVKit OSLog NaturalLanguage ImageIO StoreKit Photos PhotosUI SafariServices SystemConfiguration WebKit AuthenticationServices CoreImage Vision LinkPresentation SwiftUI UniformTypeIdentifiers Metal QuartzCore CoreMotion
+# The YouTube caption guard reads the per-app subtitle setting (ApolloYouTubeCaptions.xm).
+ApolloReborn_FRAMEWORKS += MediaAccessibility
+ApolloReborn_WEAK_FRAMEWORKS += Symbols
 ApolloReborn_LIBRARIES = z iconv
 # FoundationModels (Apple on-device AI) only ships in the iOS 26+ SDK. Weak-link
 # it so the dylib still loads on older OSes (the Swift bridge guards every call
@@ -380,7 +439,8 @@ ApolloReborn_CFLAGS += \
 # the Swift module-interface build, where a C++ -std flag is a hard error.
 ApolloReborn_LIBRARIES += c++
 
-ApolloReborn_BUNDLE_RESOURCE_DIRS = Resources
+SETTINGS_ICON_RESOURCES = $(THEOS_PROJECT_DIR)/.theos/settings-icon-resources
+ApolloReborn_BUNDLE_RESOURCE_DIRS = Resources $(SETTINGS_ICON_RESOURCES)
 ApolloReborn_BUNDLE_RESOURCES = \
     assets/bark-icons/low-battery.png \
     assets/bark-icons/palette.png \
@@ -446,7 +506,14 @@ endif
 CONTROL_FILE = $(THEOS_PROJECT_DIR)/control
 
 # Generate Version.h and the checked-in catalogs/asset manifests.
-before-all:: generate_version_h generate_theme_gallery_catalog generate_whats_new_catalog generate_bark_icon_names
+before-all:: generate_version_h generate_theme_gallery_catalog generate_whats_new_catalog generate_bark_icon_names generate_settings_icon_resources
+
+# Reuse picker artwork in builds that don't bundle the extended app catalog.
+.PHONY: generate_settings_icon_resources
+generate_settings_icon_resources:
+	@mkdir -p "$(SETTINGS_ICON_RESOURCES)"
+	@cp "$(THEOS_PROJECT_DIR)/liquid-glass/icons/helios/default.png" "$(SETTINGS_ICON_RESOURCES)/lg-preview-helios-default.png"
+	@cp "$(THEOS_PROJECT_DIR)/liquid-glass/icons/helios/dark.png" "$(SETTINGS_ICON_RESOURCES)/lg-preview-helios-dark.png"
 
 generate_version_h:
 	@echo "Generating Version.h from control file"

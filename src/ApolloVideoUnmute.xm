@@ -4,8 +4,10 @@
 #import <objc/message.h>
 
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
 #import "ApolloState.h"
 #import "UserDefaultConstants.h"
+#import "ApolloClasses.h"
 
 // =============================================================================
 // MARK: - Overview
@@ -73,6 +75,10 @@ extern void ApolloPiP_NoteInlinePlayerMuted(AVPlayer *player);
 // Screen" re-unmute below must stand down for that one dismissal.
 extern BOOL ApolloPiP_WillHandleFullscreenDismiss(void);
 
+// ApolloVideoSwipeFix.xm: whether a layer is visible in a window right now (not
+// hidden or transparent, inside the window's bounds).
+extern BOOL ApolloVideoSwipeFix_LayerIsOnScreen(CALayer *layer);
+
 // =============================================================================
 // MARK: - State Variables
 // =============================================================================
@@ -132,6 +138,15 @@ static NSUInteger sFeedUnmuteRetryGeneration = 0;
 // audio session while it is presented (see PlayerIsPresentedFullscreen).
 static __weak id sPresentedMediaPageVC = nil;
 
+// The inline video (feed or comments header) that went quiet because a
+// DIFFERENT video took the fullscreen viewer, and the viewer it went quiet for
+// (see SilenceInlineVideoForFullscreen). A tap silences it just before Apollo
+// presents the viewer, so the record can start without a viewer; the next
+// viewer's viewWillAppear: claims it. That viewer's dismissal gives the sound
+// back (RestoreInlineVideoSilencedForViewer).
+static __weak id sSilencedForViewerRichMediaNode = nil;
+static __weak id sSilencedForViewer = nil;
+
 // =============================================================================
 // MARK: - Helpers
 // =============================================================================
@@ -139,11 +154,11 @@ static __weak id sPresentedMediaPageVC = nil;
 static AVPlayer *GetPlayerFromVideoNode(id videoNode);
 static void SyncMuteButtonIcon(id richMediaNode, BOOL isMuted);
 
-// Safely read an ObjC object ivar by name. class_getInstanceVariable walks
-// the superclass chain, so this works for inherited ivars too.
-static id GetIvarObject(id obj, const char *ivarName) {
+// ApolloObjectIvar plus a diagnostic when the ivar is missing (an Apollo
+// layout change). Use ApolloObjectIvar directly where absence is expected.
+static APOLLO_IVAR_NAME id GetIvarObject(id obj, const char *ivarName) {
     if (!obj) return nil;
-    Ivar ivar = class_getInstanceVariable([obj class], ivarName);
+    Ivar ivar = class_getInstanceVariable(object_getClass(obj), ivarName);
     if (!ivar) {
         ApolloLog(@"[VideoUnmute] GetIvarObject: ivar '%s' not found on %@", ivarName, [obj class]);
         return nil;
@@ -151,28 +166,12 @@ static id GetIvarObject(id obj, const char *ivarName) {
     return object_getIvar(obj, ivar);
 }
 
-static id GetIvarObjectQuiet(id obj, const char *ivarName) {
-    if (!obj) return nil;
-    Ivar ivar = class_getInstanceVariable([obj class], ivarName);
-    return ivar ? object_getIvar(obj, ivar) : nil;
-}
-
-// Read a Swift Bool ivar (1 byte) from an object. Returns NO if ivar not found.
-static BOOL GetIvarBool(id obj, const char *ivarName) {
-    if (!obj) return NO;
-    Ivar ivar = class_getInstanceVariable([obj class], ivarName);
-    if (!ivar) return NO;
-    ptrdiff_t offset = ivar_getOffset(ivar);
-    return *(BOOL *)((uint8_t *)(__bridge void *)obj + offset);
-}
-
 static id GetVideoNodeFromRichMediaNode(id richMediaNode) {
-    return richMediaNode ? GetIvarObjectQuiet(richMediaNode, "videoNode") : nil;
+    return ApolloObjectIvar(richMediaNode, "videoNode");
 }
 
 static id GetCrosspostRichMediaNodeFromOwner(id owner) {
-    id crosspostNode = GetIvarObjectQuiet(owner, "crosspostNode");
-    return crosspostNode ? GetIvarObjectQuiet(crosspostNode, "richMediaNode") : nil;
+    return ApolloObjectIvar(ApolloObjectIvar(owner, "crosspostNode"), "richMediaNode");
 }
 
 static BOOL ObjectsMatch(id lhs, id rhs) {
@@ -200,14 +199,14 @@ static UITableView *GetTableViewFromViewController(UIViewController *viewControl
 
 // Enumerate the rich media nodes (own + crosspost) of every visible cell.
 static void EnumerateVisibleRichMediaNodes(UITableView *tableView, void (^block)(id richMediaNode)) {
+    SEL nodeSelector = @selector(node);
     for (UITableViewCell *cell in [tableView visibleCells]) {
-        SEL nodeSel = NSSelectorFromString(@"node");
-        if (![cell respondsToSelector:nodeSel]) continue;
+        if (![cell respondsToSelector:nodeSelector]) continue;
 
-        id cellNode = ((id (*)(id, SEL))objc_msgSend)(cell, nodeSel);
+        id cellNode = ((id (*)(id, SEL))objc_msgSend)(cell, nodeSelector);
         if (!cellNode) continue;
 
-        id richMediaNode = GetIvarObjectQuiet(cellNode, "richMediaNode");
+        id richMediaNode = ApolloObjectIvar(cellNode, "richMediaNode");
         if (richMediaNode) block(richMediaNode);
 
         id crosspostRichMediaNode = GetCrosspostRichMediaNodeFromOwner(cellNode);
@@ -216,27 +215,10 @@ static void EnumerateVisibleRichMediaNodes(UITableView *tableView, void (^block)
 }
 
 // Single home for the version-fragile mangled Swift class names.
-static Class MediaPageViewControllerClass(void) {
-    static Class cls = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        cls = objc_getClass("_TtC6Apollo23MediaPageViewController");
-    });
-    return cls;
-}
-
-static Class PostsSearchResultsViewControllerClass(void) {
-    static Class cls = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        cls = objc_getClass("_TtC6Apollo32PostsSearchResultsViewController");
-    });
-    return cls;
-}
 
 // YES when the node's loaded view sits inside a PostsSearchResultsViewController.
 static BOOL NodeIsInSearchResultsController(id node) {
-    Class searchVCClass = PostsSearchResultsViewControllerClass();
+    Class searchVCClass = ApolloClassPostsSearchResultsViewController;
     if (!searchVCClass || ![node respondsToSelector:@selector(view)]) return NO;
 
     UIResponder *responder = ((UIView *(*)(id, SEL))objc_msgSend)(node, @selector(view));
@@ -250,8 +232,8 @@ static BOOL NodeIsInSearchResultsController(id node) {
 static BOOL IsCommentsOwnerShowingSameLinkAsMediaPage(id mediaPageVC) {
     if (!mediaPageVC || !sCommentsVCOwner) return NO;
 
-    id mediaPageLink = GetIvarObjectQuiet(mediaPageVC, "link");
-    id commentsLink = GetIvarObjectQuiet(sCommentsVCOwner, "link");
+    id mediaPageLink = ApolloObjectIvar(mediaPageVC, "link");
+    id commentsLink = ApolloObjectIvar(sCommentsVCOwner, "link");
     return ObjectsMatch(mediaPageLink, commentsLink);
 }
 
@@ -278,25 +260,11 @@ static BOOL RichMediaNodeContainsPlayer(id richMediaNode, AVPlayer *targetPlayer
 static BOOL IsPlayerOnVisibleFeedCell(UIViewController *feedVC, AVPlayer *targetPlayer) {
     if (!feedVC || !targetPlayer) return NO;
 
-    UITableView *tableView = GetTableViewFromViewController(feedVC);
-    if (!tableView) return NO;
-
-    for (UITableViewCell *cell in [tableView visibleCells]) {
-        SEL nodeSel = NSSelectorFromString(@"node");
-        if (![cell respondsToSelector:nodeSel]) continue;
-
-        id cellNode = ((id (*)(id, SEL))objc_msgSend)(cell, nodeSel);
-        if (!cellNode) continue;
-
-        if (RichMediaNodeContainsPlayer(GetIvarObjectQuiet(cellNode, "richMediaNode"), targetPlayer)) {
-            return YES;
-        }
-        if (RichMediaNodeContainsPlayer(GetCrosspostRichMediaNodeFromOwner(cellNode), targetPlayer)) {
-            return YES;
-        }
-    }
-
-    return NO;
+    __block BOOL found = NO;
+    EnumerateVisibleRichMediaNodes(GetTableViewFromViewController(feedVC), ^(id richMediaNode) {
+        if (!found && RichMediaNodeContainsPlayer(richMediaNode, targetPlayer)) found = YES;
+    });
+    return found;
 }
 
 // YES when layer's superlayer chain reaches ancestor.
@@ -334,7 +302,7 @@ static UIView *FindSubviewOfClass(UIView *root, Class cls) {
 // the reclaim passes need the layer itself, which a fallback player lacks.
 static AVPlayerLayer *GetPlayerLayerFromVideoNode(id videoNode) {
     if (!videoNode) return nil;
-    SEL playerLayerSel = NSSelectorFromString(@"playerLayer");
+    SEL playerLayerSel = @selector(playerLayer);
     if (![videoNode respondsToSelector:playerLayerSel]) return nil;
     CALayer *layer = ((CALayer *(*)(id, SEL))objc_msgSend)(videoNode, playerLayerSel);
     return [layer isKindOfClass:[AVPlayerLayer class]] ? (AVPlayerLayer *)layer : nil;
@@ -358,13 +326,9 @@ static AVPlayer *GetPlayerFromVideoNode(id videoNode) {
     if (player) return player;
 
     // Fallback: non-shareable videos — player is directly on videoNode
-    SEL playerSel = NSSelectorFromString(@"player");
-    if ([videoNode respondsToSelector:playerSel]) {
-        player = ((id (*)(id, SEL))objc_msgSend)(videoNode, playerSel);
-        if (player) return player;
-    }
-
-    return nil;
+    SEL playerSel = @selector(player);
+    if (![videoNode respondsToSelector:playerSel]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(videoNode, playerSel);
 }
 
 // Get the AVPlayer from a MediaPageViewController's currently-displayed child
@@ -372,18 +336,15 @@ static AVPlayer *GetPlayerFromVideoNode(id videoNode) {
 // or if the child VC isn't a MediaViewerController. Used to restrict our
 // MediaPageVC hooks to video-only content.
 static AVPlayer *GetPlayerFromMediaPageVC(id mediaPageVC) {
-    static Class sMediaViewerClass = nil;
-    if (!sMediaViewerClass) {
-        sMediaViewerClass = objc_getClass("_TtC6Apollo21MediaViewerController");
-    }
-    if (!sMediaViewerClass) {
+    Class mediaViewerClass = ApolloClassMediaViewerController;
+    if (!mediaViewerClass) {
         ApolloLog(@"[VideoUnmute] GetPlayerFromMediaPageVC: MediaViewerController class not found");
         return nil;
     }
 
     NSArray *vcs = ((NSArray *(*)(id, SEL))objc_msgSend)(mediaPageVC, @selector(viewControllers));
     id mediaVC = [vcs firstObject];
-    if (![mediaVC isMemberOfClass:sMediaViewerClass]) return nil;
+    if (![mediaVC isMemberOfClass:mediaViewerClass]) return nil;
 
     // Direct player ivar (non-shareable videos)
     AVPlayer *player = GetIvarObject(mediaVC, "player");
@@ -422,6 +383,32 @@ static BOOL PlayerIsPresentedFullscreen(AVPlayer *player) {
     return player != nil && player == PresentedFullscreenPlayer();
 }
 
+// Apollo keeps screens alive after they leave the window: every screen you go
+// back from waits in the navigation controller's forward stack
+// (poppedViewControllers), and feeds in other tabs or under a pushed screen stay
+// loaded. Their tables still send visibility ticks. An account switch, for
+// example, runs PostsViewController.redditAccountChangedWithNotification: on
+// every live feed, and its scrollToRow(0) sends a VisibleRectChanged tick to
+// every cell the table last displayed, including a video still playing muted
+// in a feed you left minutes ago. Apollo's own midpoint autoplay ignores such a
+// tick (sub_100307a14 does nothing when the cell's view has no window), but
+// unmuting from it plays sound nobody can see, and nothing releases it
+// afterwards: its invisible event (2) already fired when the screen left. So
+// every tweak unmute that can run while its video is off screen (a feed tick,
+// and the comments retries that fire after a delay) asks this first, the same
+// window test Apollo uses. YES = skipped (logged).
+static BOOL SkipUnmuteIfOffScreen(id richMediaNode, NSString *what) {
+    UIView *view = nil;
+    if (richMediaNode && [richMediaNode respondsToSelector:@selector(isNodeLoaded)]
+        && ((BOOL (*)(id, SEL))objc_msgSend)(richMediaNode, @selector(isNodeLoaded))) {
+        view = ((UIView *(*)(id, SEL))objc_msgSend)(richMediaNode, @selector(view));
+    }
+    if ([view window]) return NO;
+
+    ApolloLog(@"[VideoUnmute] %@ skipped: the video is off screen (not in a window), leaving it muted", what);
+    return YES;
+}
+
 // Update the MuteUnmuteVideoButtonNode's visual state to match actual mute state.
 // Sets the `isMuted` ivar (Swift Bool) and updates the `icon` ASImageNode's image.
 //
@@ -433,7 +420,7 @@ static void SyncMuteButtonIcon(id richMediaNode, BOOL isMuted) {
     if (!muteButtonNode) return;
 
     // Skip if button state already matches — avoids redundant work during scroll
-    BOOL currentIsMuted = GetIvarBool(muteButtonNode, "isMuted");
+    BOOL currentIsMuted = ApolloReadBoolIvar(muteButtonNode, "isMuted", NO);
     if (currentIsMuted == isMuted) return;
 
     ApolloLog(@"[VideoUnmute] SyncMuteButtonIcon: %@ → %@",
@@ -468,13 +455,6 @@ static void SyncRichMediaNodeMuteButton(id richMediaNode) {
     SyncMuteButtonIcon(richMediaNode, [player isMuted]);
 }
 
-static void SyncVisibleCellMuteButtons(id cellNode) {
-    if (!cellNode) return;
-
-    SyncRichMediaNodeMuteButton(GetIvarObjectQuiet(cellNode, "richMediaNode"));
-    SyncRichMediaNodeMuteButton(GetCrosspostRichMediaNodeFromOwner(cellNode));
-}
-
 static void SyncVisibleFeedMuteButtons(UIViewController *feedVC) {
     UITableView *tableView = GetTableViewFromViewController(feedVC);
     if (!tableView) {
@@ -482,15 +462,35 @@ static void SyncVisibleFeedMuteButtons(UIViewController *feedVC) {
         return;
     }
 
-    for (UITableViewCell *cell in [tableView visibleCells]) {
-        SEL nodeSel = NSSelectorFromString(@"node");
-        if (![cell respondsToSelector:nodeSel]) continue;
+    EnumerateVisibleRichMediaNodes(tableView, ^(id richMediaNode) {
+        SyncRichMediaNodeMuteButton(richMediaNode);
+    });
+}
 
-        id cellNode = ((id (*)(id, SEL))objc_msgSend)(cell, nodeSel);
-        if (!cellNode) continue;
+static void SetVideoNodeMutedFlag(id videoNode, BOOL muted) {
+    if ([videoNode respondsToSelector:@selector(setMuted:)]) [videoNode setMuted:muted];
+}
 
-        SyncVisibleCellMuteButtons(cellNode);
-    }
+static BOOL VideoNodeIsShareable(id videoNode) {
+    SEL shareableSelector = @selector(allowPlayerLayerToBeShareable);
+    return [videoNode respondsToSelector:shareableSelector]
+        && ((BOOL (*)(id, SEL))objc_msgSend)(videoNode, shareableSelector);
+}
+
+// AVAudioSession → Playback, active. Apollo keeps the session in Ambient, which
+// silences an unmuted player whenever the ringer switch is on silent, so a
+// video the tweak makes audible needs Playback first.
+static void ActivatePlaybackAudioSession(void) {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+    [session setCategory:AVAudioSessionCategoryPlayback
+                    mode:AVAudioSessionModeDefault
+                 options:0
+                   error:&error];
+    if (error) ApolloLogError(@"[VideoUnmute] setCategory:Playback error: %@", error);
+    error = nil;
+    [session setActive:YES withOptions:0 error:&error];
+    if (error) ApolloLogError(@"[VideoUnmute] setActive:YES error: %@", error);
 }
 
 // Core unmute logic. Replicates the native unmute flow from sub_100341894
@@ -531,16 +531,7 @@ static void UnmuteRichMediaNode(id richMediaNode, id videoNode) {
                              : @"starting unmute sequence...");
 
     // Step 1: AVAudioSession → Playback (always — session may be Ambient)
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    NSError *error = nil;
-    [session setCategory:AVAudioSessionCategoryPlayback
-                    mode:AVAudioSessionModeDefault
-                 options:0
-                   error:&error];
-    if (error) ApolloLog(@"[VideoUnmute] setCategory:Playback error: %@", error);
-    error = nil;
-    [session setActive:YES withOptions:0 error:&error];
-    if (error) ApolloLog(@"[VideoUnmute] setActive:YES error: %@", error);
+    ActivatePlaybackAudioSession();
 
     if (!alreadyUnmuted) {
         // Step 2: Unmute the AVPlayer directly. For shareable videos, the
@@ -554,10 +545,7 @@ static void UnmuteRichMediaNode(id richMediaNode, id videoNode) {
         // if _player is non-nil. For shareable videos, _player is nil so only
         // _muted gets updated — but that's fine, we already unmuted the real
         // player above.
-        SEL setMutedSel = NSSelectorFromString(@"setMuted:");
-        if ([videoNode respondsToSelector:setMutedSel]) {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(videoNode, setMutedSel, NO);
-        }
+        SetVideoNodeMutedFlag(videoNode, NO);
         sIsAutoUnmuting = NO;
     }
 
@@ -600,6 +588,10 @@ static void ReUnmuteAfterFullscreenWhenReady(id richMediaNode, id videoNode, NSU
         return;
     }
 
+    // Runs 200ms+ after the dismissal: the comments screen may have been
+    // swiped away in the meantime (see SkipUnmuteIfOffScreen).
+    if (SkipUnmuteIfOffScreen(rmNode, @"Re-unmute after fullscreen")) return;
+
     ApolloLog(@"[VideoUnmute] Re-unmuting after fullscreen dismiss");
     UnmuteRichMediaNode(rmNode, vNode);
 }
@@ -622,9 +614,33 @@ static void ReUnmuteAfterFullscreenWhenReady(id richMediaNode, id videoNode, NSU
 // (sUnmuteCommentsVideos) and the fullscreen player has Apollo's own native
 // "Unmute Videos When Opened", so each context keeps one owner.
 //
-// Exactly one feed video is audible at a time: handing audio to a newly playing
-// video mutes the one we made audible before it, mirroring Apollo's own
-// activeAudioPlayer arbitration (which only covers its native unmute path).
+// Exactly one feed video is audible at a time, and the sound only changes hands
+// when something actually changes. Apollo's midpoint autoplay (sub_100307dd8,
+// run from every cell's visibility tick) plays EVERY video whose midpoint sits
+// between the nav bar and the tab bar, so two short videos can play at once,
+// and both tick (event 1) on every frame of a scroll. Giving the sound to
+// whichever playing video ticked last swapped it between the two every frame
+// (bursts of ~180 handoffs a second on device). The rule instead:
+//   - The video we made audible (the holder: sFeedAudibleRichMediaNode) keeps
+//     the sound while it is still playing on screen (FeedAudibleVideoHoldingSound).
+//     Handing the sound on mutes the holder, mirroring Apollo's own
+//     activeAudioPlayer arbitration (which only covers its native unmute path).
+//   - Another playing video takes over only once the holder stops (Apollo
+//     paused it as its midpoint left the band), is muted (the user's mute
+//     button, a fullscreen dismissal), moves into PiP, or leaves the screen
+//     (event 2, ReleaseFeedAudioIfOwnedBy). Unmuting a video with its button
+//     still hands it the sound at once (muteUnmuteButtonTappedWithSender:).
+//   - A video that just arrived (event 0) waits like any other. It is rarely
+//     playing yet at that point (Apollo starts it at its midpoint), and a feed
+//     coming back on screen sends event 0 to all of its cells at once, in hash
+//     table order, so letting the newest video win would pick an arbitrary one.
+//   - Apollo stops the holder inside the holder's own tick, and the order of
+//     the ticks within one scroll pass is arbitrary: the video that should take
+//     over may already have ticked (and waited) in that pass, and if the scroll
+//     ends there, no further tick comes. So the holder's tick hands the sound on
+//     itself when that happens (HandFeedSoundToNextPlayingVideo).
+//   - Always mode: a video the user muted with its button stays muted while it
+//     is on screen, instead of being unmuted again on its next tick.
 
 // Whether a feed video that just started playing should be audible, per mode.
 // The Remember memory is read live from defaults rather than mirrored into a
@@ -662,24 +678,124 @@ static void MutePreviouslyAudibleFeedVideo(AVPlayer *incoming) {
 
     sAutoUnmutedPlayer = nil;
     [previous setMuted:YES];
-    id previousVideoNode = sFeedAudibleVideoNode;
-    if (previousVideoNode) {
-        SEL setMutedSel = NSSelectorFromString(@"setMuted:");
-        if ([previousVideoNode respondsToSelector:setMutedSel]) {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(previousVideoNode, setMutedSel, YES);
-        }
-    }
+    SetVideoNodeMutedFlag(sFeedAudibleVideoNode, YES);
     if (previousNode) SyncMuteButtonIcon(previousNode, YES);
     ApolloLog(@"[VideoUnmute] Feed audio handed to the next video - muted the previous one");
 }
 
+// RichMediaNode.videoNodeStatus is a Swift struct of four Bools
+// (Headers/Swift/VideoNodeStatus.swift: nodeCreated, assetIsBeingCreated,
+// createdAsset, enteredVisibleRange). Byte 3, enteredVisibleRange, is Apollo's
+// autoplay decision: the feed's midpoint check (sub_100307dd8) stores its result
+// there and only acts when it changes (sub_10057b104: -[ASVideoNode play] /
+// -pause), and -didExitPreloadState (sub_10057aff4) clears it. Unlike the
+// player's rate, it stays set while a looping video restarts: ASVideoNode loops
+// from -didPlayToEnd: (seek to 0, then play), and the player reads rate 0 from
+// the end of the item until then. NO if the ivar is missing, which leaves the
+// holder test below on the rate alone.
+static BOOL FeedVideoInAutoplayRange(id richMediaNode) {
+    static Class sRichMediaNodeClass = Nil;
+    static ptrdiff_t sStatusOffset = -1;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sRichMediaNodeClass = ApolloClassRichMediaNode;
+        Ivar ivar = sRichMediaNodeClass
+            ? class_getInstanceVariable(sRichMediaNodeClass, "videoNodeStatus") : NULL;
+        if (ivar) {
+            sStatusOffset = ivar_getOffset(ivar);
+        } else {
+            ApolloLog(@"[VideoUnmute] RichMediaNode.videoNodeStatus not found - the feed audio holder only counts as playing while its rate is above 0");
+        }
+    });
+    if (sStatusOffset < 0 || ![richMediaNode isKindOfClass:sRichMediaNodeClass]) return NO;
+    const uint8_t *status = (const uint8_t *)(__bridge void *)richMediaNode + sStatusOffset;
+    return status[3] != 0;   // enteredVisibleRange
+}
+
+// YES when the node's view is loaded and in a window. Never loads the view.
+static BOOL NodeViewIsInWindow(id node) {
+    if (![node respondsToSelector:@selector(isNodeLoaded)]
+        || !((BOOL (*)(id, SEL))objc_msgSend)(node, @selector(isNodeLoaded))) {
+        return NO;
+    }
+    UIView *view = ((UIView *(*)(id, SEL))objc_msgSend)(node, @selector(view));
+    return [view window] != nil;
+}
+
+// The holder's player while it still has a claim on the sound, else nil. It
+// loses the claim once it is muted (by the user's button, a fullscreen
+// dismissal or a handoff), handed to PiP (the card arbitrates its own audio),
+// off screen, or stopped — a rate of 0 only counts as stopped when Apollo's
+// autoplay has let go of it too, so a loop restart is not a stop.
+static AVPlayer *FeedAudibleVideoHoldingSound(void) {
+    id node = sFeedAudibleRichMediaNode;
+    AVPlayer *player = GetPlayerFromVideoNode(sFeedAudibleVideoNode);
+    if (!node || !player || [player isMuted]) return nil;
+    if (ApolloPiP_IsOwnedPlayer(player)) return nil;
+    if (!NodeViewIsInWindow(node)) return nil;
+    if ([player rate] <= 0.0f && !FeedVideoInAutoplayRange(node)) return nil;
+    return player;
+}
+
+// Whether this feed cell (its own video or a crosspost's) is the holder and
+// still has a claim on the sound.
+static BOOL CellHasFeedSound(id cellNode) {
+    id holder = sFeedAudibleRichMediaNode;
+    if (!holder) return NO;
+    if (!ObjectsMatch(ApolloObjectIvar(cellNode, "richMediaNode"), holder)
+        && !ObjectsMatch(GetCrosspostRichMediaNodeFromOwner(cellNode), holder)) {
+        return NO;
+    }
+    return FeedAudibleVideoHoldingSound() != nil;
+}
+
+// Always mode: set on a feed video's player when the user mutes it with its
+// button, so its next tick doesn't unmute it straight back. Unmuting it with
+// the button clears it, as does the video leaving the screen; it also dies
+// with the player. Remember mode doesn't read it (its memory already covers it).
+static const void *kFeedMutedByUserKey = &kFeedMutedByUserKey;
+
+static void NoteFeedVideoMutedByUser(AVPlayer *player, BOOL mutedByUser) {
+    if (!player) return;
+    objc_setAssociatedObject(player, kFeedMutedByUserKey, mutedByUser ? @YES : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL FeedVideoMutedByUser(AVPlayer *player) {
+    return player && objc_getAssociatedObject(player, kFeedMutedByUserKey) != nil;
+}
+
+static void ForgetFeedVideoMutedByUser(id richMediaNode) {
+    id videoNode = GetVideoNodeFromRichMediaNode(richMediaNode);
+    AVPlayer *player = videoNode ? GetPlayerFromVideoNode(videoNode) : nil;
+    if (FeedVideoMutedByUser(player)) NoteFeedVideoMutedByUser(player, NO);
+}
+
+// A waiting video would otherwise log on every frame of the scroll that keeps
+// it waiting: log it once per holder. Store the holder's address as inert bits,
+// not an unretained Objective-C object. -nonretainedObjectValue reconstructs an
+// object value and ARC may retain it during comparison after the holder has
+// deallocated, which is a use-after-free on a fast feed scroll.
+static const void *kFeedWaitLoggedForKey = &kFeedWaitLoggedForKey;
+
+static void NoteFeedVideoWaiting(AVPlayer *player, AVPlayer *holder) {
+    NSValue *loggedFor = objc_getAssociatedObject(player, kFeedWaitLoggedForKey);
+    const void *holderAddress = (__bridge const void *)holder;
+    if (loggedFor && [loggedFor pointerValue] == holderAddress) return;
+    objc_setAssociatedObject(player, kFeedWaitLoggedForKey, [NSValue valueWithPointer:holderAddress],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ApolloLog(@"[VideoUnmute] Feed video %p is playing too - %p keeps the sound until it stops or leaves", player, holder);
+}
+
 // Make a feed video audible when the mode calls for it. Returns YES once the
-// unmute has been applied (or was already in force), NO when the video isn't
-// eligible yet — the caller uses that to decide whether to schedule a retry.
+// unmute has been applied (or was already in force) and when the video has to
+// stay muted for now (another video has the sound, or the user muted it); NO
+// when it isn't eligible yet — the caller uses that to decide whether to
+// schedule a retry.
 static BOOL ApplyFeedUnmuteIfNeeded(id richMediaNode, NSString *reason) {
     if (sUnmuteFeedVideos == 0 || !richMediaNode) return NO;
     // The comments header runs on its own setting; the feed one must not reach it.
-    if (GetIvarBool(richMediaNode, "isShownInCommentsHeader")) return NO;
+    if (ApolloReadBoolIvar(richMediaNode, "isShownInCommentsHeader", NO)) return NO;
 
     id videoNode = GetVideoNodeFromRichMediaNode(richMediaNode);
     if (!videoNode) return NO;
@@ -708,6 +824,30 @@ static BOOL ApplyFeedUnmuteIfNeeded(id richMediaNode, NSString *reason) {
 
     if (!FeedVideosShouldBeAudible()) return NO;
 
+    // Always mode: the user muted this one with its button, so it stays muted
+    // while it's on screen (see the rule above).
+    if (sUnmuteFeedVideos == 2 && FeedVideoMutedByUser(player)) return YES;
+
+    // Another video still has the sound: this one waits instead of taking it.
+    // Handled rather than ineligible, so no retry chain is scheduled — its own
+    // later ticks, or the holder's handoff when it stops, give it the sound.
+    // A video that is already audible does not wait (it would stay audible
+    // next to the holder): it takes over below like before, which mutes the
+    // protected previous one, and the losing side waits from its next tick.
+    if ([player isMuted] && !ObjectsMatch(richMediaNode, sFeedAudibleRichMediaNode)) {
+        AVPlayer *holder = FeedAudibleVideoHoldingSound();
+        if (holder && holder != player) {
+            NoteFeedVideoWaiting(player, holder);
+            return YES;
+        }
+    }
+
+    // Last, so it only logs for a video that is playing and would otherwise
+    // become audible. Not eligible rather than handled: if a retry is running,
+    // it re-checks, and a feed coming back on screen sends its cells a fresh
+    // Visible event anyway.
+    if (SkipUnmuteIfOffScreen(richMediaNode, @"Feed auto-unmute")) return NO;
+
     MutePreviouslyAudibleFeedVideo(player);
 
     sFeedAudibleRichMediaNode = richMediaNode;
@@ -734,9 +874,29 @@ static void ScheduleFeedUnmuteRetry(id richMediaNode, NSUInteger attemptsRemaini
     });
 }
 
+// YES when the feed video left its cell but is still on screen: opening the
+// post of a feed video moves the cell's player layer into the post's comments
+// header (Apollo shares one AVPlayerLayer per video URL through
+// VideoSharingManager), which goes on playing the same AVPlayer. Read from the
+// layer the video node answers with: it has left the node's own layer tree and
+// is visible in a window. A cell that scrolled away, or a feed left for a
+// different post, still holds its layer, so it reads NO.
+static BOOL FeedVideoMovedOnScreenElsewhere(id videoNode) {
+    if (![videoNode respondsToSelector:@selector(isNodeLoaded)]
+        || !((BOOL (*)(id, SEL))objc_msgSend)(videoNode, @selector(isNodeLoaded))) {
+        return NO;
+    }
+    AVPlayerLayer *playerLayer = GetPlayerLayerFromVideoNode(videoNode);
+    CALayer *nodeLayer = ((CALayer *(*)(id, SEL))objc_msgSend)(videoNode, @selector(layer));
+    if (!playerLayer.player || !nodeLayer || LayerIsInLayerTreeOf(playerLayer, nodeLayer)) return NO;
+    return ApolloVideoSwipeFix_LayerIsOnScreen(playerLayer);
+}
+
 // The audible cell scrolled out of view: drop protection and mute it, so audio
 // stops with the video that owned it instead of following the user down the
-// feed. Mirrors the comments-side event==2 handling.
+// feed. Mirrors the comments-side event==2 handling. The player stays audible
+// when the video itself is still on screen: in the fullscreen viewer, or in the
+// post of that video.
 static void ReleaseFeedAudioIfOwnedBy(id richMediaNode) {
     if (!richMediaNode || !ObjectsMatch(richMediaNode, sFeedAudibleRichMediaNode)) return;
 
@@ -749,18 +909,48 @@ static void ReleaseFeedAudioIfOwnedBy(id richMediaNode) {
     // icon. The cell itself is off-screen now, so it is forgotten as usual and
     // the post-dismiss re-apply cannot reach for an invisible video.
     BOOL presentedFullscreen = PlayerIsPresentedFullscreen(player);
+
+    // The cell left because its own post was opened: the post's comments
+    // header is playing this player on screen now (FeedVideoMovedOnScreenElsewhere),
+    // and this event only arrives once the push has finished. Muting here
+    // would silence the post's video about half a second in, possibly after
+    // the header has set its mute icon from the player (a one-shot sync 500ms
+    // after the header appears), leaving the icon on the speaker over a muted
+    // video. Apollo's mute button never recovers from that: it flips the icon
+    // from the button's own state but mutes or unmutes from the player's
+    // (sub_10058b800 → sub_100341894), so every tap would show the opposite of
+    // what plays. The video keeps its sound into its post instead, as Apollo
+    // keeps a video you unmuted yourself. The comments screen's handlers own it
+    // from here: the header's mute button, the header scrolling away (its
+    // event 2), fullscreen, and the pop back to the feed. The cell stays this
+    // feed's audible video: Apollo's reclaim hands the same player back to it
+    // when the post is popped, and opening the post again runs this again.
+    if (!presentedFullscreen && player && !ApolloPiP_IsOwnedPlayer(player)
+        && FeedVideoMovedOnScreenElsewhere(videoNode)) {
+        ApolloLog(@"[VideoUnmute] Feed audible cell left the screen into its own post - the post keeps playing it (muted=%d)",
+                  [player isMuted]);
+        if (![player isMuted]) {
+            // Apollo resets the session to Ambient as the post appears
+            // (ASTableViewController.viewDidAppear: → sub_1002c11f0) unless
+            // VideoSharingManager.activeAudioPlayer is unmuted, and a video the
+            // tweak unmuted (rather than your own tap) never becomes Apollo's
+            // active audio player. Protection blocks that reset and
+            // Apollo's other mutes, and it can have lapsed since the feed
+            // unmuted this video (a comments pop's expiry clears it; only the
+            // next scroll tick takes it again), so take it here. Playback goes
+            // back on too, in case the reset already landed.
+            sAutoUnmutedPlayer = player;
+            ActivatePlaybackAudioSession();
+        }
+        return;
+    }
     ApolloLog(@"[VideoUnmute] Feed audible cell left the screen - releasing protection%@",
               presentedFullscreen ? @" (player stays unmuted: the fullscreen viewer is showing it)" : @"");
 
     if (player && player == sAutoUnmutedPlayer) sAutoUnmutedPlayer = nil;
     if (!presentedFullscreen) {
-        if (player) [player setMuted:YES];
-        if (videoNode) {
-            SEL setMutedSel = NSSelectorFromString(@"setMuted:");
-            if ([videoNode respondsToSelector:setMutedSel]) {
-                ((void (*)(id, SEL, BOOL))objc_msgSend)(videoNode, setMutedSel, YES);
-            }
-        }
+        [player setMuted:YES];
+        SetVideoNodeMutedFlag(videoNode, YES);
         SyncMuteButtonIcon(richMediaNode, YES);
     }
 
@@ -783,17 +973,73 @@ static void ScheduleFeedUnmuteAfterFullscreen(void) {
     });
 }
 
+// Apollo's midpoint check just stopped the holder inside the holder's own tick.
+// Offer the sound to the other playing videos in its table right after this
+// scroll pass (ScheduleFeedSoundHandoff): the one that should take over may
+// already have ticked (and waited) in the pass, and if the scroll ends here no
+// further tick comes. Goes through
+// ApplyFeedUnmuteIfNeeded, so every gate still applies; the first visible video
+// that takes it wins (visibleCells is top to bottom). If none is playing, the
+// stopped video stays the holder — it keeps its sound if it resumes, and the
+// next video to start playing takes over from it as usual.
+static void HandFeedSoundToNextPlayingVideo(id scrollView) {
+    // Under the fullscreen viewer every feed tick is ignored (#1072).
+    if (sPresentedMediaPageVC != nil) return;
+    if (![scrollView isKindOfClass:[UITableView class]] || ![(UITableView *)scrollView window]) return;
+
+    id stopped = sFeedAudibleRichMediaNode;
+    // Settled since the tick that scheduled this: the holder resumed, another
+    // video took the sound, or the holder left the screen.
+    if (!stopped || FeedAudibleVideoHoldingSound()) return;
+    __block id taker = nil;
+    EnumerateVisibleRichMediaNodes((UITableView *)scrollView, ^(id richMediaNode) {
+        if (taker || ObjectsMatch(richMediaNode, stopped)) return;
+        ApplyFeedUnmuteIfNeeded(richMediaNode, @"holder stopped");
+        if (sFeedAudibleRichMediaNode && !ObjectsMatch(sFeedAudibleRichMediaNode, stopped)) {
+            taker = sFeedAudibleRichMediaNode;
+        }
+    });
+    ApolloLog(@"[VideoUnmute] Feed video with the sound stopped playing - %@",
+              taker ? @"handed the sound to the next playing video"
+                    : @"no other video is playing, it keeps the sound in case it resumes");
+}
+
+// Never from inside the tick itself: ASTableView sends these ticks while it
+// enumerates its visibility hash table (-scrollViewDidScroll:), and
+// -visibleCells can lay cells out, which adds and removes cells from that same
+// table ("Collection <NSConcreteHashTable> was mutated while being
+// enumerated", SIGABRT). The next main-queue turn comes after that pass, so a
+// scroll that ends right here still gets its handoff.
+static void ScheduleFeedSoundHandoff(id scrollView) {
+    __weak id weakScrollView = scrollView;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id strongScrollView = weakScrollView;
+        if (strongScrollView) HandFeedSoundToNextPlayingVideo(strongScrollView);
+    });
+}
+
 // Feed cell visibility → apply or release. Covers the cell's own media and a
-// crosspost's, exactly like the mute-button icon sync does.
-static void HandleFeedCellVisibilityEvent(id cellNode, unsigned long long event) {
-    id richMediaNode = GetIvarObjectQuiet(cellNode, "richMediaNode");
+// crosspost's, exactly like the mute-button icon sync does. heldSound: this
+// cell had the sound going into the tick (snapshot taken before %orig, where
+// Apollo's midpoint check runs).
+static void HandleFeedCellVisibilityEvent(id cellNode, unsigned long long event,
+                                          id scrollView, BOOL heldSound) {
+    id richMediaNode = ApolloObjectIvar(cellNode, "richMediaNode");
     id crosspostNode = GetCrosspostRichMediaNodeFromOwner(cellNode);
 
     // ASCellNodeVisibilityEventInvisible
     if (event == 2) {
         ReleaseFeedAudioIfOwnedBy(richMediaNode);
         ReleaseFeedAudioIfOwnedBy(crosspostNode);
+        // "Stays muted while on screen": coming back is a fresh start.
+        ForgetFeedVideoMutedByUser(richMediaNode);
+        ForgetFeedVideoMutedByUser(crosspostNode);
         return;
+    }
+
+    // This tick's midpoint check stopped the video that has the sound.
+    if (heldSound && !FeedAudibleVideoHoldingSound()) {
+        ScheduleFeedSoundHandoff(scrollView);
     }
 
     BOOL applied = ApplyFeedUnmuteIfNeeded(richMediaNode, @"visible");
@@ -837,11 +1083,8 @@ static void HandleCommentsRichMediaVisibilityEvent(id visibilityOwner,
         sAutoUnmutedPlayer = nil;  // Clear first so our setMuted: hook doesn't block
 
         if (videoNode && !presentedFullscreen) {
-            SEL setMutedSel = NSSelectorFromString(@"setMuted:");
-            if ([videoNode respondsToSelector:setMutedSel]) {
-                ((void (*)(id, SEL, BOOL))objc_msgSend)(videoNode, setMutedSel, YES);
-            }
-            if (player) [player setMuted:YES];
+            SetVideoNodeMutedFlag(videoNode, YES);
+            [player setMuted:YES];
         }
 
         sCommentsRichMediaNode = nil;
@@ -883,6 +1126,10 @@ static void HandleCommentsRichMediaVisibilityEvent(id visibilityOwner,
 
             if (sUnmuteCommentsVideos == 2 && sPresentedMediaPageVC == nil
                 && !objc_getAssociatedObject(strongOwner, kAutoUnmuteAppliedKey)) {
+                // The comments screen may have been swiped away during the
+                // 500ms wait (see SkipUnmuteIfOffScreen). Leave the flag unset
+                // so its next Visible event still unmutes if it comes back.
+                if (SkipUnmuteIfOffScreen(rmNode, [contextLabel stringByAppendingString:@" retry unmute"])) return;
                 objc_setAssociatedObject(strongOwner, kAutoUnmuteAppliedKey, @YES,
                                          OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 ApolloLog(@"[VideoUnmute] %@ retry: unmuting after delay (muted=%d)",
@@ -907,6 +1154,140 @@ static void HandleCommentsRichMediaVisibilityEvent(id visibilityOwner,
     ApolloLog(@"[VideoUnmute] %@ auto-unmuting (event=%llu, muted=%d)",
               contextLabel, event, [player isMuted]);
     UnmuteRichMediaNode(richMediaNode, videoNode);
+}
+
+// =============================================================================
+// MARK: - A different video goes fullscreen
+// =============================================================================
+//
+// The fullscreen viewer is the surface being watched. When it shows a DIFFERENT
+// video than the one the tweak made audible inline (sAutoUnmutedPlayer: the feed
+// video that has the sound, or the comments header), the inline one has to go
+// quiet. Left alone it keeps playing with sound underneath the viewer, because
+// our AVPlayer.setMuted: hook blocks every mute Apollo sends it, including the
+// one Apollo sends for exactly this moment (see didTapVideoNode:).
+//
+// Three ways in, whichever sees the other video first:
+//   - RichMediaNode.didTapVideoNode: — the tap on another video, just before
+//     Apollo presents it and runs its own activeAudioPlayer arbitration.
+//   - MediaViewerAnimationController.animateTransition: — the viewer took over a
+//     shareable player (the cell's AVPlayer moves into the viewer).
+//   - MediaViewerController.observeValueForKeyPath:… — a player of the viewer's
+//     own (a comment's video link, an album page, a non-shareable source) only
+//     exists once the viewer has laid itself out, after the transition started,
+//     and Apollo starts observing it right then.
+// Not for an image page, and not for the same video: the same player (the
+// same-player path in animateTransition: owns it) or the same post in a player
+// of the viewer's own (the same-link handling in viewDidDisappear: owns that).
+//
+// The viewer's dismissal gives the sound back, per the inline video's own
+// setting — except when the fullscreen PiP button hands the video to PiP (PiP
+// owns that dismissal's audio), or when the inline video left the screen while
+// the viewer was up.
+
+// The rich media node playing `player` with the sound the tweak gave it: the
+// feed video that has the sound, or the comments header. nil when neither.
+// The header goes first: while the post of the feed video that has the sound
+// is open, that feed cell (off screen, still the feed's audible video) answers
+// with the same shared player, and the header is the one on screen.
+static id InlineRichMediaNodeForAudiblePlayer(AVPlayer *player) {
+    if (RichMediaNodeContainsPlayer(sCommentsRichMediaNode, player)) return sCommentsRichMediaNode;
+    if (RichMediaNodeContainsPlayer(sFeedAudibleRichMediaNode, player)) return sFeedAudibleRichMediaNode;
+    return nil;
+}
+
+// The rich media node whose video node shows `richMediaNode`'s player layer
+// right now, when that is another node: Apollo moves a feed video's layer into
+// the comments header of its post while the post is open. nil otherwise.
+static id RichMediaNodeShowingPlayerOf(id richMediaNode) {
+    AVPlayerLayer *playerLayer = GetPlayerLayerFromVideoNode(GetVideoNodeFromRichMediaNode(richMediaNode));
+    CALayer *host = playerLayer.superlayer;
+    if (![host respondsToSelector:@selector(asyncdisplaykit_node)]) return nil;
+    id hostVideoNode = ((id (*)(id, SEL))objc_msgSend)(host, @selector(asyncdisplaykit_node));
+    id hostNode = [hostVideoNode respondsToSelector:@selector(supernode)]
+        ? ((id (*)(id, SEL))objc_msgSend)(hostVideoNode, @selector(supernode)) : nil;
+    Class richMediaNodeClass = ApolloClassRichMediaNode;
+    if (!hostNode || ObjectsMatch(hostNode, richMediaNode)
+        || !richMediaNodeClass || ![hostNode isKindOfClass:richMediaNodeClass]) {
+        return nil;
+    }
+    return GetVideoNodeFromRichMediaNode(hostNode) == hostVideoNode ? hostNode : nil;
+}
+
+// Mute the inline video the tweak made audible, for the fullscreen viewer
+// `viewer` — nil from the tap, where Apollo presents the viewer afterwards and
+// its viewWillAppear: claims the record. Protection goes first, or our
+// AVPlayer.setMuted: hook would veto this mute (and Apollo's own), and the mute
+// icon follows the player.
+static void SilenceInlineVideoForFullscreen(id viewer, NSString *reason) {
+    AVPlayer *player = sAutoUnmutedPlayer;
+    if (!player) return;
+    // A PiP card arbitrates its own audio (ApolloPiP_YieldAudioToPlayer).
+    if (ApolloPiP_IsOwnedPlayer(player)) return;
+
+    id richMediaNode = InlineRichMediaNodeForAudiblePlayer(player);
+    id videoNode = GetVideoNodeFromRichMediaNode(richMediaNode);
+    ApolloLog(@"[VideoUnmute] Another video is going fullscreen (%@) - muting inline video %p until the viewer closes%@",
+              reason, player, richMediaNode ? @"" : @" (no longer the feed video or comments header, so it stays muted)");
+
+    sAutoUnmutedPlayer = nil;
+    [player setMuted:YES];
+    SetVideoNodeMutedFlag(videoNode, YES);
+    if (richMediaNode) SyncMuteButtonIcon(richMediaNode, YES);
+    // The feed cell's video can be on screen in its post's header (comments
+    // setting Default, where the header isn't tracked): that icon is the one
+    // in view.
+    id showingNode = richMediaNode ? RichMediaNodeShowingPlayerOf(richMediaNode) : nil;
+    if (showingNode) SyncMuteButtonIcon(showingNode, YES);
+
+    sSilencedForViewerRichMediaNode = richMediaNode;
+    sSilencedForViewer = viewer;
+}
+
+// The viewer is up and shows `fullscreenPlayer` (nil for an image page, or a
+// video whose player the viewer hasn't built yet): silence the inline video
+// when that is a different video.
+static void SilenceInlineVideoIfViewerShowsOtherVideo(id viewer, AVPlayer *fullscreenPlayer, NSString *reason) {
+    AVPlayer *audible = sAutoUnmutedPlayer;
+    if (!audible || !fullscreenPlayer || fullscreenPlayer == audible) return;
+    // The inline video's own post, in a player of the viewer's own.
+    id inlineNode = InlineRichMediaNodeForAudiblePlayer(audible);
+    if (inlineNode && ObjectsMatch(ApolloObjectIvar(viewer, "link"), ApolloObjectIvar(inlineNode, "link"))) return;
+    SilenceInlineVideoForFullscreen(viewer, reason);
+}
+
+// The viewer an inline video went quiet for is closing: give the sound back,
+// per that video's own setting. Called from viewDidDisappear: BEFORE %orig. The
+// dismissal in %orig mutes only the viewer's own player (a different one, or
+// this video would not have been silenced) and then runs Apollo's mute dance,
+// whose session downgrade lands a few milliseconds later; with protection
+// already back, our AVAudioSession hooks block that downgrade exactly as they
+// did before the viewer opened, so the restored video's session never drops.
+static void RestoreInlineVideoSilencedForViewer(id viewer, BOOL handedToPiP) {
+    id richMediaNode = sSilencedForViewerRichMediaNode;
+    id silencedFor = sSilencedForViewer;
+    if (!richMediaNode || (silencedFor && silencedFor != viewer)) return;
+    sSilencedForViewerRichMediaNode = nil;
+    sSilencedForViewer = nil;
+
+    if (handedToPiP) {
+        ApolloLog(@"[VideoUnmute] Fullscreen video handed to PiP - the inline video it muted stays muted");
+        return;
+    }
+
+    if (ObjectsMatch(richMediaNode, sFeedAudibleRichMediaNode)) {
+        ApolloLog(@"[VideoUnmute] Fullscreen viewer closed - restoring the feed video it muted");
+        // Not eligible this instant (e.g. Apollo paused it under the viewer):
+        // the usual after-fullscreen re-apply tries again once the dance settles.
+        if (!ApplyFeedUnmuteIfNeeded(richMediaNode, @"after another video's fullscreen")) {
+            ScheduleFeedUnmuteAfterFullscreen();
+        }
+    } else if (ObjectsMatch(richMediaNode, sCommentsRichMediaNode) && sUnmuteCommentsVideos >= 1) {
+        ApolloLog(@"[VideoUnmute] Fullscreen viewer closed - restoring the comments header video it muted");
+        ReUnmuteAfterFullscreenWhenReady(richMediaNode, sCommentsVideoNode, 3);
+    } else {
+        ApolloLog(@"[VideoUnmute] Fullscreen viewer closed - the inline video it muted left the screen meanwhile, leaving it muted");
+    }
 }
 
 // =============================================================================
@@ -1001,9 +1382,15 @@ static void HandleCommentsRichMediaVisibilityEvent(id visibilityOwner,
 - (void)cellNodeVisibilityEvent:(unsigned long long)event
                    inScrollView:(id)scrollView
                   withCellFrame:(CGRect)frame {
+    if (sUnmuteFeedVideos == 0) {   // feature off: no extra work per tick
+        %orig;
+        return;
+    }
+    // Whether this cell has the sound BEFORE Apollo's midpoint check runs, so
+    // the handler can tell when that check has just stopped it.
+    BOOL heldSound = event != 2 && CellHasFeedSound(self);
     %orig;   // Apollo's midpoint autoplay decision runs here — check after it
-    if (sUnmuteFeedVideos == 0) return;   // feature off: no extra work per tick
-    HandleFeedCellVisibilityEvent(self, event);
+    HandleFeedCellVisibilityEvent(self, event, scrollView, heldSound);
 }
 
 %end
@@ -1029,22 +1416,40 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     %orig;
 
     // Only fix for comments header videos
-    if (!GetIvarBool(self, "isShownInCommentsHeader") && self != sCommentsRichMediaNode) return;
+    if (!ApolloReadBoolIvar(self, "isShownInCommentsHeader", NO) && self != sCommentsRichMediaNode) return;
 
     id videoNode = GetIvarObject(self, "videoNode");
     if (!videoNode) return;
 
     // Only fix for shareable videos (non-shareable already handled by native code)
-    SEL shareableSel = NSSelectorFromString(@"allowPlayerLayerToBeShareable");
-    if (![videoNode respondsToSelector:shareableSel]) return;
-    BOOL isShareable = ((BOOL (*)(id, SEL))objc_msgSend)(videoNode, shareableSel);
-    if (!isShareable) return;
+    if (!VideoNodeIsShareable(videoNode)) return;
 
     AVPlayer *player = GetPlayerFromVideoNode(videoNode);
     if (!player) return;
 
     ApolloLog(@"[VideoUnmute] unpauseAllAVPlayers: resuming shareable comments header video");
     [player play];
+}
+
+// ---------------------------------------------------------------------------
+// didTapVideoNode: — a tap that opens this video fullscreen (sub_100589bd0).
+// Apollo asks its delegate to present the viewer (UIKit runs the presentation
+// after the current CA commit), then mutes VideoSharingManager.activeAudioPlayer
+// if that is a different player, clears it and posts MutedOtherAudioPlayers,
+// whose handler (sub_10057ab44) flips the mute icon of every RichMediaNode not
+// playing the active player to "small-mute" without looking at its player. A
+// video the tweak made audible is protected from that mute by our
+// AVPlayer.setMuted: hook, so it went on playing with sound under the viewer
+// while its icon said muted. Tapping a different video hands the sound over
+// first (see "A different video goes fullscreen"), so Apollo's own mute goes
+// through and its icon flip matches the player.
+// ---------------------------------------------------------------------------
+- (void)didTapVideoNode:(id)videoNode {
+    AVPlayer *audible = sAutoUnmutedPlayer;
+    if (audible && GetPlayerFromVideoNode(videoNode) != audible) {
+        SilenceInlineVideoForFullscreen(nil, @"tapped");
+    }
+    %orig;
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,17 +1461,40 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
 // on the auto-unmuted player. Without this, the user couldn't manually mute.
 // ---------------------------------------------------------------------------
 - (void)muteUnmuteButtonTappedWithSender:(id)sender {
+    // The user set this video's sound themselves: a fullscreen viewer's
+    // dismissal must not restore what it muted (see
+    // RestoreInlineVideoSilencedForViewer).
+    if (ObjectsMatch(self, sSilencedForViewerRichMediaNode)) {
+        sSilencedForViewerRichMediaNode = nil;
+        sSilencedForViewer = nil;
+    }
+
+    id videoNodeForResume = GetIvarObject(self, "videoNode");
+    AVPlayer *playerForResume = GetPlayerFromVideoNode(videoNodeForResume);
+
+    // Apollo's tap handler (sub_10058b800) flips the icon from the button's own
+    // isMuted flag, then mutes or unmutes from the player's real state
+    // (sub_100341894). An icon that disagrees with its player therefore stays
+    // wrong after every tap: muted icon while it plays, speaker while it's
+    // silent. Put the icon in step with the player first, so the flip shows
+    // what the tap actually did.
+    if (playerForResume) {
+        id muteButtonNode = GetIvarObject(self, "muteUnmuteButtonNode");
+        BOOL iconMuted = ApolloReadBoolIvar(muteButtonNode, "isMuted", [playerForResume isMuted]);
+        if (muteButtonNode && iconMuted != [playerForResume isMuted]) {
+            ApolloLog(@"[VideoUnmute] Mute button showed %@ but the video is %@ - matching the icon before the tap",
+                      iconMuted ? @"muted" : @"unmuted", [playerForResume isMuted] ? @"muted" : @"unmuted");
+            SyncMuteButtonIcon(self, [playerForResume isMuted]);
+        }
+    }
+
     // Clear auto-unmute protection if this cell's player matches the
     // protected player. No context check (isShownInCommentsHeader) — for
     // shareable videos the same AVPlayer is shared between feed and comments
     // cells, so the user must be able to mute from either context.
-    if (sAutoUnmutedPlayer) {
-        id videoNode = GetIvarObject(self, "videoNode");
-        AVPlayer *player = GetPlayerFromVideoNode(videoNode);
-        if (player && player == sAutoUnmutedPlayer) {
-            ApolloLog(@"[VideoUnmute] User tapped mute button — clearing auto-unmute protection");
-            sAutoUnmutedPlayer = nil;
-        }
+    if (playerForResume && playerForResume == sAutoUnmutedPlayer) {
+        ApolloLog(@"[VideoUnmute] User tapped mute button — clearing auto-unmute protection");
+        sAutoUnmutedPlayer = nil;
     }
 
     // Capture player state before the tap handler runs.
@@ -1076,12 +1504,10 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // mute button to unmute, the native handler (sub_100341894) unmutes the player
     // but does NOT call [player play], leaving the video frozen. Detect this state
     // so we can resume playback after %orig.
-    id videoNodeForResume = GetIvarObject(self, "videoNode");
-    AVPlayer *playerForResume = GetPlayerFromVideoNode(videoNodeForResume);
     // The tap toggles, so the pre-tap state names the direction unambiguously —
     // post-%orig state can't, because the mute dance only lands at T+100ms.
     BOOL wasMutedBeforeTap = playerForResume && [playerForResume isMuted];
-    BOOL isFeedVideo = !GetIvarBool(self, "isShownInCommentsHeader");
+    BOOL isFeedVideo = !ApolloReadBoolIvar(self, "isShownInCommentsHeader", NO);
     BOOL wasMutedAndPaused = playerForResume
         && [playerForResume isMuted]
         && [playerForResume rate] == 0.0f;
@@ -1098,6 +1524,9 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // and the fullscreen player answer to their own settings.
     if (isFeedVideo && playerForResume) {
         NoteFeedMuteButtonChoice(wasMutedBeforeTap);
+        // Always mode keeps a video the user muted muted while it's on screen;
+        // unmuting it again lifts that.
+        NoteFeedVideoMutedByUser(playerForResume, !wasMutedBeforeTap);
         if (wasMutedBeforeTap) {
             // They just unmuted this one: it becomes the single audible feed
             // video, so a previously auto-unmuted video must go quiet.
@@ -1134,10 +1563,7 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // the dance settles. Feed cells never reach this: the VC gate excludes
     // them, and their native reclaim clears the shareable flag anyway.
     if (wasUnmutedAndPlaying && NodeIsInSearchResultsController(self)) {
-        SEL shareableSel = NSSelectorFromString(@"allowPlayerLayerToBeShareable");
-        BOOL nodeShareable = [videoNodeForResume respondsToSelector:shareableSel]
-            && ((BOOL (*)(id, SEL))objc_msgSend)(videoNodeForResume, shareableSel);
-        if (nodeShareable) {
+        if (VideoNodeIsShareable(videoNodeForResume)) {
             AVPlayer *player = playerForResume;
             id videoNode = videoNodeForResume;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
@@ -1170,10 +1596,11 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
 // content — opening/closing an image viewer must not disrupt the comments
 // header video's audio protection.
 //
-// viewWillAppear: Suspends auto-unmute protection ONLY when the fullscreen
-//   viewer shows the same video we're protecting (player identity check).
-//   This lets the user freely mute/unmute in fullscreen. Image viewers and
-//   different videos leave sAutoUnmutedPlayer intact.
+// viewWillAppear: Marks the viewer presented (sPresentedMediaPageVC). The
+//   protection itself is sorted out as the viewer takes its video: suspended
+//   for the same video (animateTransition: below), muted until the viewer
+//   closes for a different one ("A different video goes fullscreen"). Image
+//   viewers leave sAutoUnmutedPlayer intact.
 //
 // viewDidDisappear: The native dismiss code (sub_10025ce28) unconditionally:
 //   1. [player setMuted:YES] — force-mutes the shared player
@@ -1195,6 +1622,9 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // an interactive dismissal is cancelled, which is why viewWillDisappear:
     // does not clear it.
     sPresentedMediaPageVC = self;
+    // The tap that presented this viewer just muted the inline video that had
+    // the sound (didTapVideoNode:): this viewer's dismissal gives it back.
+    if (sSilencedForViewerRichMediaNode && !sSilencedForViewer) sSilencedForViewer = self;
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -1202,6 +1632,13 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // inline paths may act on this player again, starting with the feed
     // re-apply scheduled below.
     if (sPresentedMediaPageVC == self) sPresentedMediaPageVC = nil;
+
+    // Give the inline video this viewer muted (a different video went
+    // fullscreen) its sound back, ahead of the dismissal below and on every
+    // path, including an album closed on an image page. Not when the fullscreen
+    // PiP button is taking the video into PiP (PiP resolves that request inside
+    // this same dismissal).
+    RestoreInlineVideoSilencedForViewer(self, ApolloPiP_WillHandleFullscreenDismiss());
 
     // Only process re-unmute for video content. Image viewers have no player
     // and should not trigger any mute/unmute logic.
@@ -1296,7 +1733,9 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
 // has been transferred from the comments header to the fullscreen container.
 // We check if the comments header's player matches our protected player —
 // if so, the fullscreen viewer is showing the same video, and we suspend
-// protection so the user can freely mute/unmute in fullscreen.
+// protection so the user can freely mute/unmute in fullscreen. A different
+// player means a different video: the protected one is muted until the viewer
+// closes ("A different video goes fullscreen").
 //
 // This only fires for PRESENT transitions (the "to" VC is a MediaPageVC).
 // Dismiss transitions have a different "to" VC and are handled by
@@ -1310,13 +1749,13 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     if (!sAutoUnmutedPlayer) return;
 
     // Get the "to" VC to confirm this is a present (not dismiss) transition.
-    SEL vcForKeySel = NSSelectorFromString(@"viewControllerForKey:");
+    SEL vcForKeySel = @selector(viewControllerForKey:);
     if (![transitionContext respondsToSelector:vcForKeySel]) return;
 
     id toVC = ((id (*)(id, SEL, id))objc_msgSend)(
         transitionContext, vcForKeySel, UITransitionContextToViewControllerKey);
 
-    Class mediaPageVCClass = MediaPageViewControllerClass();
+    Class mediaPageVCClass = ApolloClassMediaPageViewController;
     if (!toVC || !mediaPageVCClass || ![toVC isMemberOfClass:mediaPageVCClass]) return;
 
     // After %orig, the transition has created a PlayerLayerContainerView for
@@ -1328,21 +1767,18 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
     // Walk the transition container's view hierarchy to find the
     // PlayerLayerContainerView by class, then check its playerLayer's player
     // against our protected player.
-    static Class sPlayerLayerContainerClass = nil;
-    if (!sPlayerLayerContainerClass) {
-        sPlayerLayerContainerClass = objc_getClass("_TtC6Apollo24PlayerLayerContainerView");
-    }
+    Class playerLayerContainerClass = ApolloClassPlayerLayerContainerView;
 
     // First try GetPlayerFromMediaPageVC (works for non-shareable videos
     // where the player ivar is set directly). Fall back to hierarchy walk
     // for shareable videos.
     AVPlayer *fullscreenPlayer = GetPlayerFromMediaPageVC(toVC);
 
-    if (!fullscreenPlayer && sPlayerLayerContainerClass) {
+    if (!fullscreenPlayer && playerLayerContainerClass) {
         // Walk the transition container view to find the PlayerLayerContainerView
         // that animateTransition: just created and added to the hierarchy.
         UIView *containerView = ((id (*)(id, SEL))objc_msgSend)(transitionContext, @selector(containerView));
-        UIView *found = FindSubviewOfClass(containerView, sPlayerLayerContainerClass);
+        UIView *found = FindSubviewOfClass(containerView, playerLayerContainerClass);
         if (found) {
             id playerLayer = GetIvarObject(found, "playerLayer");
             if ([playerLayer isKindOfClass:[AVPlayerLayer class]]) {
@@ -1358,9 +1794,12 @@ static BOOL PlayerWasDeliberatelyStopped(AVPlayer *player);
         ApolloLog(@"[VideoUnmute] animateTransition: same player — suspending protection for fullscreen");
         sAutoUnmutedPlayer = nil;
     } else if (!fullscreenPlayer) {
-        ApolloLog(@"[VideoUnmute] animateTransition: no player found (image viewer) — keeping protection");
+        // An image, or a video whose player the viewer builds once it has laid
+        // itself out — the viewer's player callbacks catch that one
+        // (MediaViewerController.observeValueForKeyPath:…).
+        ApolloLog(@"[VideoUnmute] animateTransition: no player yet (image, or a video still loading) — keeping protection");
     } else {
-        ApolloLog(@"[VideoUnmute] animateTransition: different player — keeping protection");
+        SilenceInlineVideoIfViewerShowsOtherVideo(toVC, fullscreenPlayer, @"viewer took another player");
     }
 }
 
@@ -1417,19 +1856,43 @@ static Class sTouchHintVideoNodeClass = nil;
 
     ApolloLog(@"[VideoUnmute] Inline video exited under the fullscreen viewer — muting it without the session dance");
     [player setMuted:YES];
-    SEL setMutedSel = NSSelectorFromString(@"setMuted:");
-    if ([self respondsToSelector:setMutedSel]) {
-        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, setMutedSel, YES);
-    }
+    SetVideoNodeMutedFlag(self, YES);
     // The node's ASVideoNodeDelegate is its RichMediaNode, which owns the
     // mute button whose icon the skipped handler would have flipped.
-    static Class sRichMediaNodeClass = nil;
-    if (!sRichMediaNodeClass) sRichMediaNodeClass = objc_getClass("_TtC6Apollo13RichMediaNode");
+    Class richMediaNodeClass = ApolloClassRichMediaNode;
     id delegate = [self respondsToSelector:@selector(delegate)]
         ? ((id (*)(id, SEL))objc_msgSend)(self, @selector(delegate)) : nil;
-    if (sRichMediaNodeClass && [delegate isKindOfClass:sRichMediaNodeClass]) {
+    if (richMediaNodeClass && [delegate isKindOfClass:richMediaNodeClass]) {
         SyncMuteButtonIcon(delegate, YES);
     }
+}
+
+%end
+
+%end
+
+// ---------------------------------------------------------------------------
+// MediaViewerController.observeValueForKeyPath:ofObject:change:context: — the
+// viewer's own player. A comment's video link, an album page or a
+// non-shareable source plays in an AVPlayer the viewer builds once it has laid
+// itself out, after animateTransition: has already looked (and found nothing),
+// and Apollo starts observing it right away (the player's timeControlStatus,
+// its item's status and tracks). That is the first point where the viewer's
+// video is known; swiping an album onto a video page lands here too. Bails in
+// line one unless a viewer is up while an inline video has the sound.
+// ---------------------------------------------------------------------------
+%group FullscreenPlayerWatch
+
+%hook MediaViewerController
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary *)change
+                       context:(void *)context {
+    %orig;
+    if (!sAutoUnmutedPlayer || !sPresentedMediaPageVC || ![NSThread isMainThread]) return;
+    SilenceInlineVideoIfViewerShowsOtherVideo(sPresentedMediaPageVC, PresentedFullscreenPlayer(),
+                                              @"the viewer's own player is ready");
 }
 
 %end
@@ -1456,7 +1919,7 @@ static Class sTouchHintVideoNodeClass = nil;
 - (void)setMuted:(BOOL)muted {
     // Block mute-dance re-muting on our auto-unmuted player.
     // User manual mute clears sAutoUnmutedPlayer via the button tap hook first.
-    if (muted && !sIsAutoUnmuting && sAutoUnmutedPlayer && self == sAutoUnmutedPlayer) {
+    if (muted && !sIsAutoUnmuting && self == sAutoUnmutedPlayer) {
         ApolloLog(@"[VideoUnmute] AVPlayer.setMuted:YES — BLOCKED (protecting auto-unmuted player)");
         return;
     }
@@ -1726,54 +2189,35 @@ void ApolloVideoUnmute_FixDisconnectedPlayerLayer(id postsViewController) {
         return;
     }
 
-    BOOL foundDisconnected = NO;
+    __block BOOL foundDisconnected = NO;
 
-    for (UITableViewCell *cell in [tableView visibleCells]) {
-        SEL nodeSel = NSSelectorFromString(@"node");
-        if (![cell respondsToSelector:nodeSel]) continue;
+    EnumerateVisibleRichMediaNodes(tableView, ^(id richMediaNode) {
+        id videoNode = GetVideoNodeFromRichMediaNode(richMediaNode);
+        if (!videoNode) return;
 
-        id cellNode = ((id (*)(id, SEL))objc_msgSend)(cell, nodeSel);
-        if (!cellNode) continue;
+        AVPlayerLayer *pLayer = GetPlayerLayerFromVideoNode(videoNode);
+        CALayer *vnLayer = ((CALayer *(*)(id, SEL))objc_msgSend)(videoNode, @selector(layer));
+        if (!pLayer || !vnLayer) return;
 
-        for (id richMediaNode in @[
-            GetIvarObjectQuiet(cellNode, "richMediaNode") ?: [NSNull null],
-            GetCrosspostRichMediaNodeFromOwner(cellNode) ?: [NSNull null]
-        ]) {
-            if (richMediaNode == (id)[NSNull null]) continue;
+        AVPlayer *player = [pLayer player];
+        if (!player || [player rate] == 0.0f) return;
 
-            id videoNode = GetVideoNodeFromRichMediaNode(richMediaNode);
-            if (!videoNode) continue;
+        if (!LayerIsInLayerTreeOf(pLayer, vnLayer)) {
+            ApolloLog(@"[VideoUnmute] FixDisconnectedPlayerLayer: re-parenting playerLayer %p to videoNode %p",
+                      pLayer, videoNode);
+            [pLayer removeFromSuperlayer];
+            [vnLayer addSublayer:pLayer];
 
-            SEL playerLayerSel = NSSelectorFromString(@"playerLayer");
-            if (![videoNode respondsToSelector:playerLayerSel]) continue;
-
-            CALayer *pLayer = ((id (*)(id, SEL))objc_msgSend)(videoNode, playerLayerSel);
-            CALayer *vnLayer = ((CALayer *(*)(id, SEL))objc_msgSend)(videoNode, @selector(layer));
-            if (!pLayer || !vnLayer) continue;
-
-            AVPlayer *player = [pLayer respondsToSelector:@selector(player)]
-                ? [(AVPlayerLayer *)pLayer player] : nil;
-            if (!player || [player rate] == 0.0f) continue;
-
-            BOOL inTree = LayerIsInLayerTreeOf(pLayer, vnLayer);
-
-            if (!inTree) {
-                ApolloLog(@"[VideoUnmute] FixDisconnectedPlayerLayer: re-parenting playerLayer %p to videoNode %p",
-                          pLayer, videoNode);
-                [pLayer removeFromSuperlayer];
-                [vnLayer addSublayer:pLayer];
-
-                SEL setShareableSel = NSSelectorFromString(@"setAllowPlayerLayerToBeShareable:");
-                if ([videoNode respondsToSelector:setShareableSel]) {
-                    ((void (*)(id, SEL, BOOL))objc_msgSend)(videoNode, setShareableSel, NO);
-                }
-
-                foundDisconnected = YES;
+            SEL setShareableSelector = @selector(setAllowPlayerLayerToBeShareable:);
+            if ([videoNode respondsToSelector:setShareableSelector]) {
+                ((void (*)(id, SEL, BOOL))objc_msgSend)(videoNode, setShareableSelector, NO);
             }
 
-            SyncMuteButtonIcon(richMediaNode, [player isMuted]);
+            foundDisconnected = YES;
         }
-    }
+
+        SyncMuteButtonIcon(richMediaNode, [player isMuted]);
+    });
 
     if (!foundDisconnected) {
         ApolloLog(@"[VideoUnmute] FixDisconnectedPlayerLayer: no disconnected playerLayer found");
@@ -1953,11 +2397,7 @@ static BOOL FixupSearchCellRichMediaNode(id richMediaNode, NSString *reason) {
 
     BOOL inTree = LayerIsInLayerTreeOf(pLayer, vnLayer);
 
-    BOOL shareable = NO;
-    SEL shareableSel = NSSelectorFromString(@"allowPlayerLayerToBeShareable");
-    if ([videoNode respondsToSelector:shareableSel]) {
-        shareable = ((BOOL (*)(id, SEL))objc_msgSend)(videoNode, shareableSel);
-    }
+    BOOL shareable = VideoNodeIsShareable(videoNode);
 
     ApolloLog(@"[VideoUnmute] SearchReclaim(%@): videoNode=%p player=%p rate=%.2f muted=%d inTree=%d shareable=%d",
               reason, videoNode, player, [player rate], [player isMuted], inTree, shareable);
@@ -2141,7 +2581,7 @@ static void ReclaimSearchResultsPlayerLayers(UIViewController *searchVC, NSStrin
     UINavigationController *nav = [(UIViewController *)self navigationController];
     UIViewController *presented = [nav presentedViewController];
     if (presented) {
-        Class mediaPageVCClass = MediaPageViewControllerClass();
+        Class mediaPageVCClass = ApolloClassMediaPageViewController;
         if (!mediaPageVCClass || ![presented isKindOfClass:mediaPageVCClass]) return;
         ReclaimSearchResultsPlayerLayers((UIViewController *)self, @"fullscreen dismissal");
         return;
@@ -2165,13 +2605,13 @@ static void ReclaimSearchResultsPlayerLayers(UIViewController *searchVC, NSStrin
     Class richMediaHeaderCellClass = objc_getClass("_TtC6Apollo23RichMediaHeaderCellNode");
     Class commentsHeaderCellClass = objc_getClass("_TtC6Apollo22CommentsHeaderCellNode");
     Class richMediaNodeClass = objc_getClass("_TtC6Apollo13RichMediaNode");
-    Class mediaPageVCClass = MediaPageViewControllerClass();
+    Class mediaPageVCClass = ApolloClassMediaPageViewController;
     Class mediaViewerAnimClass = objc_getClass("_TtC6Apollo30MediaViewerAnimationController");
     Class largePostCellClass = objc_getClass("_TtC6Apollo17LargePostCellNode");
 
     ApolloLog(@"[VideoUnmute] ctor: RichMediaHeaderCellNode=%p, CommentsHeaderCellNode=%p, RichMediaNode=%p, MediaPageVC=%p, MediaViewerAnimCtrl=%p",
-              (void *)richMediaHeaderCellClass, (void *)commentsHeaderCellClass, (void *)richMediaNodeClass,
-              (void *)mediaPageVCClass, (void *)mediaViewerAnimClass);
+              (__bridge void *)richMediaHeaderCellClass, (__bridge void *)commentsHeaderCellClass, (__bridge void *)richMediaNodeClass,
+              (__bridge void *)mediaPageVCClass, (__bridge void *)mediaViewerAnimClass);
 
     if (!richMediaHeaderCellClass || !commentsHeaderCellClass || !richMediaNodeClass
         || !mediaPageVCClass || !mediaViewerAnimClass) {
@@ -2203,7 +2643,15 @@ static void ReclaimSearchResultsPlayerLayers(UIViewController *searchVC, NSStrin
         ApolloLog(@"[VideoUnmute] ctor: TouchHintVideoNode missing - fullscreen exit guard unavailable");
     }
 
-    Class searchResultsVCClass = PostsSearchResultsViewControllerClass();
+    Class mediaViewerClass = objc_getClass("_TtC6Apollo21MediaViewerController");
+    if (mediaViewerClass) {
+        %init(FullscreenPlayerWatch, MediaViewerController = mediaViewerClass);
+        ApolloLog(@"[VideoUnmute] ctor: fullscreen player watch installed");
+    } else {
+        ApolloLog(@"[VideoUnmute] ctor: MediaViewerController missing - a viewer's own player cannot mute the inline video");
+    }
+
+    Class searchResultsVCClass = ApolloClassPostsSearchResultsViewController;
     if (searchResultsVCClass) {
         %init(SearchResultsReclaim, PostsSearchResultsViewController = searchResultsVCClass);
         ApolloLog(@"[VideoUnmute] ctor: search results playerLayer reclaim installed");

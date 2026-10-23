@@ -56,14 +56,17 @@
 //    once the handler closes its point window. Apollo's name-based expansion
 //    state can affect more models than that batch accounts for; see
 //    ApolloMultiredditExpansion.h for the reproduced invalid-row-count case.
+//    The favorite star's batch takes the same route when the table's cached
+//    counts are already stale before it starts (#1335).
 //
 // Everything else Apollo does to this table is reloadData (unsubscribe commits,
 // model refreshes), which is remap-safe: our mapping is invalidated in a
 // reloadData hook before the table re-queries anything.
 //
 // When "Separate Followed Users" is OFF and the section order is the default,
-// every hook is a straight %orig passthrough (one static + pointer check), so
-// the module is inert for anyone not using the feature.
+// the remapping hooks are straight %orig passthroughs (one static + pointer
+// check). The two crash guards on this list still run for everyone: the
+// multireddit expansion deferral and the favorite star's stale-count check.
 //
 // ============================ Reading the model ==============================
 // The u_ rows' native positions come from the sectionedSubreddits ivar. It's a
@@ -83,9 +86,11 @@
 #import <mach-o/loader.h>
 
 #import "ApolloCommon.h"
+#import "ApolloClasses.h"
 #import "ApolloFollowingSection.h"
 #import "ApolloMultiredditExpansion.h"
 #import "ApolloState.h"
+#import "ApolloSwiftRuntime.h"
 #import "UserDefaultConstants.h"
 
 @interface RedditListViewController : UIViewController // Apollo.RedditListViewController
@@ -482,6 +487,92 @@ void ApolloFollowingAnimateNextRemoval(UITableView *table, NSIndexPath *path) {
         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+// ---- Section headers in the snapshot-then-animate updates --------------------
+// (the Edit toggle in ApolloHideModSubreddits, the confirmed removal below)
+//
+// Finding them: Apollo's headers are plain UIViews (RecreatedTableSectionHeaderView),
+// which -headerViewForSection: never returns (it only hands back
+// UITableViewHeaderFooterViews), so the on-screen ones are found among the
+// table's own subviews and keyed by the title their `label` ivar shows (the
+// same ivar the FOLLOWING donor header retitles; titles are unique here).
+//
+// Snapshotting them: read the frames of those views, never
+// -rectForHeaderInSection:. That call forces the REAL height of the section it
+// names (heightCanBeGuessed:NO), and after any batch update on this table
+// (reloadSections, the favorite star's rows, a removal) UIKit holds its
+// automatic 28pt estimate for every off-screen header: the feed section's real
+// header is 0 and Favorites' is 25. Correcting those outside a layout pass
+// moves every row below them with no matching contentOffset change, so a
+// sweep over all sections jumped the whole list up ~30pt.
+//
+// Animating them: -[UITableView _updateVisibleHeadersAndFootersNow:] re-sets
+// every visible header's frame in every layout pass (setEditing:'s included),
+// and a frame set while a transform is on lands the view somewhere else for
+// good. So the transform the animator returns to identity goes on only
+// immediately before -startAnimation, which takes the model back to identity
+// at once. The rows start from a later main-queue turn, and a commit can fall
+// in between (a tap delivered from a dispatched block, Apollo's async
+// reloads), so until then an additive position/opacity animation "parks" each
+// header at its old place: it moves only the presentation layer, which no
+// layout pass touches.
+static NSString *const kApolloListHeaderParkKey = @"apolloListHeaderPark";
+
+static NSDictionary<NSString *, UIView *> *ApolloSubredditListVisibleSectionHeaders(UITableView *tableView) {
+    Class headerClass = ApolloClassRecreatedTableSectionHeaderView;
+    NSMutableDictionary<NSString *, UIView *> *headers = [NSMutableDictionary dictionary];
+    if (!headerClass || !tableView) return headers;
+    for (UIView *subview in tableView.subviews) {
+        if (subview.hidden || ![subview isKindOfClass:headerClass]) continue;
+        UILabel *label = ApolloObjectIvar(subview, "label");
+        NSString *title = [label isKindOfClass:[UILabel class]] ? label.text.uppercaseString : nil;
+        if (title.length > 0) headers[title] = subview;
+    }
+    return headers;
+}
+
+NSDictionary<NSString *, NSValue *> *ApolloSubredditListSectionHeaderFrames(UITableView *tableView) {
+    NSMutableDictionary<NSString *, NSValue *> *frames = [NSMutableDictionary dictionary];
+    [ApolloSubredditListVisibleSectionHeaders(tableView) enumerateKeysAndObjectsUsingBlock:^(NSString *title, UIView *header, __unused BOOL *stop) {
+        frames[title] = [NSValue valueWithCGRect:header.frame];
+    }];
+    return frames;
+}
+
+// How far a header has to travel back to where the snapshot saw it on screen.
+static CGFloat ApolloSubredditListHeaderDelta(UIView *header, NSValue *oldFrame, CGFloat offsetDelta) {
+    return CGRectGetMidY(oldFrame.CGRectValue) - CGRectGetMidY(header.frame) + offsetDelta;
+}
+
+void ApolloSubredditListParkSectionHeaders(UITableView *tableView, NSDictionary<NSString *, NSValue *> *oldFrames,
+                                           CGFloat offsetDelta) {
+    [ApolloSubredditListVisibleSectionHeaders(tableView) enumerateKeysAndObjectsUsingBlock:^(NSString *title, UIView *header, __unused BOOL *stop) {
+        NSValue *oldFrame = oldFrames[title];
+        CGFloat value = oldFrame ? ApolloSubredditListHeaderDelta(header, oldFrame, offsetDelta) : -header.layer.opacity;
+        if (oldFrame && fabs(value) < 0.5) return;
+        CABasicAnimation *park = [CABasicAnimation animationWithKeyPath:oldFrame ? @"position.y" : @"opacity"];
+        park.additive = YES;
+        park.fromValue = park.toValue = @(value);
+        park.duration = 1.0; // only has to outlive one main-queue turn; step 3 drops it
+        [header.layer addAnimation:park forKey:kApolloListHeaderParkKey];
+    }];
+}
+
+void ApolloSubredditListStartSectionHeaders(UITableView *tableView, NSDictionary<NSString *, NSValue *> *oldFrames,
+                                            CGFloat offsetDelta, NSMutableArray<NSArray *> *restores) {
+    [ApolloSubredditListVisibleSectionHeaders(tableView) enumerateKeysAndObjectsUsingBlock:^(NSString *title, UIView *header, __unused BOOL *stop) {
+        [header.layer removeAnimationForKey:kApolloListHeaderParkKey];
+        if (!restores) return;
+        [restores addObject:@[header, [NSValue valueWithCGAffineTransform:header.transform], @(header.alpha)]];
+        NSValue *oldFrame = oldFrames[title];
+        if (oldFrame) {
+            CGFloat delta = ApolloSubredditListHeaderDelta(header, oldFrame, offsetDelta);
+            header.transform = CGAffineTransformTranslate(header.transform, 0.0, delta);
+        } else {
+            header.alpha = 0.0; // pulled on screen by the update, like a new row
+        }
+    }];
+}
+
 static BOOL ApolloFollowingApplyRemovalAnimation(UITableView *table) {
     NSDictionary *request = objc_getAssociatedObject(table, &kApolloRemovalRequest);
     if (!request) return NO;
@@ -514,12 +605,10 @@ static BOOL ApolloFollowingApplyRemovalAnimation(UITableView *table) {
         else if (!removeSection && section == path.section && row > path.row) row--;
         oldFrames[[NSIndexPath indexPathForRow:row inSection:section]] = [NSValue valueWithCGRect:[table rectForRowAtIndexPath:oldPath]];
     }
-    NSMutableDictionary<NSNumber *, NSValue *> *oldHeaders = [NSMutableDictionary new];
-    for (NSInteger section = 0; section < table.numberOfSections; section++) {
-        if (removeSection && section == path.section) continue;
-        NSInteger newSection = removeSection && section > path.section ? section - 1 : section;
-        oldHeaders[@(newSection)] = [NSValue valueWithCGRect:[table rectForHeaderInSection:section]];
-    }
+    // Headers by title from the views on screen, never -rectForHeaderInSection:
+    // (see ApolloSubredditListSectionHeaderFrames). A removed section's header
+    // simply has no match afterwards.
+    NSDictionary<NSString *, NSValue *> *oldHeaders = ApolloSubredditListSectionHeaderFrames(table);
     UITableViewCell *removedCell = [table cellForRowAtIndexPath:path];
     UIView *departing = [removedCell snapshotViewAfterScreenUpdates:NO];
     CGRect departingFrame = [table rectForRowAtIndexPath:path];
@@ -561,14 +650,6 @@ static BOOL ApolloFollowingApplyRemovalAnimation(UITableView *table) {
             cell.transform = CGAffineTransformScale(cell.transform, 0.88, 0.88);
         }
     }
-    for (NSInteger section = 0; section < table.numberOfSections; section++) {
-        UIView *header = [table headerViewForSection:section];
-        NSValue *oldFrame = oldHeaders[@(section)];
-        if (!header || !oldFrame) continue;
-        [transition.rows addObject:@[header, [NSValue valueWithCGAffineTransform:header.transform], @(header.alpha)]];
-        CGFloat delta = CGRectGetMidY(oldFrame.CGRectValue) - CGRectGetMidY([table rectForHeaderInSection:section]) + offsetDelta;
-        header.transform = CGAffineTransformTranslate(header.transform, 0.0, delta);
-    }
     objc_setAssociatedObject(table, &kApolloRemovalTransition, transition, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UISpringTimingParameters *timing = [[UISpringTimingParameters alloc] initWithDampingRatio:0.88];
     UIViewPropertyAnimator *animator = [[UIViewPropertyAnimator alloc] initWithDuration:0.34 timingParameters:timing];
@@ -590,11 +671,14 @@ static BOOL ApolloFollowingApplyRemovalAnimation(UITableView *table) {
     if (UIAccessibilityIsReduceMotionEnabled()) {
         [transition finish];
     } else {
-        // Start outside Apollo's disabled-animation scope.
+        // Start outside Apollo's disabled-animation scope. Headers stay parked
+        // until then (see kApolloListHeaderParkKey).
+        ApolloSubredditListParkSectionHeaders(table, oldHeaders, offsetDelta);
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (objc_getAssociatedObject(table, &kApolloRemovalTransition) == transition) {
-                [animator startAnimation];
-            }
+            BOOL current = objc_getAssociatedObject(table, &kApolloRemovalTransition) == transition;
+            ApolloSubredditListStartSectionHeaders(table, oldHeaders, table.contentOffset.y - oldOffset.y,
+                                                   current ? transition.rows : nil);
+            if (current) [animator startAnimation];
         });
     }
     ApolloLog(@"[ListEditing] preview spring removal duration=0.34 scale=0.88 damping=0.88");
@@ -785,16 +869,26 @@ static BOOL ApolloFollowingCallerIsApolloBinary(void *returnAddress) {
 }
 
 static ApolloFollowingMap *ApolloFollowingActiveMapForTable(UITableView *tableView);
+static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tableView);
 
 // The list VC's table. ApolloTableViewController's `tableView` is a Swift
 // stored property with no guaranteed ObjC getter, but ObjC-class-typed Swift
 // stored properties are real runtime ivars — read it that way (same approach
 // as ApolloHideModSubreddits/ApolloMultiredditEdit).
 static UITableView *ApolloFollowingTableViewOf(UIViewController *listVC) {
-    if (!listVC) return nil;
-    Ivar ivar = class_getInstanceVariable(object_getClass(listVC), "tableView");
-    UITableView *tableView = ivar ? object_getIvar(listVC, ivar) : nil;
+    UITableView *tableView = ApolloObjectIvar(listVC, "tableView");
     return [tableView isKindOfClass:[UITableView class]] ? tableView : nil;
+}
+
+// Canonical title of a native section (or the synthetic FOLLOWING marker).
+static NSString *ApolloFollowingCanonicalTitle(NSInteger nativeSection) {
+    switch (nativeSection) {
+        case kApolloNativeSectionFavorites:    return @"FAVORITES";
+        case kApolloNativeSectionMultireddit:  return @"MULTIREDDITS";
+        case kApolloNativeSectionModerator:    return @"MODERATOR";
+        case kApolloFollowingSyntheticSection: return @"FOLLOWING";
+        default:                               return @"";
+    }
 }
 
 // Remap-awareness bridge for ApolloHideModSubreddits / ApolloMultiredditEdit —
@@ -802,12 +896,36 @@ static UITableView *ApolloFollowingTableViewOf(UIViewController *listVC) {
 NSString *ApolloFollowingCanonicalTitleForNativeSection(UITableView *tableView, NSInteger nativeSection) {
     ApolloFollowingMap *map = ApolloFollowingActiveMapForTable(tableView);
     if (!map) return nil;
-    switch (nativeSection) {
-        case kApolloNativeSectionFavorites:   return @"FAVORITES";
-        case kApolloNativeSectionMultireddit: return @"MULTIREDDITS";
-        case kApolloNativeSectionModerator:   return @"MODERATOR";
-        default:                              return @"";
-    }
+    return ApolloFollowingCanonicalTitle(nativeSection);
+}
+
+// The visible-space twin — see ApolloFollowingSection.h. A visible section
+// number describes the layout the table is showing, so it translates through
+// the PRESENTED snapshot, never a freshly rebuilt one.
+NSString *ApolloFollowingCanonicalTitleForVisibleSection(UITableView *tableView, NSInteger visibleSection) {
+    ApolloFollowingMap *map = ApolloFollowingPresentedMapForTable(tableView);
+    if (!map) return nil;
+    NSInteger nativeSection = ApolloFollowingNativeSectionForVisible(map, visibleSection);
+    return nativeSection == NSNotFound ? @"" : ApolloFollowingCanonicalTitle(nativeSection);
+}
+
+// Swipe-to-delete state — see ApolloFollowingSection.h. UIKit sends
+// willBegin/didEndEditingRowAtIndexPath: only for a swipe, so the flag lives
+// between those two hooks below. The list's own setEditing:NO drops it too,
+// so a swipe that ever ended without didEnd can't make the next Edit look
+// like a swipe.
+static char kApolloSubredditListSwipeEditingKey;
+
+static void ApolloSubredditListSetSwipeEditing(UITableView *tableView, BOOL swiping) {
+    if (!tableView) return;
+    if (swiping == ApolloSubredditListIsSwipeEditing(tableView)) return;
+    objc_setAssociatedObject(tableView, &kApolloSubredditListSwipeEditingKey, swiping ? @YES : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ApolloLog(@"[FollowingSection] swipe-to-delete editing %@", swiping ? @"began" : @"ended");
+}
+
+BOOL ApolloSubredditListIsSwipeEditing(UITableView *tableView) {
+    return tableView && objc_getAssociatedObject(tableView, &kApolloSubredditListSwipeEditingKey) != nil;
 }
 
 // Subreddit name for a VISIBLE Subreddits-list row — see ApolloFollowingSection.h.
@@ -885,6 +1003,17 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
     return map.active ? map : nil;
 }
 
+// Native -> visible bridge for the other list modules — see
+// ApolloFollowingSection.h. Translates through the PRESENTED snapshot: the one
+// this module's own hooks just used on the way in, so a hook's native path
+// round-trips to the row that was actually touched.
+NSIndexPath *ApolloFollowingVisibleIndexPathForNative(UITableView *tableView, NSIndexPath *nativePath) {
+    if (!nativePath) return nil;
+    ApolloFollowingMap *map = ApolloFollowingPresentedMapForTable(tableView);
+    if (!map) return nativePath;
+    return ApolloFollowingVisiblePathForNative(map, nativePath);
+}
+
 #pragma mark - The list VC hooks
 
 %group ApolloFollowingList
@@ -960,8 +1089,7 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
         // label text and re-fitting is sufficient.
         UIView *header = %orig(tableView, kApolloNativeSectionModerator);
         if (!header) return nil;
-        Ivar labelIvar = class_getInstanceVariable(object_getClass(header), "label");
-        UILabel *label = labelIvar ? object_getIvar(header, labelIvar) : nil;
+        UILabel *label = ApolloObjectIvar(header, "label");
         if ([label isKindOfClass:[UILabel class]]) {
             label.text = @"FOLLOWING";
             [header sizeToFit];
@@ -1088,7 +1216,11 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
     %orig(tableView, editingStyle, nativePath);
 }
 
+// UIKit sends these two only for a row's swipe-to-delete. Mark the swipe
+// before Apollo's own willBegin runs, since that is what calls the list's
+// setEditing:YES animated:YES (see ApolloSubredditListIsSwipeEditing).
 - (void)tableView:(UITableView *)tableView willBeginEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+    ApolloSubredditListSetSwipeEditing(tableView, YES);
     ApolloFollowingMap *map = ApolloFollowingMapFor((UIViewController *)self);
     if (!map.active) {
         %orig;
@@ -1102,18 +1234,23 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
     %orig(tableView, nativePath);
 }
 
+// Apollo's didEnd ends editing with setEditing:NO, so clear the swipe after it.
 - (void)tableView:(UITableView *)tableView didEndEditingRowAtIndexPath:(NSIndexPath *)indexPath {
     ApolloFollowingMap *map = ApolloFollowingMapFor((UIViewController *)self);
-    if (!map.active || !indexPath) {
+    NSIndexPath *nativePath = map.active && indexPath ? ApolloFollowingNativePathForVisible(map, indexPath) : nil;
+    if (nativePath) {
+        %orig(tableView, nativePath);
+    } else {
         %orig;
-        return;
     }
-    NSIndexPath *nativePath = ApolloFollowingNativePathForVisible(map, indexPath);
-    if (!nativePath) {
-        %orig;
-        return;
-    }
-    %orig(tableView, nativePath);
+    ApolloSubredditListSetSwipeEditing(tableView, NO);
+}
+
+// Backstop for the swipe flag: leaving editing always ends any swipe, even one
+// UIKit closed without sending didEndEditingRow.
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+    %orig;
+    if (!editing) ApolloSubredditListSetSwipeEditing(ApolloFollowingTableViewOf((UIViewController *)self), NO);
 }
 
 // ---- Reordering --------------------------------------------------------------
@@ -1277,6 +1414,38 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
     %orig;
 }
 
+// Apollo's favorite star (see ApolloTableSnapshotIsStale). The check runs
+// before the block, while UIKit's cached counts and the model should still
+// agree. When they don't, no row the block names can pass UIKit's validation,
+// so the favorite change lands and one reload presents it. The star resolved
+// its row from the on-screen layout and reads the name from the current model,
+// so the tapped subreddit is the one toggled as long as the stale change is in
+// another section (the #1335 case: Moderator Posts, MODERATOR, Multireddits).
+// No caller gate: a stale snapshot fails every batch, whoever submits it.
+- (void)performBatchUpdates:(void (^)(void))updates completion:(void (^)(BOOL))completion {
+    UITableView *table = (UITableView *)self;
+    if (!ApolloFollowingTableIsList(table)) {
+        %orig;
+        return;
+    }
+    if (ApolloDeferMultiredditTableUpdate(table)) {
+        // Inside an expansion scope the row calls are deferred, so a real
+        // batch would register nothing and fail the same validation.
+        if (updates) updates();
+    } else if (ApolloTableSnapshotIsStale(table)) {
+        ApolloLog(@"[FollowingSection] list counts changed since the last reload; applying this batch with a reload");
+        ApolloPerformBatchAsReload(table, updates);
+    } else {
+        %orig;
+        return;
+    }
+    if (completion) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(YES);
+        });
+    }
+}
+
 - (NSIndexPath *)indexPathForRowAtPoint:(CGPoint)point {
     NSIndexPath *visible = %orig;
     void *caller = __builtin_return_address(0);
@@ -1310,8 +1479,9 @@ static ApolloFollowingMap *ApolloFollowingPresentedMapForTable(UITableView *tabl
     NSIndexPath *visible = ApolloFollowingVisiblePathForNative(map, indexPath);
     if (!visible) return %orig;
     if (visible.section != indexPath.section || visible.row != indexPath.row) {
-        ApolloLog(@"[FollowingSection] cell lookup native %ld/%ld -> visible %ld/%ld (caller %p)",
-                  (long)indexPath.section, (long)indexPath.row, (long)visible.section, (long)visible.row, caller);
+        // Every remapped lookup Apollo makes: debug level.
+        os_log_debug(ApolloFixLog(), "[ApolloFix] [FollowingSection] cell lookup native %ld/%ld -> visible %ld/%ld (caller %p)",
+                     (long)indexPath.section, (long)indexPath.row, (long)visible.section, (long)visible.row, caller);
     }
     return %orig(visible);
 }

@@ -44,6 +44,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *sApolloDeletedCommentsAr
 static NSMutableDictionary<NSString *, NSMutableArray *> *sApolloDeletedCommentsArcticInflight = nil;
 static NSDate *sApolloDeletedCommentsArcticCooldownUntil = nil;
 static NSMutableSet<NSString *> *sApolloDeletedCommentsThreadOverrides = nil;
+// Lock-free mirror of "the override set is non-empty". ApolloDeletedCommentsFeatureActive()
+// is the per-label gate for a hook that every text assignment in the app walks, on
+// Texture's background layout threads, so with the global toggle off it must not
+// reach for the registry lock at all.
+static _Bool sApolloDeletedCommentsHasThreadOverrides = false;
 
 static NSString *const ApolloDeletedCommentsMarkerKey = @"apollo_recovered_deleted_comment";
 static NSString *const ApolloDeletedCommentsReasonKey = @"apollo_recovered_deleted_reason";
@@ -112,6 +117,8 @@ void ApolloDeletedCommentsSetThreadOverride(NSString *linkFullName, BOOL enabled
         } else {
             [sApolloDeletedCommentsThreadOverrides removeObject:key];
         }
+        __atomic_store_n(&sApolloDeletedCommentsHasThreadOverrides,
+                         sApolloDeletedCommentsThreadOverrides.count > 0, __ATOMIC_RELEASE);
     }
     ApolloLog(@"[DeletedComments] Thread override %@ for %@", enabled ? @"ON" : @"OFF", key);
 }
@@ -119,6 +126,7 @@ void ApolloDeletedCommentsSetThreadOverride(NSString *linkFullName, BOOL enabled
 BOOL ApolloDeletedCommentsHasThreadOverride(NSString *linkFullName) {
     NSString *key = ApolloDeletedCommentsOverrideKeyForLink(linkFullName);
     if (key.length == 0) return NO;
+    if (!__atomic_load_n(&sApolloDeletedCommentsHasThreadOverrides, __ATOMIC_ACQUIRE)) return NO;
     @synchronized(ApolloDeletedCommentsRegistryLock()) {
         return [sApolloDeletedCommentsThreadOverrides containsObject:key];
     }
@@ -130,6 +138,7 @@ BOOL ApolloDeletedCommentsHasThreadOverride(NSString *linkFullName) {
 // threads fetch and patch while the global toggle is off.
 BOOL ApolloDeletedCommentsFeatureActive(void) {
     if (sShowDeletedComments) return YES;
+    if (!__atomic_load_n(&sApolloDeletedCommentsHasThreadOverrides, __ATOMIC_ACQUIRE)) return NO;
     @synchronized(ApolloDeletedCommentsRegistryLock()) {
         return sApolloDeletedCommentsThreadOverrides.count > 0;
     }
@@ -430,8 +439,24 @@ static NSString *ApolloDeletedCommentsLinkFullNameFromRedditURL(NSURL *url) {
     return nil;
 }
 
+// Request observation runs on both callers' threads and NSURLSession queues.
+// Keep the paired link/date state coherent and retain a reader's snapshot
+// before releasing the lock.
+static NSObject *ApolloDeletedCommentsObservedLinkLock(void) {
+    static NSObject *lock = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ lock = [NSObject new]; });
+    return lock;
+}
+
 static NSString *ApolloDeletedCommentsRecentObservedLinkFullName(void) {
-    if (sApolloDeletedCommentsLastObservedLinkFullName.length == 0 || !sApolloDeletedCommentsLastObservedLinkDate) return nil;
+    NSString *fullName = nil;
+    NSDate *observedDate = nil;
+    @synchronized (ApolloDeletedCommentsObservedLinkLock()) {
+        fullName = sApolloDeletedCommentsLastObservedLinkFullName;
+        observedDate = sApolloDeletedCommentsLastObservedLinkDate;
+    }
+    if (fullName.length == 0 || !observedDate) return nil;
     // 30 minutes, was 45 seconds. morechildren URLs carry no link id, so this
     // fallback is the ONLY thread attribution "load more comments" ever gets —
     // and on a long AskHistorians read the user easily sits in one thread past
@@ -444,8 +469,8 @@ static NSString *ApolloDeletedCommentsRecentObservedLinkFullName(void) {
     // no transform), never a false one. Observation of any newer thread
     // re-stamps this immediately, and morechildren observations below slide the
     // window while the user keeps loading.
-    if ([[NSDate date] timeIntervalSinceDate:sApolloDeletedCommentsLastObservedLinkDate] > 1800.0) return nil;
-    return sApolloDeletedCommentsLastObservedLinkFullName;
+    if ([[NSDate date] timeIntervalSinceDate:observedDate] > 1800.0) return nil;
+    return fullName;
 }
 
 // morechildren requests carry no link id in the URL — but their POST body does
@@ -556,9 +581,12 @@ void ApolloDeletedCommentsHandleRequestObservation(NSURLRequest *request, NSStri
         // Without this, back-to-back "load more" taps spaced past the TTL each
         // arrive unattributed and skip the transform.
         if (ApolloDeletedCommentsRequestLooksLikeCommentsPayload(request) &&
-            ApolloDeletedCommentsIsRedditHost(request.URL.host) &&
-            sApolloDeletedCommentsLastObservedLinkFullName.length > 0) {
-            sApolloDeletedCommentsLastObservedLinkDate = [NSDate date];
+            ApolloDeletedCommentsIsRedditHost(request.URL.host)) {
+            @synchronized (ApolloDeletedCommentsObservedLinkLock()) {
+                if (sApolloDeletedCommentsLastObservedLinkFullName.length > 0) {
+                    sApolloDeletedCommentsLastObservedLinkDate = [NSDate date];
+                }
+            }
         }
         return;
     }
@@ -568,9 +596,12 @@ void ApolloDeletedCommentsHandleRequestObservation(NSURLRequest *request, NSStri
     // always points at the thread the user is actually in — otherwise a
     // non-overridden thread's "load more comments" (whose URL has no link id)
     // would be misattributed to a previously overridden thread.
-    BOOL changed = ![sApolloDeletedCommentsLastObservedLinkFullName isEqualToString:fullName];
-    sApolloDeletedCommentsLastObservedLinkFullName = [fullName copy];
-    sApolloDeletedCommentsLastObservedLinkDate = [NSDate date];
+    BOOL changed = NO;
+    @synchronized (ApolloDeletedCommentsObservedLinkLock()) {
+        changed = ![sApolloDeletedCommentsLastObservedLinkFullName isEqualToString:fullName];
+        sApolloDeletedCommentsLastObservedLinkFullName = [fullName copy];
+        sApolloDeletedCommentsLastObservedLinkDate = [NSDate date];
+    }
     if (changed) {
         ApolloLog(@"[DeletedComments] Observed Reddit comments request %@ (%@)", fullName, source ?: @"unknown");
     }

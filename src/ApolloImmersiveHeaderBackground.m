@@ -6,7 +6,9 @@
 #import <objc/runtime.h>
 
 #import "ApolloCommon.h"
+#import "ApolloMemoryDiagnostics.h"
 #import "ApolloThemeRuntime.h"
+#import "ApolloClasses.h"
 
 static CGFloat const ApolloImmersiveBackdropBlurSigma = 28.0;
 // Height of the alpha feather at the sharp banner's bottom edge, where it
@@ -15,8 +17,9 @@ static CGFloat const ApolloImmersiveSharpFeatherHeight = 44.0;
 
 static BOOL ApolloImmersiveColorProvidesSurface(UIColor *color, UITraitCollection *traits) {
     if (!color) return NO;
-    UIColor *resolved = [color resolvedColorWithTraitCollection:
-        traits ?: UIScreen.mainScreen.traitCollection];
+    // Callers must supply the host view's traits (every caller of
+    // ApolloImmersiveResolvedPageColor passes a view/VC traitCollection).
+    UIColor *resolved = [color resolvedColorWithTraitCollection:traits];
     return resolved && CGColorGetAlpha(resolved.CGColor) > 0.01;
 }
 
@@ -31,16 +34,13 @@ UIColor *ApolloImmersiveResolvedPageColor(UIColor *fallback, UITraitCollection *
 
 UIVisualEffect *ApolloImmersiveGlassEffect(UIColor *tintColor, CGFloat tintAlpha, BOOL interactive) {
     if (!IsLiquidGlass()) return nil;
-    Class glassClass = NSClassFromString(@"UIGlassEffect");
-    if (!glassClass || ![glassClass respondsToSelector:@selector(effectWithStyle:)]) return nil;
+    Class glassClass = ApolloClassUIGlassEffect;
     id effect = ((id (*)(id, SEL, NSInteger))objc_msgSend)(glassClass, @selector(effectWithStyle:), 0);
-    if (tintColor && [effect respondsToSelector:@selector(setTintColor:)]) {
+    if (tintColor) {
         ((void (*)(id, SEL, id))objc_msgSend)(effect, @selector(setTintColor:),
                                                [tintColor colorWithAlphaComponent:tintAlpha]);
     }
-    if ([effect respondsToSelector:@selector(setInteractive:)]) {
-        ((void (*)(id, SEL, BOOL))objc_msgSend)(effect, @selector(setInteractive:), interactive);
-    }
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(effect, @selector(setInteractive:), interactive);
     return effect;
 }
 
@@ -198,8 +198,9 @@ void ApolloImmersiveBannerIsLightAsync(UIImage *banner, void (^completion)(BOOL 
 static CGFloat const ApolloImmersiveBackdropMaxDimension = 640.0;
 // Defense-in-depth alongside countLimit below — bounds the cache by actual
 // decoded bytes, not just entry count, so a handful of huge banners can't
-// blow past a reasonable memory budget.
-static NSUInteger const ApolloImmersiveBackdropCacheByteBudget = 32 * 1024 * 1024;
+// blow past a reasonable memory budget. Every entry is downsampled to the
+// 640px cap above first (~1.6MB), so this holds five headers.
+static NSUInteger const ApolloImmersiveBackdropCacheByteBudget = 8 * 1024 * 1024;
 
 static UIImage *ApolloImmersiveDownsampledImage(UIImage *image, CGFloat maxDimension) {
     CGSize size = image.size;
@@ -250,19 +251,14 @@ static UIImage *ApolloImmersiveGaussianBlurredImage(UIImage *image) {
     return result;
 }
 
-static NSUInteger ApolloImmersiveImageByteCost(UIImage *image) {
-    if (!image) return 0;
-    CGFloat scale = MAX((CGFloat)1.0, image.scale);
-    return (NSUInteger)(image.size.width * scale * image.size.height * scale * 4.0);
-}
-
 static NSCache<NSString *, UIImage *> *ApolloImmersiveBackdropCache(void) {
     static NSCache<NSString *, UIImage *> *cache = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         cache = [[NSCache alloc] init];
-        cache.countLimit = 12;
+        cache.countLimit = 8;
         cache.totalCostLimit = ApolloImmersiveBackdropCacheByteBudget;
+        ApolloMemoryRegisterPurgableCache(@"immersive-backdrops", cache);
     });
     return cache;
 }
@@ -319,7 +315,7 @@ static void ApolloImmersiveRequestBackdrop(UIImage *banner, void (^completion)(U
                 if (backdrop) {
                     [ApolloImmersiveBackdropCache() setObject:backdrop
                                                        forKey:key
-                                                         cost:ApolloImmersiveImageByteCost(backdrop)];
+                                                         cost:ApolloImageByteCost(backdrop)];
                 }
                 waiters = [ApolloImmersiveBackdropWaiters()[key] copy];
                 [ApolloImmersiveBackdropWaiters() removeObjectForKey:key];

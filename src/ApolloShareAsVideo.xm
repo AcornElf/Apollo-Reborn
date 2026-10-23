@@ -39,11 +39,11 @@
 // the video, then present our own UIActivityViewController with the file. Any
 // failure falls back to Apollo's normal image share so the button never dead-ends.
 //
-// Coexists with ApolloShareAsImageLink's "Include Link" row: our row anchors to
+// Coexists with ApolloShareAsImageLink's Link row: our row anchors to
 // the Share button's current position and pushes the button down (after %orig) so
-// it stacks below whatever other modules added. When the Include Link option is on,
-// the exported video carries the post link too — added to our share sheet for
-// messaging/mail (not Save Video) — exactly as Include Link does for the image.
+// it stacks below whatever other modules added. The exported video honors No Link,
+// Post Link, and (for comment GIFs) Comment Link — added to our share sheet for
+// messaging/mail, not Save Video, exactly as the image path does.
 //
 // No hardcoded binary addresses: everything is ObjC-runtime ivar access (ivar
 // names from class-dump headers) plus public AVFoundation/UIKit, guarded.
@@ -56,7 +56,7 @@
 // suppresses the native image share before Link's handler runs. Each module's row
 // also stacks below the previous one's in its post-%orig viewDidLayoutSubviews pass.
 // If you reorder these in the Makefile, re-verify the share-button chain and the row
-// layout. (The Include-Link double-append guard in ApolloShareAsImageLink no longer
+// layout. (The link double-append guard in ApolloShareAsImageLink no longer
 // depends on this order — see that file — but the layout stacking still does.)
 
 #import <UIKit/UIKit.h>
@@ -64,7 +64,10 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "ApolloCommon.h"
+#import "ApolloSwiftRuntime.h"
 #import "ApolloHostedVideo.h"
+#import "ApolloShareAsImageLinkMode.h"
+#import "ApolloClasses.h"
 
 #pragma mark - Tunables
 
@@ -92,13 +95,6 @@ static char kApolloShareVideoSessionKey;   // strong AVAssetExportSession (in fl
 static char kApolloShareVideoForceNativeKey; // NSNumber(BOOL): force the native image share once
 
 #pragma mark - Runtime ivar helpers
-
-static id ApolloSVIvarObject(id obj, const char *name) {
-    if (!obj || !name) return nil;
-    Ivar ivar = class_getInstanceVariable(object_getClass(obj), name);
-    if (!ivar) return nil;
-    @try { return object_getIvar(obj, ivar); } @catch (__unused NSException *e) { return nil; }
-}
 
 static double ApolloSVIvarDouble(id obj, const char *name) {
     if (!obj || !name) return 0.0;
@@ -223,8 +219,7 @@ static BOOL ApolloSVPostIsExportableVideo(id link) {
 static BOOL ApolloSVCommentExportable(id comment) {
     if (!comment) return NO;
     NSDictionary *giphy = (NSDictionary *)ApolloSVCall(comment, @selector(inlineGiphyIDsToURLs));
-    if ([giphy isKindOfClass:[NSDictionary class]] && giphy.count > 0) return YES;
-    return NO;
+    return [giphy isKindOfClass:[NSDictionary class]] && giphy.count > 0;
 }
 
 // First Giphy id on the comment, and its progressive .mp4. Apollo's resolver gives
@@ -273,13 +268,11 @@ static NSURL *ApolloSVLowestDashURL(NSData *mpdData, NSURL *mpdURL, NSString *co
         // Bound the search to this AdaptationSet so we don't pick the other track's
         // BaseURL: stop at the next "<AdaptationSet" after the marker.
         NSUInteger start = set.location;
-        NSRange rest = NSMakeRange(start, xml.length - start);
         NSRange next = [xml rangeOfString:@"<AdaptationSet"
                                   options:0
                                     range:NSMakeRange(start + marker.length, xml.length - start - marker.length)];
         NSUInteger end = (next.location != NSNotFound) ? next.location : xml.length;
         searchRange = NSMakeRange(start, end - start);
-        (void)rest;
     } else if (![contentType isEqualToString:@"video"]) {
         // No audio AdaptationSet -> no audio track.
         return nil;
@@ -396,7 +389,7 @@ static CGRect ApolloSVConvertRectToNode(id from, CGRect rect, id toNode) {
 // The card image Apollo already rendered for the preview. Points; .scale is the
 // screen scale (pixels = size * scale).
 static UIImage *ApolloSVCardImage(id vc) {
-    UIImageView *iv = (UIImageView *)ApolloSVIvarObject(vc, "previewSnapshotImageView");
+    UIImageView *iv = (UIImageView *)ApolloObjectIvar(vc, "previewSnapshotImageView");
     if ([iv isKindOfClass:[UIImageView class]] && [iv.image isKindOfClass:[UIImage class]]) return iv.image;
     return nil;
 }
@@ -436,12 +429,12 @@ static id ApolloSVLargestMediaNode(id root) {
 // The media region as a fraction (0..1) of the card. For a post it's the preview's
 // imageNode; for a comment it's the largest media node inside baseCommentNode.
 static BOOL ApolloSVMediaRectNormalized(id vc, CGRect *outNorm) {
-    id previewNode = ApolloSVIvarObject(vc, "previewNode");
+    id previewNode = ApolloObjectIvar(vc, "previewNode");
     if (!previewNode) return NO;
 
     id mediaNode = nil;
-    if (ApolloSVIvarObject(vc, "comment") != nil) {
-        id baseCommentNode = ApolloSVIvarObject(previewNode, "baseCommentNode");
+    if (ApolloObjectIvar(vc, "comment") != nil) {
+        id baseCommentNode = ApolloObjectIvar(previewNode, "baseCommentNode");
         mediaNode = ApolloSVLargestMediaNode(baseCommentNode ?: previewNode);
     } else {
         // Native media posts expose the preview's imageNode directly. External
@@ -449,12 +442,12 @@ static BOOL ApolloSVMediaRectNormalized(id vc, CGRect *outNorm) {
         // thumbnail isn't `imageNode`, so target the largest image/video node in
         // the card — that thumbnail is what we composite the video over. Each path
         // cross-falls-back to the other for robustness.
-        NSURL *pageURL = (NSURL *)ApolloSVCall(ApolloSVIvarObject(vc, "link"), @selector(URL));
+        NSURL *pageURL = (NSURL *)ApolloSVCall(ApolloObjectIvar(vc, "link"), @selector(URL));
         if (ApolloHostedVideoKindForURL(pageURL) != ApolloHostedVideoNone) {
-            mediaNode = ApolloSVLargestMediaNode(previewNode) ?: ApolloSVIvarObject(previewNode, "imageNode");
+            mediaNode = ApolloSVLargestMediaNode(previewNode) ?: ApolloObjectIvar(previewNode, "imageNode");
             ApolloLog(@"[ShareVideo] hosted-link post media node=%@", mediaNode ? @"largest" : @"none");
         } else {
-            mediaNode = ApolloSVIvarObject(previewNode, "imageNode") ?: ApolloSVLargestMediaNode(previewNode);
+            mediaNode = ApolloObjectIvar(previewNode, "imageNode") ?: ApolloSVLargestMediaNode(previewNode);
         }
     }
     if (!mediaNode) return NO;
@@ -993,29 +986,18 @@ static void ApolloSVUpdateHUD(id vc, float p) {
 
 #pragma mark - Share orchestration
 
-// RDKLink.permalink is relative ("/r/.../comments/..."); resolve to an absolute
-// reddit URL. Mirrors the Include Link feature so a video share can carry the link.
-static NSURL *ApolloSVAbsoluteURL(NSURL *url) {
-    if (![url isKindOfClass:[NSURL class]]) return nil;
-    if (url.scheme.length > 0 && url.host.length > 0) return url;
-    NSString *path = url.absoluteString ?: @"";
-    if (path.length == 0) return nil;
-    if (![path hasPrefix:@"/"]) path = [@"/" stringByAppendingString:path];
-    return [NSURL URLWithString:[@"https://www.reddit.com" stringByAppendingString:path]] ?: url;
-}
-
 static NSURL *ApolloSVPostURL(id vc) {
-    id link = ApolloSVIvarObject(vc, "link");
+    id link = ApolloObjectIvar(vc, "link");
     NSURL *u = (NSURL *)ApolloSVCall(link, @selector(permalink));
-    if ([u isKindOfClass:[NSURL class]]) return ApolloSVAbsoluteURL(u);
+    if ([u isKindOfClass:[NSURL class]]) return ApolloShareLinkAbsoluteURL(u);
     u = (NSURL *)ApolloSVCall(link, @selector(URL));
-    if ([u isKindOfClass:[NSURL class]]) return ApolloSVAbsoluteURL(u);
+    if ([u isKindOfClass:[NSURL class]]) return ApolloShareLinkAbsoluteURL(u);
     return nil;
 }
 
 // Supplies the post link to messaging/mail activities (not Save Video / Assign to
 // Contact / Print), so an exported video can be shared WITH a tappable link —
-// matching how the Include Link option behaves for the image.
+// matching how the Link option behaves for the image.
 @interface ApolloSVLinkItemSource : NSObject <UIActivityItemSource>
 @property (nonatomic, strong) NSURL *url;
 @end
@@ -1037,16 +1019,19 @@ static void ApolloSVPresentShare(id vc, NSURL *fileURL) {
         [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
         return;
     }
-    // If the (separate) Include Link option is on, attach the post link too — a
-    // shared video carries it just like a shared image does.
+    // Honor the same Link selection as image exports. This matters for comment
+    // GIFs: Share-as-Video suppresses the native image path, so it must resolve
+    // the selected comment permalink itself rather than consulting only the old
+    // Include Link boolean.
     NSMutableArray *items = [NSMutableArray arrayWithObject:fileURL];
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"ApolloShareAsImageIncludeLink"]) {
-        NSURL *postURL = ApolloSVPostURL(vc);
-        if (postURL) {
-            ApolloSVLinkItemSource *src = [[ApolloSVLinkItemSource alloc] init];
-            src.url = postURL;
-            [items addObject:src];
-        }
+    id comment = ApolloObjectIvar(vc, "comment");
+    ApolloShareLinkMode linkMode = ApolloShareLinkModeRead(NSUserDefaults.standardUserDefaults,
+                                                            comment != nil);
+    NSURL *selectedURL = ApolloShareLinkURLForMode(linkMode, comment, ApolloSVPostURL(vc));
+    if (selectedURL) {
+        ApolloSVLinkItemSource *src = [[ApolloSVLinkItemSource alloc] init];
+        src.url = selectedURL;
+        [items addObject:src];
     }
     UIActivityViewController *avc = [[UIActivityViewController alloc]
         initWithActivityItems:items applicationActivities:nil];
@@ -1074,14 +1059,14 @@ static void ApolloSVFallbackToNative(id vc) {
 // Resolves the exportable source for either a post (v.redd.it / direct mp4) or a
 // comment (inline Giphy → progressive mp4). Calls back on the main queue.
 static void ApolloSVResolveForVC(id vc, void (^completion)(NSURL *videoURL, NSURL *audioURL)) {
-    id comment = ApolloSVIvarObject(vc, "comment");
+    id comment = ApolloObjectIvar(vc, "comment");
     if (comment) {
         NSURL *mp4 = ApolloSVCommentGiphyMP4(comment);
         ApolloLog(@"[ShareVideo] comment giphy mp4=%@", mp4.absoluteString ?: @"-");
         dispatch_async(dispatch_get_main_queue(), ^{ completion(mp4, nil); });
         return;
     }
-    ApolloSVResolveSources(ApolloSVIvarObject(vc, "link"), ^(NSURL *v, NSURL *a, __unused CGSize n) {
+    ApolloSVResolveSources(ApolloObjectIvar(vc, "link"), ^(NSURL *v, NSURL *a, __unused CGSize n) {
         completion(v, a);
     });
 }
@@ -1092,9 +1077,9 @@ static void ApolloSVResolveForVC(id vc, void (^completion)(NSURL *videoURL, NSUR
 static BOOL ApolloSVBeginVideoShare(id vc) {
     if ([objc_getAssociatedObject(vc, &kApolloShareVideoExportingKey) boolValue]) return YES; // already in flight
 
-    id comment = ApolloSVIvarObject(vc, "comment");
+    id comment = ApolloObjectIvar(vc, "comment");
     BOOL exportable = comment ? ApolloSVCommentExportable(comment)
-                              : ApolloSVPostIsExportableVideo(ApolloSVIvarObject(vc, "link"));
+                              : ApolloSVPostIsExportableVideo(ApolloObjectIvar(vc, "link"));
     if (!exportable) return NO;
 
     UIImage *card = ApolloSVCardImage(vc);
@@ -1153,17 +1138,17 @@ static void ApolloSVInstallRow(id vc) {
     if (objc_getAssociatedObject(vc, &kApolloShareVideoSwitchKey)) return; // already built
 
     // Shown for video posts AND for comments carrying an exportable inline GIF.
-    id comment = ApolloSVIvarObject(vc, "comment");
+    id comment = ApolloObjectIvar(vc, "comment");
     BOOL isVideo = comment ? ApolloSVCommentExportable(comment)
-                           : ApolloSVPostIsExportableVideo(ApolloSVIvarObject(vc, "link"));
+                           : ApolloSVPostIsExportableVideo(ApolloObjectIvar(vc, "link"));
     objc_setAssociatedObject(vc, &kApolloShareVideoIsVideoKey, @(isVideo), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!isVideo) {
         ApolloLog(@"[ShareVideo] viewDidLoad: no exportable %@ media — no row", comment ? @"comment" : @"post");
         return;
     }
 
-    UILabel *watermarkLabel = (UILabel *)ApolloSVIvarObject(vc, "watermarkRowTitleLabel");
-    UISwitch *watermarkSwitch = (UISwitch *)ApolloSVIvarObject(vc, "watermarkRowSwitch");
+    UILabel *watermarkLabel = (UILabel *)ApolloObjectIvar(vc, "watermarkRowTitleLabel");
+    UISwitch *watermarkSwitch = (UISwitch *)ApolloObjectIvar(vc, "watermarkRowSwitch");
     if (![watermarkLabel isKindOfClass:[UILabel class]] || ![watermarkSwitch isKindOfClass:[UISwitch class]]) {
         ApolloLog(@"[ShareVideo] watermark row not found — skipping row");
         return;
@@ -1186,7 +1171,7 @@ static void ApolloSVInstallRow(id vc) {
     [container addSubview:toggle];
 
     UIView *separator = [[UIView alloc] init];
-    NSArray *separators = (NSArray *)ApolloSVIvarObject(vc, "separators");
+    NSArray *separators = (NSArray *)ApolloObjectIvar(vc, "separators");
     UIView *templateSep = [separators isKindOfClass:[NSArray class]] ? [separators lastObject] : nil;
     separator.backgroundColor = [templateSep isKindOfClass:[UIView class]]
         ? templateSep.backgroundColor : [UIColor colorWithWhite:0.5 alpha:0.3];
@@ -1200,7 +1185,7 @@ static void ApolloSVInstallRow(id vc) {
 
 // Width helper: prefer the native separator width, fall back to the label's.
 static CGFloat ApolloSVRowWidth(id vc, CGRect wl) {
-    NSArray *separators = (NSArray *)ApolloSVIvarObject(vc, "separators");
+    NSArray *separators = (NSArray *)ApolloObjectIvar(vc, "separators");
     UIView *templateSep = [separators isKindOfClass:[NSArray class]] ? [separators lastObject] : nil;
     if ([templateSep isKindOfClass:[UIView class]] && templateSep.frame.size.width > 1) return templateSep.frame.size.width;
     return wl.size.width;
@@ -1215,9 +1200,9 @@ static void ApolloSVLayoutRow(id vc) {
     UIView *separator = (UIView *)objc_getAssociatedObject(vc, &kApolloShareVideoSeparatorKey);
     if (!label || !toggle) return;
 
-    UILabel *watermarkLabel = (UILabel *)ApolloSVIvarObject(vc, "watermarkRowTitleLabel");
-    UISwitch *watermarkSwitch = (UISwitch *)ApolloSVIvarObject(vc, "watermarkRowSwitch");
-    UIView *shareButton = (UIView *)ApolloSVIvarObject(vc, "shareButton");
+    UILabel *watermarkLabel = (UILabel *)ApolloObjectIvar(vc, "watermarkRowTitleLabel");
+    UISwitch *watermarkSwitch = (UISwitch *)ApolloObjectIvar(vc, "watermarkRowSwitch");
+    UIView *shareButton = (UIView *)ApolloObjectIvar(vc, "shareButton");
     if (![watermarkLabel isKindOfClass:[UILabel class]] || ![watermarkSwitch isKindOfClass:[UISwitch class]] ||
         ![shareButton isKindOfClass:[UIView class]]) return;
 
@@ -1241,7 +1226,7 @@ static void ApolloSVLayoutRow(id vc) {
                               ws.size.width, ws.size.height);
 
     if (separator) {
-        CGFloat hair = 1.0 / [UIScreen mainScreen].scale;
+        CGFloat hair = 1.0 / separator.traitCollection.displayScale;
         separator.frame = CGRectMake(wl.origin.x, CGRectGetMaxY(label.frame) - hair, ApolloSVRowWidth(vc, wl), hair);
     }
 
@@ -1303,7 +1288,7 @@ static void ApolloSVLayoutRow(id vc) {
     @try {
         if (!isfinite(frame.origin.y) || !isfinite(frame.size.height) || frame.size.height <= 1.0) return frame;
         id presented = [(UIPresentationController *)self presentedViewController];
-        Class shareVCClass = objc_getClass("_TtC6Apollo26ShareAsImageViewController");
+        Class shareVCClass = ApolloClassShareAsImageViewController;
         if (shareVCClass && [presented isMemberOfClass:shareVCClass] &&
             objc_getAssociatedObject(presented, &kApolloShareVideoSwitchKey)) {
             double pitch = ApolloSVIvarDouble(presented, "rowHeight");

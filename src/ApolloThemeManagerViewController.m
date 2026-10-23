@@ -382,7 +382,7 @@ enum { ESName, ESVariant, ESColors, ESAdvanced, ESFont, ESGenerate, ESPreview, E
         // reflects any window-level appearance override (Apollo's own theme
         // system / the runtime); the raw screen traits can disagree with what
         // the user is actually looking at.
-        _editingMode = CurrentAppearanceMode(UIScreen.mainScreen.traitCollection);
+        _editingMode = CurrentAppearanceMode(self.traitCollection);
     }
     return self;
 }
@@ -962,11 +962,20 @@ static NSString *SpacedThemeName(NSString *raw) {
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayHeaderView:(UIView *)view forSection:(NSInteger)section {
-    if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return;
-    UITableViewHeaderFooterView *header = (UITableViewHeaderFooterView *)view;
-    header.textLabel.textColor = [self themeColorForToken:ApolloThemeTokenSecondaryLabel
-                                                 fallback:UIColor.secondaryLabelColor];
-    header.contentView.backgroundColor = UIColor.clearColor;
+    if (@available(iOS 26.0, *)) {
+        [super tableView:tableView willDisplayHeaderView:view forSection:section];
+        if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return;
+        UITableViewHeaderFooterView *header = (UITableViewHeaderFooterView *)view;
+        // The shared header callback owns typography and the native/custom
+        // settings palette; keep its color for both labels and configurations.
+        header.contentView.backgroundColor = UIColor.clearColor;
+    } else {
+        if (![view isKindOfClass:[UITableViewHeaderFooterView class]]) return;
+        UITableViewHeaderFooterView *header = (UITableViewHeaderFooterView *)view;
+        header.textLabel.textColor = [self themeColorForToken:ApolloThemeTokenSecondaryLabel
+                                                     fallback:UIColor.secondaryLabelColor];
+        header.contentView.backgroundColor = UIColor.clearColor;
+    }
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayFooterView:(UIView *)view forSection:(NSInteger)section {

@@ -16,8 +16,10 @@
 // only choose the per-subreddit memory (when the URL carried a subreddit) or Default Sort, and
 // nothing revisits the choice once the post arrives: in the whole binary `suggestedSort` is
 // read by init(link:) and the sort menu only, never by loadComments() or its completion.
-// "Remember Post Sort" (ApolloPerPostCommentSort.xm) has the matching gap — its viewDidLoad
-// write needs `link` to look the post up — so it never applied to URL opens either.
+// "Remember Post Sort" (ApolloPerPostCommentSort.xm) used to have the matching gap — its
+// viewDidLoad write needed `link` to look the post up. It now reads the `linkID` ivar on
+// link-less opens too, so a remembered post sort feeds the first fetch there as well; the
+// completion below still corrects a fetch that went out on something else.
 //
 // Floating Tabs (ApolloFloatingTabs.xm) reopen relaunch-restored tabs through the same router;
 // such a tab remembers the sort its screen was last on and publishes it for the few seconds the
@@ -62,6 +64,7 @@
 #import "ApolloCommon.h"
 #import "ApolloFloatingTabs.h"
 #import "ApolloPerPostCommentSort.h"
+#import "ApolloSessionRestoration.h"
 #import "ApolloState.h"
 #import "ApolloSwiftRuntime.h"
 #import "UserDefaultConstants.h"
@@ -119,6 +122,11 @@ static NSString *UCSStringProperty(id object, SEL selector) {
 // its post above even that (the screen's own last sort). `reason` names the winning rule.
 static int64_t UCSDesiredSort(id link, NSString *postID, NSString **reason) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    int64_t restoredSort = ApolloSessionRestorationPendingCommentSortForPost(postID);
+    if (UCSIsRealSort(restoredSort)) {
+        *reason = @"Session Restore";
+        return restoredSort;
+    }
     int64_t tabSort = ApolloFloatingTabsPendingCommentSortForPost(postID);
     if (UCSIsRealSort(tabSort)) {
         *reason = @"Floating Tab";
@@ -185,8 +193,7 @@ static NSString *UCSSortAccessibilityLabel(int64_t raw) {
 // the whole job. Goes through UIButton's setter so the Liquid Glass item strip's re-templating
 // hook sees the change like it sees Apollo's own.
 static void UCSRedrawSortButton(id vc, int64_t raw) {
-    Ivar ivar = class_getInstanceVariable(object_getClass(vc), "sortBarButtonItem");
-    UIButton *button = ivar ? object_getIvar(vc, ivar) : nil;
+    UIButton *button = ApolloObjectIvar(vc, "sortBarButtonItem");
     if (![button isKindOfClass:[UIButton class]]) return;
     NSString *asset = UCSSortAssetName(raw);
     UIImage *image = asset ? [UIImage imageNamed:asset] : nil;
@@ -287,18 +294,25 @@ static NSString *UCSBarePostID(NSString *identifier) {
             // use it — no second round-trip; the completion still corrects a fetch that went out on
             // something else. Live goes to the network as New, exactly as loadComments sends it, and
             // the fetch completion starts Apollo's live timer when it finds currentSort on Live.
-            int64_t tabSort = ApolloFloatingTabsPendingCommentSortForPost(postID);
-            if (UCSIsRealSort(tabSort)) {
+            int64_t openingSort = ApolloSessionRestorationPendingCommentSortForPost(postID);
+            NSString *openingReason = @"Session Restore";
+            if (!UCSIsRealSort(openingSort)) {
+                openingSort = ApolloFloatingTabsPendingCommentSortForPost(postID);
+                openingReason = @"Floating Tab";
+            }
+            if (UCSIsRealSort(openingSort)) {
                 int64_t cur = 0;
                 BOOL curSet = ApolloCommentsVCReadCurrentSort(self, &cur);
-                if (curSet && cur == tabSort) {
-                    ApolloLog(@"[URLOpenSort] %@: already on %@ (Floating Tab)", postID, ApolloCommentSortName(tabSort));
-                } else if (ApolloCommentsVCWriteCurrentSort(self, tabSort)) {
-                    ApolloLog(@"[URLOpenSort] %@: opening on %@ (Floating Tab; was %@)", postID,
-                              ApolloCommentSortName(tabSort), curSet ? ApolloCommentSortName(cur) : @"(nil)");
+                if (curSet && cur == openingSort) {
+                    ApolloLog(@"[URLOpenSort] %@: already on %@ (%@)", postID,
+                              ApolloCommentSortName(openingSort), openingReason);
+                } else if (ApolloCommentsVCWriteCurrentSort(self, openingSort)) {
+                    ApolloLog(@"[URLOpenSort] %@: opening on %@ (%@; was %@)", postID,
+                              ApolloCommentSortName(openingSort), openingReason,
+                              curSet ? ApolloCommentSortName(cur) : @"(nil)");
                 } else {
-                    ApolloLog(@"[URLOpenSort] %@: could not pre-write %@ (Floating Tab); the fetch completion will correct it",
-                              postID, ApolloCommentSortName(tabSort));
+                    ApolloLog(@"[URLOpenSort] %@: could not pre-write %@ (%@); the fetch completion will correct it",
+                              postID, ApolloCommentSortName(openingSort), openingReason);
                 }
             }
         } else {
@@ -377,7 +391,7 @@ static NSString *UCSBarePostID(NSString *identifier) {
                 // icon and menu describe the comments that are actually on screen.
                 id vc2 = weakVC;
                 if (vc2 && ApolloCommentsVCWriteCurrentSort(vc2, preRaw)) UCSRedrawSortButton(vc2, preRaw);
-                ApolloLog(@"[URLOpenSort] %@: refetch on %@ failed (%@); showing the %@ response",
+                ApolloLogError(@"[URLOpenSort] %@: refetch on %@ failed (%@); showing the %@ response",
                           postID, ApolloCommentSortName(desired), [error2 isKindOfClass:[NSError class]] ? ((NSError *)error2).localizedDescription : @"no link",
                           ApolloCommentSortName(preRaw));
                 original(result, error);
