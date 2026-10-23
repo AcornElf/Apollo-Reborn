@@ -96,6 +96,7 @@ static UILabel *apollo_firstNonEmptyLabel(UIView *v) {
 
 %end
 
+
 %ctor {
     %init;
 }

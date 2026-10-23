@@ -1,5 +1,6 @@
 #import "ApolloSearchLandingViewController.h"
 #import "ApolloThemeRuntime.h"
+#import "settings/ApolloSettingsTableViewController.h"
 #import "ApolloSearchLandingPreferences.h"
 #import "ApolloState.h"
 @interface ApolloSearchLandingRow : UIControl
@@ -84,6 +85,42 @@
 - (void)refreshTheme;
 @end
 
+// Share Apollo's native heading colour with the custom landing page.
+static UIColor *sApolloNativeHeadingColor = nil;
+
+UIColor *ApolloSearchNativeHeadingColor(void) {
+    return sApolloNativeHeadingColor ?: ApolloThemeSettingsSecondaryTextColor()
+        ?: UIColor.secondaryLabelColor;
+}
+
+static void apollo_applyNativeHeadingColor(UIView *view) {
+    if (!view) return;
+
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        if ([label.text isEqualToString:@"TRENDING SUBREDDITS"] ||
+            [label.text isEqualToString:@"RECENTLY VISITED"]) {
+            if (sApolloNativeHeadingColor) {
+                label.textColor = sApolloNativeHeadingColor;
+            }
+        }
+    }
+
+    for (UIView *child in view.subviews) {
+        apollo_applyNativeHeadingColor(child);
+    }
+}
+
+
+void ApolloSearchUpdateNativeHeadingColor(UIColor *color) {
+    if (!color) return;
+    sApolloNativeHeadingColor = color;
+
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        apollo_applyNativeHeadingColor(window);
+    }
+}
+
 @implementation ApolloSearchLandingSection
 - (instancetype)initWithTitle:(NSString *)title {
     if (!(self = [super initWithFrame:CGRectZero])) return nil;
@@ -92,8 +129,9 @@
     _heading.translatesAutoresizingMaskIntoConstraints = NO;
     _heading.text = title;
     _heading.hidden = !title.length;
-    _heading.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
-    _heading.adjustsFontForContentSizeCategory = YES;
+    _heading.font = ApolloSettingsFont(UIFontTextStyleFootnote, self.traitCollection);
+    _heading.adjustsFontForContentSizeCategory = NO;
+
     _heading.numberOfLines = 0;
     _heading.accessibilityTraits |= UIAccessibilityTraitHeader;
     _card = [[UIView alloc] init];
@@ -172,7 +210,10 @@
 
 - (void)refreshTheme {
     UIColor *secondary = ApolloThemeSettingsSecondaryTextColor() ?: UIColor.secondaryLabelColor;
-    self.heading.textColor = secondary;
+    self.heading.font = ApolloSettingsFont(UIFontTextStyleFootnote, self.traitCollection);
+    self.heading.adjustsFontForContentSizeCategory = NO;
+    self.heading.textColor = ApolloSearchNativeHeadingColor();
+
     self.emptyLabel.textColor = secondary;
     self.card.backgroundColor = ApolloThemeCardBackgroundColor() ?: UIColor.secondarySystemGroupedBackgroundColor;
     UIColor *separatorColor = ApolloThemeSeparatorColor() ?: UIColor.separatorColor;

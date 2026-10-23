@@ -72,7 +72,12 @@
 @interface _TtC6Apollo20SearchViewController : UIViewController
 - (void)apollo_refreshTrendingSubreddits:(UIRefreshControl *)refreshControl;
 - (void)apollo_searchLandingChanged:(NSNotification *)notification;
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(long long)section;
 @end
+
+extern "C" UIColor *ApolloSearchNativeHeadingColor(void);
+extern "C" void ApolloSearchUpdateNativeHeadingColor(UIColor *color);
+extern "C" BOOL ApolloSearchCaptureTrendingHeading(UIView *headerView);
 
 @interface ApolloSearchRefreshControl : UIRefreshControl
 @end
@@ -496,6 +501,14 @@ static void ApolloSearchTabUpdateLanding(UIViewController *vc) {
     BOOL show = ApolloSearchTabIsDefaultState(vc);
     ApolloSearchLandingViewController *landing = ApolloSearchTabLanding(vc);
     if (!landing && show && ApolloSearchTabTableView(vc)) {
+        // Capture Apollo's real Trending heading before installing the custom landing.
+        UITableView *nativeTable = ApolloSearchTabTableView(vc);
+        if ([vc respondsToSelector:@selector(tableView:viewForHeaderInSection:)]) {
+            UIView *nativeHeader =
+                [(id)vc tableView:nativeTable viewForHeaderInSection:2];
+            ApolloSearchCaptureTrendingHeading(nativeHeader);
+        }
+
         // Use Apollo's original artwork, including the same #647 weight fix
         // applied to its native Random Subreddit row below.
         UIImage *trendingIcon = [[UIImage imageNamed:@"option-trending"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
@@ -888,6 +901,53 @@ static void ApolloSearchTabScheduleLandingUpdate(UIViewController *vc) {
     }
     // Prevent UIKit from handling the same re-selection again.
     return NO;
+}
+
+%end
+
+
+static UILabel *apollo_searchFirstNonEmptyLabel(UIView *view) {
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        if (label.text.length > 0) return label;
+    }
+
+    for (UIView *child in view.subviews) {
+        UILabel *label = apollo_searchFirstNonEmptyLabel(child);
+        if (label) return label;
+    }
+
+    return nil;
+}
+
+BOOL ApolloSearchCaptureTrendingHeading(UIView *headerView) {
+    UILabel *label = apollo_searchFirstNonEmptyLabel(headerView);
+    if (!label ||
+        [label.text caseInsensitiveCompare:@"TRENDING SUBREDDITS"] != NSOrderedSame) {
+        return NO;
+    }
+
+    ApolloSearchUpdateNativeHeadingColor(label.textColor);
+    return YES;
+}
+
+%hook _TtC6Apollo22ApolloHeaderFooterView
+
+- (void)layoutSubviews {
+    %orig;
+
+    UILabel *label = apollo_searchFirstNonEmptyLabel((UIView *)self);
+    if ([label.text caseInsensitiveCompare:@"TRENDING SUBREDDITS"] != NSOrderedSame) {
+        return;
+    }
+
+    UIColor *nativeColor = label.textColor;
+    UIColor *currentColor = ApolloSearchNativeHeadingColor();
+    if (currentColor && [currentColor isEqual:nativeColor]) {
+        return;
+    }
+
+    ApolloSearchUpdateNativeHeadingColor(nativeColor);
 }
 
 %end
