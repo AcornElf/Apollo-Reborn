@@ -177,7 +177,7 @@ void ApolloSearchUpdateNativeHeadingColor(UIColor *color) {
             [NSLayoutConstraint activateConstraints:@[
                 [separatorContainer.heightAnchor constraintEqualToConstant:0.5],
                 [separator.leadingAnchor constraintEqualToAnchor:separatorContainer.leadingAnchor constant:54],
-                [separator.trailingAnchor constraintEqualToAnchor:separatorContainer.trailingAnchor constant:-16],
+                [separator.trailingAnchor constraintEqualToAnchor:separatorContainer.trailingAnchor],
                 [separator.topAnchor constraintEqualToAnchor:separatorContainer.topAnchor],
                 [separator.bottomAnchor constraintEqualToAnchor:separatorContainer.bottomAnchor]
             ]];
