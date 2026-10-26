@@ -3212,7 +3212,7 @@ static NSInteger ApolloHeaderStylePickerValue(NSInteger index, BOOL blurAvailabl
                                       cell:^UITableViewCell *(__unused UITableView *tableView, __unused ApolloSettingsRow *row) {
             return [weakSelf textFieldCellWithIdentifier:@"Cell_Sub_RecentLimit"
                                                    label:@"Recently Visited Limit"
-                                             placeholder:@"(unlimited)"
+                                             placeholder:@"Unlimited"
                                                     text:sRecentlyVisitedSubredditsLimit
                                                      tag:TagRecentlyVisitedLimit
                                                numerical:YES]
@@ -4558,7 +4558,9 @@ static NSURL *ApolloWriteExportedLogFile(NSString *logs) {
 - (BOOL)textField:(UITextField *)textField
 shouldChangeCharactersInRange:(NSRange)range
 replacementString:(NSString *)string {
-    if (textField.tag == TagReadPostMaxCount || textField.tag == TagTrendingLimit) {
+    if (textField.tag == TagReadPostMaxCount ||
+        textField.tag == TagTrendingLimit ||
+        textField.tag == TagRecentlyVisitedLimit) {
         NSString *updated = [textField.text stringByReplacingCharactersInRange:range
                                                                     withString:string];
         NSCharacterSet *nonDigits =

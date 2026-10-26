@@ -253,7 +253,8 @@ static const void *kApolloSFDisplayStyledKey = &kApolloSFDisplayStyledKey;
 }
 
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
-    // Finish editing when the user scrolls, including on iPad.
+    // On iPad, OnDrag can dismiss the keyboard while leaving the text field
+    // focused, with its cursor still flashing. Explicitly end editing on drag.
     [scrollView endEditing:YES];
 }
 
