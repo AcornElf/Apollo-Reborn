@@ -35,14 +35,14 @@ static UIColor *ApolloInactiveTabIconColor(UITraitCollection *traits) {
     // Preserve a consistent luminance relationship with the selected accent.
     const CGFloat targetRatio = 0.287441 / 0.248283;
     BOOL darkMode = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-    CGFloat target = MIN(ApolloTabIconLuminance(accent) * targetRatio * (darkMode ? 0.85 : 1.05), 1.0);
+    CGFloat target = MIN(ApolloTabIconLuminance(accent) * targetRatio * (darkMode ? 0.85 : 1.20), 1.0);
     // Apply extra desaturation around green, fading smoothly towards other hues.
     CGFloat greenDistance = fabs(hue - 120.0 / 360.0);
     greenDistance = MIN(greenDistance, 1.0 - greenDistance);
     CGFloat greenWeight = MAX(0.0, 1.0 - greenDistance / (60.0 / 360.0));
     greenWeight = greenWeight * greenWeight * (3.0 - 2.0 * greenWeight);
 
-    CGFloat saturationFactor = (darkMode ? 0.30 : 0.35) - 0.10 * greenWeight;
+    CGFloat saturationFactor = 0.30 - 0.10 * greenWeight;
     CGFloat mutedSaturation = saturation * saturationFactor;
     CGFloat mutedHue = fmod(hue - 10.0 / 360.0 + 1.0, 1.0);
 
@@ -124,11 +124,20 @@ static UITabBarItem *ApolloTabItemForIcon(UIImageView *icon,
         }
     }
 
+    BOOL rightToLeft =
+        bar.effectiveUserInterfaceLayoutDirection ==
+        UIUserInterfaceLayoutDirectionRightToLeft;
+
     [buttons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
         CGFloat x = CGRectGetMidX(a.frame);
         CGFloat y = CGRectGetMidX(b.frame);
-        return x < y ? NSOrderedAscending :
-               x > y ? NSOrderedDescending : NSOrderedSame;
+
+        if (x == y) return NSOrderedSame;
+
+        if (rightToLeft)
+            return x > y ? NSOrderedAscending : NSOrderedDescending;
+
+        return x < y ? NSOrderedAscending : NSOrderedDescending;
     }];
 
     NSUInteger index = [buttons indexOfObject:button];
