@@ -1,12 +1,13 @@
 #import "ApolloWebAuthViewController.h"
 #import "ApolloManualSignInViewController.h"
+#import "ApolloWebAuthPopupViewController.h"
 #import "ApolloWebSessionLoginViewController.h"
 #import "ApolloState.h"
 #import "ApolloCommon.h"
 
 #import <WebKit/WebKit.h>
 
-@interface ApolloWebAuthViewController () <WKNavigationDelegate>
+@interface ApolloWebAuthViewController () <WKNavigationDelegate, WKUIDelegate>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSURL *authURL;
@@ -67,6 +68,7 @@
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.navigationDelegate = self;
+    self.webView.UIDelegate = self;
     [self.view addSubview:self.webView];
 
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
@@ -76,7 +78,7 @@
     [self.view addSubview:self.spinner];
     [self.spinner startAnimating];
 
-    ApolloLog(@"[WebAuth] Loading auth URL: %@", self.authURL);
+    ApolloLog(@"[WebAuth] Loading auth URL: %@", ApolloLogURL(self.authURL));
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.authURL]];
     // Automate transition to manual sign-in for iOS 15.3.1 and below.
     if (@available(iOS 15.4, *)) {
@@ -108,7 +110,7 @@
     NSURL *current = self.webView.URL;
     NSURL *base = (current && ![self _isGrantEndpointURL:current]) ? current : self.authURL;
     NSURL *rewritten = [self _rewriteToOldReddit:base];
-    ApolloLog(@"[WebAuth] Switching to old Reddit: %@", rewritten);
+    ApolloLog(@"[WebAuth] Switching to old Reddit: %@", ApolloLogURL(rewritten));
     [self.webView loadRequest:[NSURLRequest requestWithURL:rewritten]];
     // didFinishNavigation rebuilds the menu, disabling this action once loaded.
 }
@@ -145,7 +147,7 @@
         initWithAuthURL:self.authURL
             redirectURI:self.redirectURIString
              onComplete:^(NSURL *callbackURL) {
-        ApolloLog(@"[WebAuth] manual sign-in produced callback: %@", callbackURL);
+        ApolloLog(@"[WebAuth] manual sign-in produced callback: %@", ApolloLogURL(callbackURL));
         [weakSelf _finishWithURL:callbackURL error:nil];
     }];
     [self.navigationController pushViewController:vc animated:YES];
@@ -266,9 +268,25 @@
     if (self.finished) return;
     self.finished = YES;
     ASWebAuthenticationSessionCompletionHandler completion = self.completion;
-    [self.navigationController dismissViewControllerAnimated:YES completion:^{
-        if (completion) completion(url, error);
-    }];
+    ApolloWebAuthClosePopups(self, ^{
+        [self.navigationController dismissViewControllerAnimated:YES completion:^{
+            if (completion) completion(url, error);
+        }];
+    });
+}
+
+#pragma mark - WKUIDelegate
+
+// "Continue with Google" and "Continue with Apple" open their sign-in page in a
+// popup window (#1342); see ApolloWebAuthPopupViewController.
+- (WKWebView *)webView:(WKWebView *)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
+               forNavigationAction:(WKNavigationAction *)navigationAction
+                    windowFeatures:(WKWindowFeatures *)windowFeatures {
+    if (self.finished) return nil;
+    return [ApolloWebAuthPopupViewController presentPopupFromViewController:self
+                                                              configuration:configuration
+                                                           navigationAction:navigationAction];
 }
 
 #pragma mark - WKNavigationDelegate
@@ -312,7 +330,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         // dispatch it (which would fail for unregistered schemes) or the request
         // actually goes out over the network (for http/https redirect URIs).
         decisionHandler(WKNavigationActionPolicyCancel);
-        ApolloLog(@"[WebAuth] Intercepted callback: %@", url);
+        ApolloLog(@"[WebAuth] Intercepted callback: %@", ApolloLogURL(url));
         [self _harvestFeatureSessionThenFinishWithURL:url];
         return;
     }
@@ -326,7 +344,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *rewritten = [self _rewriteToOldReddit:url];
         if (![rewritten isEqual:url]) {
             decisionHandler(WKNavigationActionPolicyCancel);
-            ApolloLog(@"[WebAuth] Rewriting mid-flow www.reddit.com → old.reddit.com: %@", rewritten);
+            ApolloLog(@"[WebAuth] Rewriting mid-flow www.reddit.com → old.reddit.com: %@", ApolloLogURL(rewritten));
             [self.webView loadRequest:[NSURLRequest requestWithURL:rewritten]];
             return;
         }
@@ -390,14 +408,15 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     // fired when decidePolicyForNavigationAction cancels a navigation — expected.
     if (error.code == NSURLErrorCancelled) return;
     if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) return;
-    ApolloLogError(@"[WebAuth] Provisional navigation failed: %@", error);
+    // Domain + code only: the error's userInfo carries the failing authorize URL.
+    ApolloLogError(@"[WebAuth] Provisional navigation failed: %@ %ld (%@)", error.domain, (long)error.code, error.localizedDescription);
     [self _finishWithURL:nil error:error];
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self.spinner stopAnimating];
     if (error.code == NSURLErrorCancelled) return;
-    ApolloLogError(@"[WebAuth] Navigation failed: %@", error);
+    ApolloLogError(@"[WebAuth] Navigation failed: %@ %ld (%@)", error.domain, (long)error.code, error.localizedDescription);
     [self _finishWithURL:nil error:error];
 }
 

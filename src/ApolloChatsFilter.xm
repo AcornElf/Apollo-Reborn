@@ -19,6 +19,7 @@
 #import "ApolloChatRoomDirectory.h"
 #import "ApolloChatUnreadPoller.h"
 #import "ApolloCommon.h"
+#import "ApolloDuoRail.h"
 #import "ApolloDirectChatWeb.h"
 #import "ApolloState.h"
 #import "ApolloSwiftRuntime.h"
@@ -342,6 +343,7 @@ typedef NS_ENUM(NSInteger, ApolloInboxMode) {
 @property (nonatomic, strong) UIButton *chatButton;
 @property (nonatomic, strong) UILabel *chatUnreadBadge;
 @property (nonatomic, assign) ApolloInboxMode selectedMode;
+@property (nonatomic, assign) CGRect lastSegmentedFrame;
 - (void)apollo_setSelectedMode:(ApolloInboxMode)mode animated:(BOOL)animated;
 - (void)apollo_refreshForTraits:(UITraitCollection *)traits;
 @end
@@ -424,9 +426,27 @@ typedef NS_ENUM(NSInteger, ApolloInboxMode) {
     return self;
 }
 
+// On iPhone Duo the Inbox page moves into a split detail column whose trailing
+// edge sits under the tab rail. The switcher spans its host view edge to edge,
+// so follow the horizontal safe area there (and re-lay out when it changes).
+- (void)safeAreaInsetsDidChange {
+    [super safeAreaInsetsDidChange];
+    if (ApolloDuoDeviceDetected()) [self setNeedsLayout];
+}
+
+- (CGRect)apollo_contentBounds {
+    CGRect bounds = self.bounds;
+    if (!ApolloDuoDeviceDetected()) return bounds;
+    UIEdgeInsets safe = self.safeAreaInsets;
+    bounds.origin.x += safe.left;
+    bounds.size.width = MAX(0.0, bounds.size.width - safe.left - safe.right);
+    return bounds;
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
     if (CGRectGetWidth(self.bounds) <= 24.0 || CGRectGetHeight(self.bounds) <= 16.0) return;
+    CGRect contentBounds = [self apollo_contentBounds];
 
     CGFloat badgeWidth = 18.0;
     if (self.chatUnreadBadge.text.length > 1) {
@@ -441,10 +461,19 @@ typedef NS_ENUM(NSInteger, ApolloInboxMode) {
         CGFloat controlHeight = self.segmentedControl.intrinsicContentSize.height;
         if (controlHeight <= 0) controlHeight = 32.0;
         controlHeight = MIN(controlHeight, CGRectGetHeight(self.bounds) - 12.0);
-        CGRect controlFrame = CGRectMake(12.0,
+        CGRect controlFrame = CGRectMake(CGRectGetMinX(contentBounds) + 12.0,
                                          floor((CGRectGetHeight(self.bounds) - controlHeight) / 2.0),
-                                         CGRectGetWidth(self.bounds) - 24.0, controlHeight);
+                                         MAX(0.0, CGRectGetWidth(contentBounds) - 24.0), controlHeight);
         self.segmentedControl.frame = controlFrame;
+        if (!CGRectEqualToRect(controlFrame, self.lastSegmentedFrame)) {
+            // A width change while the control is offscreen (Inbox moving into
+            // the Duo detail column) leaves the glass thumb and segment labels
+            // at the old geometry: a label-less pill a third of its half wide.
+            // Lay the control out again at its new size right away.
+            self.lastSegmentedFrame = controlFrame;
+            [self.segmentedControl setNeedsLayout];
+            [self.segmentedControl layoutIfNeeded];
+        }
         // Overlay the pill beside the "Chat" title (right segment's midpoint,
         // same +20pt offset as the custom variant).
         CGFloat chatSegmentMidX = CGRectGetMinX(controlFrame) + controlFrame.size.width * 0.75;
@@ -453,7 +482,7 @@ typedef NS_ENUM(NSInteger, ApolloInboxMode) {
         return;
     }
 
-    self.containerView.frame = CGRectInset(self.bounds, 12.0, 8.0);
+    self.containerView.frame = CGRectInset(contentBounds, 12.0, 8.0);
     CGRect content = CGRectInset(self.containerView.bounds, 3.0, 3.0);
     CGFloat halfWidth = floor(content.size.width / 2.0);
     CGRect notificationsFrame = CGRectMake(content.origin.x, content.origin.y, halfWidth, content.size.height);
@@ -2428,6 +2457,39 @@ static BOOL sChatFilterActive = NO;
 static BOOL sChatPagingInProgress = NO;
 static const NSInteger kMaxChatFilterPages = 8;   // cap so a chat-sparse account can't page forever
 
+// Inbox reply parents. Apollo draws an Inbox page only after it has looked up the parent of every
+// comment reply on it: InboxViewController's handleFetchedMessages (sub_10019dde8 in 1.15.11)
+// calls -thingsByFullNames:completion: from inside the -messagesInCategory:... completion, and the
+// lookup's answer handler (sub_10019fad4) runs the "show this page" continuation only when it gets
+// a list back. On an error it logs "Error fetching messages" and returns; on a nil list (what
+// RedditKit makes of a 403 HTML block page) it does nothing. Either way the Inbox sat on its
+// spinner for good, which is what API-Key-Free accounts hit once www.reddit.com started refusing
+// /api/info (ApolloWebJSON now sends those reads to /api/info/.json), and what a 429 or a dropped
+// connection on that one lookup still caused. An empty list takes the stock path and the rows
+// draw without their parent context, so while Apollo handles a page of messages, a failed parent
+// lookup answers with an empty list. Only the Inbox calls -thingsByFullNames: from inside a
+// -messagesInCategory: completion (Hopper: the other nine thingsByFullNames call sites are in
+// other screens, and the only other messagesInCategory caller, sub_1008336b4, calls none of them
+// from its completion, sub_10083bb78), so every other caller keeps its error.
+static NSString *const kApolloInboxPageHandlingKey = @"ApolloInboxPageHandling";
+
+// Runs Apollo's page completion with the thread marked for the reply-parent lookup it starts.
+static id ApolloInboxCompletionMarkingParentLookup(id completion) {
+    void (^pageCompletion)(NSArray *, id, NSError *) = completion;
+    return [^(NSArray *messages, id page, NSError *error) {
+        NSMutableDictionary *threadDictionary = [NSThread currentThread].threadDictionary;
+        // The chat filter's accumulated delivery runs inside its own (wrapped) page completion,
+        // so only the outermost mark clears it.
+        BOOL outermost = threadDictionary[kApolloInboxPageHandlingKey] == nil;
+        threadDictionary[kApolloInboxPageHandlingKey] = @YES;
+        @try {
+            pageCompletion(messages, page, error);
+        } @finally {
+            if (outermost) [threadDictionary removeObjectForKey:kApolloInboxPageHandlingKey];
+        }
+    } copy];
+}
+
 %hook RDKClient
 // NOTE: `category` is an enum (NSInteger), NOT an object — declaring it `id` makes ARC retain
 // the integer value as a pointer (EXC_BAD_ACCESS at 0x2). It MUST be a scalar type.
@@ -2435,8 +2497,11 @@ static const NSInteger kMaxChatFilterPages = 8;   // cap so a chat-sparse accoun
     ChatsFilterLog("messagesInCategory cat=%lld active=%d nested=%d",
                    category, sChatFilterActive, sChatPagingInProgress);
     if (!completion) return %orig;
+    // Every path below hands Apollo's page to this wrapper, so a failed reply-parent lookup can't
+    // strand the Inbox (Inbox reply parents, above).
+    completion = ApolloInboxCompletionMarkingParentLookup(completion);
 
-    if (!sChatFilterActive) return %orig;
+    if (!sChatFilterActive) return %orig(category, pagination, markRead, completion);
 
     // A nested page-pull kicked off by the accumulator below: filter this one page and pass the real
     // pagination token straight through so the accumulator can decide whether to keep going.
@@ -2493,6 +2558,24 @@ static const NSInteger kMaxChatFilterPages = 8;   // cap so a chat-sparse accoun
         step(ApolloChatFilterToChats(messages), page, error);
     };
     return %orig(category, pagination, NO, firstWrapped);   // markRead:NO so the filtered view doesn't mark PMs read
+}
+
+// The Inbox's reply-parent lookup (Inbox reply parents, above): a failure answers with an empty
+// list so the page still draws. Any other caller passes straight through.
+- (id)thingsByFullNames:(id)fullNames completion:(id)completion {
+    if (!completion || ![[NSThread currentThread].threadDictionary[kApolloInboxPageHandlingKey] boolValue]) return %orig;
+    void (^lookupCompletion)(NSArray *, NSError *) = completion;
+    NSUInteger requested = [fullNames isKindOfClass:[NSArray class]] ? [(NSArray *)fullNames count] : 0;
+    id wrapped = ^(NSArray *things, NSError *error) {
+        if (!error && [things isKindOfClass:[NSArray class]]) {
+            lookupCompletion(things, nil);
+            return;
+        }
+        ApolloLog(@"[InboxParents] Lookup of %lu reply parent(s) failed (%@); showing the page without them",
+                  (unsigned long)requested, error.localizedDescription ?: @"no list");
+        lookupCompletion(@[], nil);
+    };
+    return %orig(fullNames, wrapped);
 }
 %end
 

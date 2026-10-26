@@ -7,6 +7,7 @@
 #import "ApolloTopBarScrollPresentation.h"
 #import "ApolloScrollToTop.h"
 #import "ApolloSearchNativeBar.h"
+#import "ApolloDuoSplitView.h"
 #import "ApolloState.h"
 
 // Apollo's status-bar proxy calls ASTableViewController rather than scrolling
@@ -735,10 +736,20 @@ static UIScrollView *ApolloPostsTabContentScrollView(UIView *view, CGRect viewpo
         ![viewController isKindOfClass:UINavigationController.class]) {
         return %orig(tabBarController, viewController);
     }
-    UINavigationController *nav = (UINavigationController *)viewController;
+    UINavigationController *outer = (UINavigationController *)viewController;
+    // An open subreddit drawer covers the feed. Close it rather than scrolling
+    // or popping the hidden page underneath.
+    if (ApolloDuoSplitDismissPostsList(outer)) {
+        ApolloLog(@"[PostsTab] Closed subreddit list");
+        return NO;
+    }
+    // The outer Duo tab contains only a split host. Scroll/pop the actual
+    // detail stack, so the sidebar and its own scroll position stay intact.
+    UINavigationController *nav = ApolloDuoSplitDetailNavigation(outer);
     UIViewController *owner = nav.topViewController;
     // Do not navigate behind a modal or interrupt an interactive push/pop.
-    if (nav.presentedViewController || tabBarController.presentedViewController || nav.transitionCoordinator) return NO;
+    if (outer.presentedViewController || nav.presentedViewController ||
+        tabBarController.presentedViewController || outer.transitionCoordinator || nav.transitionCoordinator) return NO;
     UIView *content = owner.viewIfLoaded;
     if (!content.window) return NO;
     // Texture's real table is authoritative even when empty or short. Do not
@@ -758,6 +769,10 @@ static UIScrollView *ApolloPostsTabContentScrollView(UIView *view, CGRect viewpo
     } else if (nav.viewControllers.count > 1) {
         [nav popViewControllerAnimated:!UIAccessibilityIsReduceMotionEnabled()];
         ApolloLog(@"[PostsTab] Returned one page from %@", NSStringFromClass(owner.class));
+    } else if (ApolloDuoSplitReturnFromVisitedProfile(outer)) {
+        ApolloLog(@"[PostsTab] Returned from visited profile at top");
+    } else if (ApolloDuoSplitRevealPostsList(outer)) {
+        ApolloLog(@"[PostsTab] Revealed subreddit list at feed top");
     }
     // Returning NO also prevents UIKit/Apollo from popping again after our scroll.
     return NO;

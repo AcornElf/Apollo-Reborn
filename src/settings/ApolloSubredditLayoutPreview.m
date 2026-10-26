@@ -1,6 +1,7 @@
 #import "settings/ApolloSubredditLayoutPreview.h"
 
 #import "ApolloCommon.h"
+#import "ApolloDuoRail.h"
 #import "ApolloImmersiveHeaderBackground.h"
 #import "ApolloSubredditHeaderPreview.h"
 #import "ApolloSubredditHighlights.h"
@@ -375,6 +376,7 @@ static ApolloNativePreviewMetrics ApolloNativePreviewMetricsMake(CGFloat width,
 
 - (void)configureWithDensityMode:(ApolloSubredditDensityMode)mode
                           banner:(BOOL)banner
+                            icon:(BOOL)icon
                       joinButton:(BOOL)joinButton
                  userFlairButton:(BOOL)userFlairButton
                    sidebarButton:(BOOL)sidebarButton
@@ -389,8 +391,9 @@ static ApolloNativePreviewMetrics ApolloNativePreviewMetricsMake(CGFloat width,
     self.accessibilityLabel = mode == ApolloSubredditDensityModeNative
         ? @"Native subreddit preview. No custom identity header; the feed begins below search."
         : [NSString stringWithFormat:
-            @"%@ production subreddit header preview using r slash ApolloReborn. Banner %@. Joined button %@. User Flair button %@. Sidebar button %@. Subreddit name %@. Subtitle %@. Description %@.",
-            modeName, banner ? @"shown" : @"hidden", joinButton ? @"shown" : @"hidden",
+            @"%@ production subreddit header preview using r slash ApolloReborn. Banner %@. Subreddit icon %@. Joined button %@. User Flair button %@. Sidebar button %@. Subreddit name %@. Subtitle %@. Description %@.",
+            modeName, banner ? @"shown" : @"hidden", icon ? @"shown" : @"hidden",
+            joinButton ? @"shown" : @"hidden",
             userFlairButton ? @"shown" : @"hidden", sidebarButton ? @"shown" : @"hidden",
             displayName ? @"shown" : @"hidden", subtitle ? @"shown" : @"hidden",
             description ? @"shown" : @"hidden"];
@@ -541,7 +544,10 @@ static ApolloNativePreviewMetrics ApolloNativePreviewMetricsMake(CGFloat width,
             ApolloPinnedPostsPreviewMessage, font, MAX(1.0, width - 24.0));
         return MAX(52.0, textHeight + 16.0);
     }
-    CGFloat renderWidth = ApolloSubredditPreviewRenderWidth(hostView, width);
+    // Keep actual-size cards on Duo in every pose; other devices retain the
+    // same scaled preview as upstream. Measurement and rendering must agree.
+    CGFloat renderWidth = ApolloDuoDeviceDetected()
+        ? width : ApolloSubredditPreviewRenderWidth(hostView, width);
     CGFloat scale = width / MAX(1.0, renderWidth);
     return ceil([ApolloHLPreviewFactory expandedCarouselHeight] * scale);
 }
@@ -557,7 +563,8 @@ static ApolloNativePreviewMetrics ApolloNativePreviewMetricsMake(CGFloat width,
         return;
     }
 
-    CGFloat renderWidth = ApolloSubredditPreviewRenderWidth(self, width);
+    CGFloat renderWidth = ApolloDuoDeviceDetected()
+        ? width : ApolloSubredditPreviewRenderWidth(self, width);
     BOOL needsRebuild = !self.productionCarouselView || self.renderedMode != self.highlightsMode;
     if (needsRebuild) {
         [self.productionCarouselView removeFromSuperview];

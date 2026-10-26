@@ -69,6 +69,21 @@ extern NSString * const ApolloUserProfileUsernameKey;
 // our own. Any thread.
 - (void)ingestUserDataByAccountIDsResponse:(NSDictionary *)response;
 
+// Post authors' t2_ fullnames, read from a feed listing Apollo already loaded
+// (each post carries author + author_fullname), so feed avatars can go through
+// the batch above too: Apollo's post model doesn't keep the fullname. Fed only
+// under Reduce Rate Limiting (see ApolloReduceRateLimiting.h). Any thread.
+- (void)noteAuthorFullNamesFromListing:(NSDictionary *)listing;
+// The fullname noted above for `username`, or nil. Any thread.
+- (NSString *)authorFullNameForUsername:(NSString *)username;
+// The t2_ fullnames of every author on the listing page that `postFullName` (a
+// t3_ fullname) came in on, minus anyone whose avatar is already cached, so the
+// feed asks for a whole page's avatars in one batch instead of one batch per
+// post or two as each nears the screen (issue #1438). Noted with the fullnames
+// above (Reduce Rate Limiting only); nil for a post no noted listing carried.
+// Any thread.
+- (NSArray<NSString *> *)uncachedAuthorFullNamesOnPageOfPost:(NSString *)postFullName;
+
 - (UIImage *)cachedImageForURL:(NSURL *)url;
 - (void)requestImageForURL:(NSURL *)url completion:(void (^)(UIImage *image))completion;
 

@@ -13,6 +13,7 @@
 __BEGIN_DECLS
 
 extern Class ApolloClassASBackgroundLayoutSpec;
+extern Class ApolloClassASBatchContext;
 extern Class ApolloClassASButtonNode;
 extern Class ApolloClassASCellNode;
 extern Class ApolloClassASCenterLayoutSpec;
@@ -52,10 +53,13 @@ extern Class ApolloClassCAFilter;
 extern Class ApolloClassCommentCellNode;
 extern Class ApolloClassCommentsHeaderCellNode;
 extern Class ApolloClassCommentsHeaderSectionController;
+extern Class ApolloClassRichMediaHeaderCellNode;
 extern Class ApolloClassCommentsViewController;
+extern Class ApolloClassMoreCommentsCellNode;
 extern Class ApolloClassCompactPostCellNode;
 extern Class ApolloClassComposePostViewController;
 extern Class ApolloClassComposeViewController;
+extern Class ApolloClassCrosspostNode;
 extern Class ApolloClassCrosspostPerformViewController;
 extern Class ApolloClassDualStateButtonNode;
 extern Class ApolloClassFLAnimatedImage;
@@ -92,6 +96,7 @@ extern Class ApolloClassRDKFlairOption;
 extern Class ApolloClassRDKGallery;
 extern Class ApolloClassRDKGalleryItemImage;
 extern Class ApolloClassRDKLink;
+extern Class ApolloClassRDKPagination;
 extern Class ApolloClassRDKMessage;
 extern Class ApolloClassRDKMultireddit;
 extern Class ApolloClassRDKMultiredditDescription;
@@ -102,6 +107,7 @@ extern Class ApolloClassRedditListTableViewCell;
 extern Class ApolloClassRedditListViewController;
 extern Class ApolloClassRichMediaNode;
 extern Class ApolloClassSaveMediaActivity;
+extern Class ApolloClassSavedPostsCommentsViewController;
 extern Class ApolloClassSearchViewController;
 extern Class ApolloClassSettingsViewController;
 extern Class ApolloClassShareAsImageViewController;
@@ -118,6 +124,8 @@ extern Class ApolloClassUICornerConfiguration;
 extern Class ApolloClassUIDropShadowView;
 extern Class ApolloClassUIFloatingTabBarSelectionContainerView;
 extern Class ApolloClassUIGlassEffect;
+// UIKit._UITabBarItemPlatterView (Swift): the tab platter of the iOS 27 floating/side-rail tab bar.
+extern Class ApolloClassUITabBarItemPlatterView;
 extern Class ApolloClassUIKBKeyView;
 extern Class ApolloClassUIKBVisualEffectView;
 extern Class ApolloClassUINavigationBarHostedViewContainer;

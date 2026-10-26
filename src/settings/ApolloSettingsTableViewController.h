@@ -18,6 +18,7 @@ void ApolloSettingsApplySectionHeaderTypography(UIView *view);
 - (UIColor *)apollo_themeAccentColor;
 - (void)apollo_applyPrimaryTextColorToCell:(UITableViewCell *)cell;
 - (void)apollo_applyAccentActionTextColorToCell:(UITableViewCell *)cell;
+- (void)apollo_removeAccentActionTextColorFromCell:(UITableViewCell *)cell;
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell;
 - (void)apollo_applyTheme;
 // The updates pass that lets the table take section title heights again after
@@ -28,4 +29,8 @@ void ApolloSettingsApplySectionHeaderTypography(UIView *view);
 @end
 
 @interface ApolloFooterLinkTextView : UITextView
+@end
+
+@interface ApolloSettingsLinkFooterView : UITableViewHeaderFooterView
+@property (nonatomic, strong, readonly) ApolloFooterLinkTextView *linkTextView;
 @end

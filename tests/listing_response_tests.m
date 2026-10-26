@@ -4,6 +4,25 @@
 // PRODUCTION_HELPERS
 
 typedef void (^Completion)(NSHTTPURLResponse *, id, NSError *);
+// Duplicate-read sharing only acts for API-Key-Free accounts; these clients
+// have none, so every request goes out with its own completion.
+typedef Completion ApolloWebJSONTaskCompletion;
+static ApolloWebJSONTaskCompletion ApolloWebJSONShareAccountRead(NSString *username, NSString *method, NSString *path,
+                                                                id parameters, ApolloWebJSONTaskCompletion completion) {
+    (void)username; (void)method; (void)path; (void)parameters;
+    return completion;
+}
+static id ApolloWebJSONSharedReadPlaceholderTask(void) { return nil; }
+// The API-Key-Free subscription-walk helpers (page size, cut-short-walk
+// guard) only act for web-session accounts; these clients have none.
+static id ApolloWebJSONParametersForAccountRead(NSString *username, NSString *method, NSString *path, id parameters) {
+    (void)username; (void)method; (void)path;
+    return parameters;
+}
+static BOOL ApolloWebJSONRequestIsSubscriptionWalk(NSString *method, NSString *path) { (void)method; (void)path; return NO; }
+static void ApolloWebJSONNoteSubscriptionWalkFailed(NSString *username, NSHTTPURLResponse *response, NSError *error) {
+    (void)username; (void)response; (void)error;
+}
 static id nextObject;
 static NSError *nextError;
 static NSHTTPURLResponse *nextResponse;
@@ -83,13 +102,60 @@ int main(void) {
                 }]; checks++;
             }
         }
+        // #1420: RDKResponseSerializer turns a reply that isn't application/json
+        // (Reddit's HTML 429 and 403 block pages, an empty 429, an HTML 5xx) into
+        // no object AND no error, and RedditKit maps no error for a JSON 429. A
+        // listing must report that as a failed load, not read it as a last page.
+        NSHTTPURLResponse *okResponse = nextResponse;
+        for (NSString *path in @[@"r/popular/best.json", @"/r/all/hot.json?after=t3_abc&limit=25", @"best.json",
+                                 @"user/someone/submitted.json", @"subreddits/mine/subscriber.json", @"message/inbox.json"]) {
+            for (NSNumber *status in @[@429, @403, @503, @200]) {
+                for (id body in @[[NSNull null], @{@"message": @"Too Many Requests", @"error": @429}]) {
+                    BOOL json = ![body isEqual:[NSNull null]];
+                    if (json && status.integerValue == 200) continue; // a 200 dictionary is a real answer
+                    nextResponse = [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://www.reddit.com/r/popular/best.json"]
+                        statusCode:status.integerValue HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+                    nextObject = json ? body : nil;
+                    nextError = nil;
+                    __block BOOL called = NO;
+                    [client taskWithMethod:@"GET" path:path parameters:nil completion:^(NSHTTPURLResponse *response, id object, NSError *error) {
+                        called = YES;
+                        (void)response;
+                        if (object) (void)object[@"data"];
+                        Check(object == nil && [error.domain isEqualToString:@"ApolloReborn.WebJSON.Response"] && error.code == 1420,
+                              @"a refused listing must fail, not read as an empty page");
+                    }];
+                    Check(called, @"forward completion");
+                    checks++;
+                }
+            }
+        }
+        // An error RedditKit or the transport already reported passes through,
+        // with whatever object came with it.
+        NSError *transportError = [NSError errorWithDomain:NSURLErrorDomain code:-1009 userInfo:nil];
+        for (id body in @[[NSNull null], @{@"error": @429}]) {
+            nextObject = [body isEqual:[NSNull null]] ? nil : body;
+            nextError = transportError;
+            [client taskWithMethod:@"GET" path:@"r/popular/best.json" parameters:nil completion:^(NSHTTPURLResponse *response, id object, NSError *error) {
+                (void)response; Check(error == transportError && object == nextObject, @"reported errors untouched");
+            }]; checks++;
+        }
+        // Endpoints that aren't listing dictionaries keep their nil answer.
+        nextObject = nil;
+        nextError = nil;
+        for (NSString *path in @[@"api/multi/mine.json", @"api/v1/me.json", @"comments/abc.json"]) {
+            [client taskWithMethod:@"GET" path:path parameters:nil completion:^(NSHTTPURLResponse *response, id object, NSError *error) {
+                (void)response; Check(object == nil && error == nil, @"non-listing nil untouched");
+            }]; checks++;
+        }
+        nextResponse = okResponse;
         nextObject = @"ok";
         [client taskWithMethod:@"POST" path:@"subreddits/mine/moderator.json" parameters:nil completion:^(NSHTTPURLResponse *response, id object, NSError *error) {
             (void)response; Check(object == nextObject && error == nil, @"writes untouched");
         }]; checks++;
         nextObject = nil;
         [client taskWithMethod:@"GET" path:@"subreddits/mine/moderator.json" parameters:nil completion:^(NSHTTPURLResponse *response, id object, NSError *error) {
-            (void)response; Check(object == nil && error == nil, @"nil unchanged");
+            (void)response; Check(object == nil && error.code == 1420, @"nil without an error reports a failed load");
         }]; checks++;
         Check([[client taskWithMethod:@"GET" path:@"subreddits/mine/moderator.json" parameters:nil completion:nil] isEqual:@"task"], @"nil completion forwarded");
         NSLog(@"PASS: %lu listing response cases plus nil completion", (unsigned long)checks);

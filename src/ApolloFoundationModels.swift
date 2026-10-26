@@ -17,7 +17,11 @@
 import Foundation
 import os
 #if canImport(FoundationModels)
-import FoundationModels
+// The linker flag alone is insufficient with Xcode 26's Swift autolinker: a
+// normal import can still emit a strong LC_LOAD_DYLIB. Mark the import itself
+// weak so iOS/macCatalyst releases below 26 can load before availability checks
+// route this bridge to its unavailable path.
+@_weakLinked import FoundationModels
 #endif
 
 // Matches ApolloLog's os_log subsystem ("apollofix") so these diagnostics land
@@ -127,6 +131,21 @@ public final class ApolloFoundationModels: NSObject {
     /// Convenience for ObjC: is the on-device model ready to generate right now?
     @objc public func isModelAvailable() -> Bool {
         return availabilityStatus() == 0
+    }
+
+    /// Base language codes the on-device model can write ("en", "pt", "zh",
+    /// ...). A prompt that asks for any other language throws
+    /// `unsupportedLanguageOrLocale`, so the summary prompts only name a
+    /// language from this list. Empty when the OS can't say (pre-iOS 26);
+    /// callers read that as "unknown", not "none".
+    @objc public func supportedLanguageCodes() -> [String] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let codes = SystemLanguageModel.default.supportedLanguages.compactMap { $0.languageCode?.identifier }
+            return Array(Set(codes)).sorted()
+        }
+        #endif
+        return []
     }
 
     /// Prepare the exact instructed session that a subsequent summarize call

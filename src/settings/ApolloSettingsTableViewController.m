@@ -241,6 +241,11 @@ void ApolloSettingsApplyCellTypography(UITableViewCell *cell) {
     objc_setAssociatedObject(cell, &kApolloAccentActionCellKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+- (void)apollo_removeAccentActionTextColorFromCell:(UITableViewCell *)cell {
+    if (!cell) return;
+    objc_setAssociatedObject(cell, &kApolloAccentActionCellKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 - (void)apollo_applyThemeToCell:(UITableViewCell *)cell {
     if (!cell) return;
 
@@ -439,6 +444,34 @@ void ApolloSettingsApplyCellTypography(UITableViewCell *cell) {
 - (void)apollo_takeSectionTitleHeights {
     [self.tableView beginUpdates];
     [self.tableView endUpdates];
+}
+
+@end
+
+@implementation ApolloSettingsLinkFooterView
+
+- (instancetype)initWithReuseIdentifier:(NSString *)reuseIdentifier {
+    self = [super initWithReuseIdentifier:reuseIdentifier];
+    if (!self) return nil;
+
+    // Let the table supply its final grouped/safe-area width before measuring
+    // the text. A bare UITextView footer initially receives the full table
+    // width, then rewraps when UIKit installs the grouped section insets.
+    _linkTextView = [[ApolloFooterLinkTextView alloc] init];
+    _linkTextView.translatesAutoresizingMaskIntoConstraints = NO;
+    _linkTextView.editable = NO;
+    _linkTextView.scrollEnabled = NO;
+    _linkTextView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    _linkTextView.backgroundColor = UIColor.clearColor;
+    _linkTextView.textContainerInset = UIEdgeInsetsMake(8, 16, 8, 16);
+    [self.contentView addSubview:_linkTextView];
+    [NSLayoutConstraint activateConstraints:@[
+        [_linkTextView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
+        [_linkTextView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+        [_linkTextView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+        [_linkTextView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+    ]];
+    return self;
 }
 
 @end

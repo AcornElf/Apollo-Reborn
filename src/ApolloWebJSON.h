@@ -70,7 +70,10 @@ id ApolloWebJSONFixupModeratorsResponseObject(NSURLResponse *response, id respon
 // the serializer's response URL misses malformed login/error responses.
 // A non-dictionary listing result becomes nil + an error, even if an existing
 // error is already present (native completions inspect the object first).
-// Valid dictionary responses, nil, writes and array-rooted endpoints pass through.
+// A listing that comes back with no object and no error, or with an HTTP status
+// of 400 or more and no error, also becomes nil + an error: RedditKit reports
+// neither, and a feed would take it as its last page (#1420). Valid dictionary
+// responses, existing errors, writes and array-rooted endpoints pass through.
 id ApolloWebJSONGuardListingTaskResponse(NSString *method, NSString *path,
                                         NSHTTPURLResponse *response, id responseObject,
                                         NSError **error);
@@ -295,6 +298,22 @@ NSURL *ApolloWebJSONProbeURL(NSURL *url);
 // JSON rewrite, no User-Agent stamping (they pick their UA deliberately).
 BOOL ApolloWebJSONURLIsProbe(NSURL *url);
 
+// `request` marked so ApolloWebJSONRewriteRequest skips the routes in
+// `triedMask` (a bit per ApolloWebJSONRoute, ApolloWebJSONRoutes.h), for a
+// resend after one got Reddit's block page. Unchanged for 0. The mark rides on
+// the URL fragment and never reaches Reddit.
+NSURLRequest *ApolloWebJSONRequestMarkingTriedRoutes(NSURLRequest *request, NSUInteger triedMask);
+
+// The ApolloWebJSONRoute a rewritten request or its response URL went by, or -1
+// when `url` wasn't rewritten for a web session.
+NSInteger ApolloWebJSONRouteFromURL(NSURL *url);
+
+#if APOLLO_SIM_BUILD
+// Sim debug bridge: send these ApolloWebJSONRoutes' requests (a bit per route)
+// where Reddit blocks them, to exercise the fallback; 0 turns it off.
+void ApolloWebJSONSimSetBlockedRoutes(NSUInteger routeMask);
+#endif
+
 // Seconds the tweak's optional reads (author avatars, subreddit header info)
 // for `username`'s web session should wait, or 0 when they may go ahead.
 // Reddit doesn't report a web session's remaining request budget (cookie
@@ -306,6 +325,29 @@ BOOL ApolloWebJSONURLIsProbe(NSURL *url);
 // API-key accounts, when Web JSON is off, or when no 429 has been seen. Any
 // thread.
 NSTimeInterval ApolloWebJSONOptionalReadBackoff(NSString *username);
+
+// Duplicate account reads for API-Key-Free accounts. Apollo asks for the same
+// account data twice in quick succession (at launch its account refresh repeats
+// the subscriptions, multireddits, moderated subreddits, /api/v1/me and inbox
+// reads its screens made a second earlier; returning to the app fetches the
+// inbox twice at once), and for a web session every one of them spends the
+// budget above. Called from the RDKClient request chokepoint with the
+// requesting web-session account (nil for an API-key account, which this never
+// touches) and that request's completion. Returns the completion to send the
+// request with (`completion` itself, or one that also answers the callers that
+// join it), or nil when the request shouldn't go out: it joined an identical
+// read already in flight, or one answered in the last few seconds, and
+// `completion` runs with that answer. Only GETs to those account endpoints are
+// shared, and any write from the account (a GET that marks messages read
+// included) starts over when it's sent and again when it's answered, so a read
+// sent after a write never gets an answer kept from before it. Any thread.
+typedef void (^ApolloWebJSONTaskCompletion)(NSHTTPURLResponse *response, id object, NSError *error);
+ApolloWebJSONTaskCompletion ApolloWebJSONShareAccountRead(NSString *username, NSString *method, NSString *path,
+                                                         id parameters, ApolloWebJSONTaskCompletion completion);
+
+// The task handed back to a caller whose read was shared (see above). Never
+// resumed, so cancelling it can't cancel the request another caller waits on.
+NSURLSessionDataTask *ApolloWebJSONSharedReadPlaceholderTask(void);
 
 // Verify the requesting web account independently of public HTTP successes.
 void ApolloWebJSONCheckAccountSession(NSString *username);

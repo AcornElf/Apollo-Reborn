@@ -34,6 +34,7 @@ extern NSString *sRandomSubredditsSource;
 extern NSString *sRandNsfwSubredditsSource;
 extern NSString *sTrendingSubredditsSource;
 extern NSString *sTrendingSubredditsLimit;
+extern NSString *sRecentlyVisitedSubredditsLimit;
 
 extern BOOL sBlockAnnouncements;
 extern BOOL sAutomaticBackupsEnabled;
@@ -42,8 +43,8 @@ extern NSInteger sAutomaticBackupDestination; // 0 = local, 1 = selected Files f
 extern BOOL sShowDeletedComments;
 extern BOOL sTapToRevealDeletedComments;
 extern BOOL sPassiveDeletedComments;
-extern BOOL sShowRecentlyReadThumbnails;
 extern BOOL sFeedTextPostThumbnails;
+extern BOOL sRestoreReadingSession;
 // Default-on large-feed carousel for Reddit-native multi-image galleries.
 extern BOOL sFeedGalleryCarousel;
 // Default-on: at the carousel's first/last image, swiping past the edge hands
@@ -161,6 +162,7 @@ extern BOOL sShowSubredditHeaders;
 // Native    = !sShowSubredditHeaders
 extern BOOL sSubredditHeaderImmersive;
 extern BOOL sSubredditShowBanner;
+extern BOOL sSubredditShowIcon;
 extern BOOL sSubredditShowJoinButton;
 extern BOOL sSubredditShowUserFlairButton;
 extern BOOL sSubredditShowSidebarButton;
@@ -195,6 +197,11 @@ extern "C" {
 // Opt-in top navigation bar movement, following the bottom tab bar's scroll
 // behavior while Hide Bars on Scroll is enabled. Default NO.
 extern BOOL sHideTopBarOnScroll;
+// Experimental Duo landscape feed layout: 0 = Original (default),
+// 2 = Focused feed; value 1 is retired. Read live by ApolloMediaHinge.
+extern NSInteger sDuoLandscapeFeedLayout;
+// Standard (default NO) or Liquid Glass for the open Duo subreddit panel.
+extern BOOL sDuoSubredditPanelGlassEnabled;
 BOOL ApolloSupportsNativeTabBarScrollBehavior(void);
 #ifdef __cplusplus
 }
@@ -209,9 +216,30 @@ void ApolloRestoreHideOnScrollPresentation(UITabBarController *tabBarController,
 // bottom (classic) instead of the top-center pill. Opt-in; default OFF via
 // registerDefaults. Temporary stopgap for issue #387. See ApolloIPadTabBarBottom.xm.
 extern BOOL sIPadTabBarBottom;
+typedef NS_ENUM(NSInteger, ApolloSettingsIconAppearance) {
+    ApolloSettingsIconAppearanceSystem = 0,
+    ApolloSettingsIconAppearanceLight,
+    ApolloSettingsIconAppearanceDark,
+};
+extern ApolloSettingsIconAppearance sSettingsIconAppearance;
 // Liquid Glass only. When ON, tab-bar swipe navigates back/forward instead of
 // switching tabs; needs a relaunch to apply. See ApolloLiquidGlass.xm.
 extern BOOL sTabBarSwipeNavigation;
+// iPad only. When ON, each tab's navigation stack is hosted inside a
+// multi-column UISplitViewController (sidebar → content → detail) instead of a
+// single full-width stack. Opt-in; default OFF via registerDefaults
+// (UDKeyIPadPaneLayout). Read once at %ctor — installation happens at scene
+// connect, so changing it needs a relaunch. See src/ipad/ApolloPaneLayout.h.
+extern BOOL sIPadPaneLayout;
+#ifdef __cplusplus
+extern "C" {
+#endif
+// Launch-only choice, read by ApolloCommon +load before any Logos constructor.
+// Settings write UDKeyLiquidGlassEnabled only; never change this live.
+extern BOOL sLiquidGlassEnabled;
+#ifdef __cplusplus
+}
+#endif
 // When ON, neutralizes Apollo's feed/subreddit search takeover (nav-hide + fade + toolbar
 // dock/grow); the field stays put and results populate the feed in place. Liquid Glass only;
 // mutually exclusive with the default nav-hide mode. See ApolloSearchInPlace.xm.
@@ -239,6 +267,8 @@ extern BOOL sInfoRowTapComments;
 extern BOOL sInfoRowPopupMode;
 extern BOOL sInfoRowOverlayMode;
 extern BOOL sInfoRowTapTranslation;
+// Include downvotes when tapping post and comment scores. Default OFF.
+extern BOOL sThreeStateVoting;
 // When ON (default), Live Update comment sort keeps the newest comments visible at the top
 // while you're at the top, and shows a "N new comments" jump pill when you've scrolled down
 // to read/reply. See ApolloLiveCommentsFollow.xm. Default ON via registerDefaults.
@@ -304,6 +334,16 @@ void ApolloHeaderStyleRegisterSearchBar(UISearchBar *searchBar);
 // Called from ApolloThemeRuntime.xm's UISearchBar didMoveToWindow hook (the one
 // hook that class gets); applies the Hard-style insets to registered bars.
 void ApolloHeaderStyleSearchBarDidMoveToWindow(UISearchBar *searchBar);
+// Registers a navigation-bar search bar that scrolls away with the list but
+// whose item pins it (hidesSearchBarWhenScrolling = NO) for moments like the
+// push that brings the screen in. Under Hard, UIKit draws a pinned bar inside
+// the band with a glass field; while held, the bar keeps the look it has once
+// released instead (#1361). backdropScrollView: the list whose background
+// shows behind the search row once the bar is released. No-op off Liquid
+// Glass, or when the UIKit hooks it relies on didn't install. Defined in
+// ApolloScrollEdgeEffect.xm.
+void ApolloHeaderStyleRegisterScrollAwaySearchBar(UISearchBar *searchBar, UINavigationItem *item,
+                                                  UIScrollView *backdropScrollView);
 // Applies the selected style to every scroll view owned by an Apollo list
 // controller. Home, Profile, Comments, and similar screens all inherit Apollo's
 // ASTableViewController, which layers an intercepting UIScrollView over its
@@ -417,6 +457,7 @@ typedef NS_ENUM(NSInteger, ApolloAISummaryDetail) {
 extern NSInteger sAIPostWordThreshold;              // 50...300, step 50
 extern ApolloAISummaryDetail sAIPostSummaryDetail;  // post / link / both
 extern ApolloAISummaryDetail sAICommentSummaryDetail;
+extern NSString *sAISummaryLanguage;                // language code, nil = Device Default
 
 // Horizontal alignment for inline media containers narrower than the row width
 // (tall portrait images, height-capped images). Has no effect on full-width media.
@@ -600,6 +641,13 @@ static inline BOOL IsAppleTranslationSupported(void) {
 // authenticated with a WKWebView-harvested session cookie instead of a bearer
 // token. Dormant escape hatch for Reddit API-key revocation waves. Default NO.
 extern BOOL sWebJSONEnabled;
+// Reduce Rate Limiting (UDKeyReduceRateLimiting). Only takes effect while the
+// active account is API-key-free; read it through
+// ApolloReduceRateLimitingActive() (ApolloReduceRateLimiting.h). Default NO.
+extern BOOL sReduceRateLimiting;
+// Use Route Updates (UDKeyKeylessRouteUpdates): keyless-routes.json may adjust
+// the API-Key-Free route table (ApolloWebJSONRouteUpdates.h). Default YES.
+extern BOOL sKeylessRouteUpdates;
 // Native Polls (ApolloPollVoting.xm / ApolloPollCompose.xm): master gate for
 // the experimental poll voting + creation feature. Default NO. Cached here (not
 // re-read from NSUserDefaults per call) because the poll node's layoutSubviews
