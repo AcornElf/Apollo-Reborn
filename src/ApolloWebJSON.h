@@ -70,7 +70,10 @@ id ApolloWebJSONFixupModeratorsResponseObject(NSURLResponse *response, id respon
 // the serializer's response URL misses malformed login/error responses.
 // A non-dictionary listing result becomes nil + an error, even if an existing
 // error is already present (native completions inspect the object first).
-// Valid dictionary responses, nil, writes and array-rooted endpoints pass through.
+// A listing that comes back with no object and no error, or with an HTTP status
+// of 400 or more and no error, also becomes nil + an error: RedditKit reports
+// neither, and a feed would take it as its last page (#1420). Valid dictionary
+// responses, existing errors, writes and array-rooted endpoints pass through.
 id ApolloWebJSONGuardListingTaskResponse(NSString *method, NSString *path,
                                         NSHTTPURLResponse *response, id responseObject,
                                         NSError **error);
@@ -294,6 +297,22 @@ NSURL *ApolloWebJSONProbeURL(NSURL *url);
 // requests must pass through the network hooks completely untouched: no Web
 // JSON rewrite, no User-Agent stamping (they pick their UA deliberately).
 BOOL ApolloWebJSONURLIsProbe(NSURL *url);
+
+// `request` marked so ApolloWebJSONRewriteRequest skips the routes in
+// `triedMask` (a bit per ApolloWebJSONRoute, ApolloWebJSONRoutes.h), for a
+// resend after one got Reddit's block page. Unchanged for 0. The mark rides on
+// the URL fragment and never reaches Reddit.
+NSURLRequest *ApolloWebJSONRequestMarkingTriedRoutes(NSURLRequest *request, NSUInteger triedMask);
+
+// The ApolloWebJSONRoute a rewritten request or its response URL went by, or -1
+// when `url` wasn't rewritten for a web session.
+NSInteger ApolloWebJSONRouteFromURL(NSURL *url);
+
+#if APOLLO_SIM_BUILD
+// Sim debug bridge: send these ApolloWebJSONRoutes' requests (a bit per route)
+// where Reddit blocks them, to exercise the fallback; 0 turns it off.
+void ApolloWebJSONSimSetBlockedRoutes(NSUInteger routeMask);
+#endif
 
 // Seconds the tweak's optional reads (author avatars, subreddit header info)
 // for `username`'s web session should wait, or 0 when they may go ahead.

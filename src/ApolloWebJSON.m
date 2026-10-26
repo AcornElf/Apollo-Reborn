@@ -5,9 +5,11 @@
 #import "Defaults.h"
 #import "ApolloAccountCredentials.h" // ApolloActiveAccountUsername() — write-fixup author for API-key actives
 #import "ApolloWebSessionStore.h"
+#import "ApolloWebJSONRoutes.h"
 #import "ApolloWebSessionLoginViewController.h" // silent re-harvest before the expiry prompt
 #import <objc/message.h>
 #import <os/lock.h>
+#import <stdatomic.h>
 
 #import <Security/Security.h>
 
@@ -112,13 +114,28 @@ BOOL ApolloWebJSONURLIsProbe(NSURL *url) {
     return [url.fragment isEqualToString:kApolloWebJSONProbeMarker];
 }
 
+// A rewritten request that took a route other than www (ApolloWebJSONRoutes.h)
+// carries it after the account: "apollo-webjson-account=<user>;route=<n>".
+// Reddit usernames are letters, digits, "_" and "-", so ";" can't be part of one.
+static NSString *const kApolloWebJSONRouteMarkerSeparator = @";route=";
+
 // nil if `url` carries no account marker (e.g. it's a probe, or an unrelated
 // request that never went through ApolloWebJSONRewriteRequest).
 static NSString *ApolloWebJSONAccountFromURL(NSURL *url) {
     NSString *fragment = url.fragment;
     if (![fragment hasPrefix:kApolloWebJSONAccountMarkerPrefix]) return nil;
     NSString *encoded = [fragment substringFromIndex:kApolloWebJSONAccountMarkerPrefix.length];
+    encoded = [encoded componentsSeparatedByString:kApolloWebJSONRouteMarkerSeparator].firstObject;
     return encoded.stringByRemovingPercentEncoding ?: encoded;
+}
+
+NSInteger ApolloWebJSONRouteFromURL(NSURL *url) {
+    NSString *fragment = url.fragment;
+    if (![fragment hasPrefix:kApolloWebJSONAccountMarkerPrefix]) return -1;
+    NSRange marker = [fragment rangeOfString:kApolloWebJSONRouteMarkerSeparator];
+    if (marker.location == NSNotFound) return ApolloWebJSONRouteWww;
+    NSInteger route = [[fragment substringFromIndex:NSMaxRange(marker)] integerValue];
+    return route >= ApolloWebJSONRouteWww && route <= ApolloWebJSONRouteLast ? route : -1;
 }
 
 NSURL *ApolloWebJSONProbeURL(NSURL *url) {
@@ -444,6 +461,62 @@ BOOL ApolloWebJSONPathNeedsWebBearer(NSString *path) {
     return [re firstMatchInString:path options:0 range:NSMakeRange(0, path.length)] != nil;
 }
 
+// Marks a request RedditKit sends again after its route answered with Reddit's
+// block page (the RDKClient hook in ApolloWebJSONIdentity.xm): the routes
+// already tried, a bit per ApolloWebJSONRoute, so the rewrite picks another.
+// Rides on the URL fragment like the markers above; the rewrite replaces it
+// with the account marker.
+static NSString *const kApolloWebJSONRoutesTriedMarkerPrefix = @"apollo-webjson-routes-tried=";
+
+NSURLRequest *ApolloWebJSONRequestMarkingTriedRoutes(NSURLRequest *request, NSUInteger triedMask) {
+    if (triedMask == 0 || !request.URL) return request;
+    NSMutableURLRequest *marked = [request mutableCopy];
+    marked.URL = ApolloWebJSONURLWithFragment(request.URL,
+        [kApolloWebJSONRoutesTriedMarkerPrefix stringByAppendingFormat:@"%lu", (unsigned long)triedMask]);
+    return marked;
+}
+
+static NSUInteger ApolloWebJSONTriedRoutesFromURL(NSURL *url) {
+    NSString *fragment = url.fragment;
+    if (![fragment hasPrefix:kApolloWebJSONRoutesTriedMarkerPrefix]) return 0;
+    return (NSUInteger)MAX(0, [[fragment substringFromIndex:kApolloWebJSONRoutesTriedMarkerPrefix.length] integerValue]);
+}
+
+#if APOLLO_SIM_BUILD
+// Sim debug bridge ("routeblock <route>[,<route>]"): sends those routes'
+// requests to www.reddit.com at their usual path, which Reddit really does
+// block, so the fallback can be exercised against a real block page. A bit per
+// ApolloWebJSONRoute; 0 when off.
+static _Atomic NSUInteger sApolloWebJSONSimBlockedRoutes = 0;
+
+void ApolloWebJSONSimSetBlockedRoutes(NSUInteger routeMask) {
+    atomic_store(&sApolloWebJSONSimBlockedRoutes, routeMask);
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (NSInteger r = ApolloWebJSONRouteWww; r <= ApolloWebJSONRouteLast; r++) {
+        if (routeMask & (1u << r)) [names addObject:ApolloWebJSONRouteName((ApolloWebJSONRoute)r)];
+    }
+    ApolloLog(@"[WebJSON] (sim) Routes forced to get the block page: %@",
+              names.count ? [names componentsJoinedByString:@", "] : @"none");
+}
+#endif
+
+// Once per method, endpoint and route per launch, so a report's log shows which
+// route these reads take (the per-request "Rewrote" line is debug-level and
+// never reaches it) without a line for every Load More tap. Any thread: the
+// rewrite runs on NSURLSession's queue.
+static void ApolloWebJSONNoteRoute(NSString *method, NSString *path, ApolloWebJSONRoute route, NSString *sentPath) {
+    static NSMutableSet<NSString *> *logged;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ logged = [NSMutableSet set]; });
+    NSString *key = [NSString stringWithFormat:@"%@ %@ %ld", method, path.lowercaseString, (long)route];
+    @synchronized (logged) {
+        if ([logged containsObject:key]) return;
+        [logged addObject:key];
+    }
+    ApolloLog(@"[WebJSON] Sending %@ %@ by route %@ (%@%@)", method, path, ApolloWebJSONRouteName(route),
+              ApolloWebJSONRouteHost(route), sentPath);
+}
+
 // Which web-session account a Reddit request carrying `bearer` belongs to, or
 // nil when it's an OAuth account's request. Resolved per request rather than
 // from whichever account is globally active: Apollo runs background polls
@@ -631,7 +704,24 @@ NSURLRequest *ApolloWebJSONRewriteRequest(NSURLRequest *request) {
 
     NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     if (!components) return nil;
-    components.host = @"www.reddit.com";
+    // Most requests have only the www route. The few www refuses at their usual
+    // path (ApolloWebJSONRoutes.m) take the first route that isn't on cooldown
+    // for this account, and a resend after a block page skips the ones tried.
+    NSInteger chosenRoute = ApolloWebJSONRouteChoose(sessionUsername, method, path, ApolloWebJSONTriedRoutesFromURL(url),
+                                                     [NSDate timeIntervalSinceReferenceDate]);
+    ApolloWebJSONRoute route = chosenRoute >= 0 ? (ApolloWebJSONRoute)chosenRoute
+                                                : (ApolloWebJSONRoute)ApolloWebJSONRoutesForRequest(method, path).firstObject.integerValue;
+    components.host = ApolloWebJSONRouteHost(route);
+    if (route != ApolloWebJSONRouteWww) {
+        components.path = ApolloWebJSONRoutePath(route, path);
+#if APOLLO_SIM_BUILD
+        if (atomic_load(&sApolloWebJSONSimBlockedRoutes) & (1u << route)) {
+            components.host = @"www.reddit.com";
+            components.path = path;
+        }
+#endif
+        ApolloWebJSONNoteRoute(method, path, route, components.path);
+    }
     if (subredditWritePath) components.path = subredditWritePath;
 
     // Listing/page URLs must carry ".json"; /api endpoints are already JSON.
@@ -648,6 +738,11 @@ NSURLRequest *ApolloWebJSONRewriteRequest(NSURLRequest *request) {
     // Account marker goes on the URL fragment
     NSString *accountFragment = [kApolloWebJSONAccountMarkerPrefix stringByAppendingString:
         [sessionUsername stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLFragmentAllowedCharacterSet]] ?: @""];
+    // The route, so the response is counted against it (ApolloWebJSONNoteResponse)
+    // and a block page is retried on another (ApolloWebJSONIdentity.xm).
+    if (route != ApolloWebJSONRouteWww) {
+        accountFragment = [accountFragment stringByAppendingFormat:@"%@%ld", kApolloWebJSONRouteMarkerSeparator, (long)route];
+    }
     rewrittenURL = ApolloWebJSONURLWithFragment(rewrittenURL, accountFragment);
 
     NSMutableURLRequest *mutable = [request mutableCopy];
@@ -685,8 +780,9 @@ NSURLRequest *ApolloWebJSONRewriteRequest(NSURLRequest *request) {
     // subscriptions" block-page reports. Reads pass without them today, so
     // they're added on the write path only (smallest change that can help).
     if (isWrite) {
-        [mutable setValue:@"https://www.reddit.com" forHTTPHeaderField:@"Origin"];
-        [mutable setValue:@"https://www.reddit.com/" forHTTPHeaderField:@"Referer"];
+        NSString *origin = [@"https://" stringByAppendingString:rewrittenURL.host ?: @"www.reddit.com"];
+        [mutable setValue:origin forHTTPHeaderField:@"Origin"];
+        [mutable setValue:[origin stringByAppendingString:@"/"] forHTTPHeaderField:@"Referer"];
         [mutable setValue:@"same-origin" forHTTPHeaderField:@"Sec-Fetch-Site"];
         [mutable setValue:@"cors" forHTTPHeaderField:@"Sec-Fetch-Mode"];
         [mutable setValue:@"empty" forHTTPHeaderField:@"Sec-Fetch-Dest"];
@@ -1294,7 +1390,11 @@ void ApolloWebJSONNoteResponse(NSURLRequest *request, NSURLResponse *response) {
         return;
     }
 
-    if (![url.host.lowercaseString isEqualToString:@"www.reddit.com"]) return;
+    // old.reddit.com and api.reddit.com carry the cookie for fallback routes
+    // (ApolloWebJSONRoutes.m).
+    NSString *noteHost = url.host.lowercaseString;
+    if (![noteHost isEqualToString:@"www.reddit.com"] && ![noteHost isEqualToString:@"old.reddit.com"] &&
+        ![noteHost isEqualToString:@"api.reddit.com"]) return;
     // Only react to requests we authenticated with the cookie — those carry the
     // Cookie header we set in ApolloWebJSONRewriteRequest. This skips unrelated
     // www.reddit.com traffic (e.g. the trending-subreddits fetch) that could
@@ -1307,6 +1407,23 @@ void ApolloWebJSONNoteResponse(NSURLRequest *request, NSURLResponse *response) {
     // the active account changed since.
     NSString *username = ApolloWebJSONAccountFromURL(url);
     if (username.length == 0) return;
+
+    // Route health (ApolloWebJSONRoutes.h), for every keyless path: a block page
+    // counts toward the route's cooldown, a success clears it. The path a route
+    // sent ("/api/info/.json") groups with the one asked for ("/api/info.json").
+    NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+    NSInteger route = ApolloWebJSONRouteFromURL(url);
+    NSString *requestedPath = url.path ?: @"/";
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (route >= 0 && ApolloWebJSONRouteResponseIsBlockPage(http)) {
+        if (ApolloWebJSONRouteHealthNoteBlockPage(username, requestedPath, (ApolloWebJSONRoute)route, now)) {
+            ApolloLog(@"[WebJSON] Route %@ for %@ keeps getting the block page for u/%@; skipping it for %.0f min",
+                      ApolloWebJSONRouteName((ApolloWebJSONRoute)route), ApolloWebJSONRoutePathPattern(requestedPath), username,
+                      ceil(ApolloWebJSONRouteCooldownRemaining(username, requestedPath, (ApolloWebJSONRoute)route, now) / 60.0));
+        }
+    } else if (route >= 0 && http.statusCode >= 200 && http.statusCode < 300) {
+        ApolloWebJSONRouteHealthNoteSuccess(username, requestedPath, (ApolloWebJSONRoute)route, now);
+    }
 
     // Ahead of the expiry bookkeeping's early returns: a 429 limits the session
     // whatever it says (or doesn't) about the cookie still being valid.
@@ -1333,7 +1450,6 @@ void ApolloWebJSONNoteResponse(NSURLRequest *request, NSURLResponse *response) {
     // bearer could be minted, and then its refusal is guaranteed.
     if (ApolloWebJSONPathNeedsWebBearer(url.path)) return;
 
-    NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
     // Reddit's anonymous block page is HTTP 403 with a ~190 KB text/html body.
     // A 403 with a JSON body (e.g. a private/quarantined subreddit) is a normal
     // per-content error — and proves the cookie still authenticates — so it must
@@ -1673,16 +1789,23 @@ NSData *ApolloWebJSONFixupListingMediaResponseData(NSURLResponse *response, NSDa
 // See ApolloWebJSONWriteRepair.h. Lives here because it needs this file's
 // transport privates (session cookie, captured bearer, probe marker, browser
 // User-Agent). Auth follows the active account's mode: web-session actives use
-// their cookie against www; API-key (OAuth) actives use the captured bearer
-// against oauth.reddit.com.
+// their cookie on GET /api/info's first route (the probe marker skips the
+// rewrite, so this read doesn't get a route on its own, and it isn't resent on
+// a block page); API-key (OAuth) actives use the captured bearer against
+// oauth.reddit.com.
 void ApolloWebJSONPrefetchModernThingData(NSString *fullname, void (^completion)(NSDictionary *data)) {
     if (fullname.length == 0) { completion(nil); return; }
     NSString *cookie = ApolloActiveWebSession().cookieHeader;
     NSString *bearer = cookie.length == 0 ? [sLatestRedditBearerToken copy] : nil;
     if (cookie.length == 0 && bearer.length == 0) { completion(nil); return; }
 
-    NSString *host = cookie.length > 0 ? @"https://www.reddit.com" : @"https://oauth.reddit.com";
-    NSString *urlStr = [NSString stringWithFormat:@"%@/api/info.json?id=%@&raw_json=1", host, fullname];
+    NSString *base = @"https://oauth.reddit.com/api/info.json";
+    if (cookie.length > 0) {
+        ApolloWebJSONRoute route = (ApolloWebJSONRoute)ApolloWebJSONRoutesForRequest(@"GET", @"/api/info.json").firstObject.integerValue;
+        base = [NSString stringWithFormat:@"https://%@%@", ApolloWebJSONRouteHost(route),
+                ApolloWebJSONRoutePath(route, @"/api/info.json")];
+    }
+    NSString *urlStr = [NSString stringWithFormat:@"%@?id=%@&raw_json=1", base, fullname];
     NSURL *probeURL = ApolloWebJSONURLWithFragment([NSURL URLWithString:urlStr], kApolloWebJSONProbeMarker);
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:probeURL];
     if (cookie.length > 0) [req setValue:cookie forHTTPHeaderField:@"Cookie"];
@@ -1840,13 +1963,40 @@ static BOOL ApolloWebJSONPathExpectsListingDictionary(NSString *path) {
 id ApolloWebJSONGuardListingTaskResponse(NSString *method, NSString *path,
                                         NSHTTPURLResponse *response, id responseObject,
                                         NSError **error) {
-    if (responseObject == nil || [responseObject isKindOfClass:[NSDictionary class]]) return responseObject;
+    BOOL nonDictionary = responseObject && ![responseObject isKindOfClass:[NSDictionary class]];
+    // A refusal RedditKit doesn't report (#1420). RDKResponseSerializer answers
+    // anything that isn't application/json with no object AND no error (Reddit's
+    // HTML 429 and 403 block pages, an empty 429, an HTML 5xx), and RedditKit
+    // maps no error for a 429 even when its body is JSON. A listing then reads as
+    // a page with nothing after it: Apollo sets a feed's cursor to nil and never
+    // asks for the next page again. API-Key-Free accounts get these from
+    // www.reddit.com all the time; oauth.reddit.com answers in JSON.
+    NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]] ? response.statusCode : 0;
+    BOOL unreportedFailure = !(error && *error) && (responseObject == nil || status >= 400);
+    if (!nonDictionary && !unreportedFailure) return responseObject;
     if (!method || [method caseInsensitiveCompare:@"GET"] != NSOrderedSame) return responseObject;
     // RDKClient supplies relative paths (with or without a leading slash).
     if (![path isKindOfClass:[NSString class]] || path.length == 0) return responseObject;
     NSString *requestPath = [[path componentsSeparatedByString:@"?"] firstObject];
     if (![requestPath hasPrefix:@"/"]) requestPath = [@"/" stringByAppendingString:requestPath];
     if (!ApolloWebJSONPathExpectsListingDictionary(requestPath)) return responseObject;
+
+    if (!nonDictionary) {
+        // Report the failure and drop any body: RedditKit parses a non-nil
+        // object as the listing and never looks at the error. With an error,
+        // Apollo keeps the feed's cursor and asks for the page again on the
+        // next scroll (a 429 also gets the rate-limit toast).
+        ApolloLog(@"[WebJSON] Listing request came back HTTP %ld with %@ and no error; reporting a failed load, not an empty page",
+                  (long)status, responseObject ? @"an error body" : @"no JSON body");
+        if (error) {
+            *error = [NSError errorWithDomain:@"ApolloReborn.WebJSON.Response"
+                                         code:1420
+                                     userInfo:@{ NSLocalizedDescriptionKey: status == 429
+                                                 ? @"Reddit is limiting requests right now. Try again in a minute."
+                                                 : @"Reddit didn't send this page. Try again in a moment." }];
+        }
+        return nil;
+    }
 
     // Never log response bodies or query parameters: redirected bodies can
     // contain account/session data. Preserve any existing transport error,
