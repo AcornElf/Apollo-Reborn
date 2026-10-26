@@ -1,17 +1,23 @@
 #import "ApolloCommon.h"
 #import "ApolloExecutableSDK.h"
 #import "ApolloState.h"
+#import "UserDefaultConstants.h"
 #import "ApolloThemeRuntime.h"
 #import <QuartzCore/QuartzCore.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
 #import <OSLog/OSLog.h>
 #import <os/lock.h>
 #include <stdatomic.h>
 #import <Security/Security.h>
 #import "ApolloClasses.h"
+#import "ApolloAccountCredentials.h"
+#import "ApolloWebSessionStore.h"
+#import "ApolloDeviceIdentity.h"
+#include <sys/sysctl.h>
 
 #pragma mark - Security dictionaries
 
@@ -355,6 +361,11 @@ static NSString *ApolloCollectLogsFiltered(BOOL aiOnly) {
         NSMutableArray<OSLogEntryLog *> *filteredEntries = [NSMutableArray array];
         for (OSLogEntryLog *entry in entries) {
             if (![entry isKindOfClass:[OSLogEntryLog class]]) continue;
+            // Persisted levels only. Info/debug lines are written for live
+            // `log stream` sessions and can carry per-cell detail; OSLogStore
+            // still hands back the ones in the in-memory buffer, so filter
+            // here instead of relying on that.
+            if (entry.level < OSLogEntryLogLevelNotice) continue;
             if (!aiOnly ||
                 [entry.category isEqualToString:@"AISummary"] ||
                 [entry.composedMessage containsString:@"[AISummary]"] ||
@@ -388,18 +399,30 @@ static NSString *ApolloCollectLogsFiltered(BOOL aiOnly) {
         if (persistentListLayout.length || persistentLogin.length) {
             [output appendString:@"===== Current session ([ApolloFix] os_log) =====\n"];
         }
-        [output appendFormat:@"%@ — %@ (%lu entries)\n\n",
+        [output appendFormat:@"%@ — %@ (%lu entries)\n",
             aiOnly ? @"Apollo AI Logs" : @"ApolloFix Logs",
             [NSDateFormatter localizedStringFromDate:[NSDate date]
                                            dateStyle:NSDateFormatterMediumStyle
                                            timeStyle:NSDateFormatterShortStyle],
             (unsigned long)filteredEntries.count];
+        [output appendString:@"Personal data masked: links show the site only, usernames are per-log tags like u/[user-3f9a], your accounts are [me], tokens and emails are removed.\n\n"];
 
         for (OSLogEntryLog *entry in filteredEntries) {
             [output appendFormat:@"[%@] %@\n", [formatter stringFromDate:entry.date], entry.composedMessage];
         }
 
-        return output;
+        // One scrub over the finished text, persistent files included (they
+        // span earlier sessions and accounts). Active account first so it is [me].
+        // The other names come from plain defaults reads (every signed-in account
+        // is pinned in the per-account credentials map; keyless ones also have a
+        // web session) rather than an account-archive decode, which would fire
+        // the -setCurrentUser: hooks from this export queue.
+        NSMutableArray<NSString *> *ownUsernames = [NSMutableArray array];
+        NSString *active = ApolloActiveAccountUsername();
+        if (active.length) [ownUsernames addObject:active];
+        [ownUsernames addObjectsFromArray:ApolloAllAccountCredentials().allKeys];
+        [ownUsernames addObjectsFromArray:ApolloWebSessionUsernames().allObjects];
+        return ApolloRedactLogExport(output, ownUsernames, NSHomeDirectory());
     }
 
     return @"Log export requires iOS 15+.";
@@ -587,42 +610,220 @@ static const char *ApolloNativeExecutableImageName(void) {
 // Read the guest image's actual load command. LiveContainer's optional SDK
 // spoofing hooks dyld's program-SDK APIs, not this header; the glass patch's
 // intentional SDK bump therefore still works in both hosted and normal apps.
-static uint32_t GetLinkedSDKVersion(void) {
+static const struct mach_header *ApolloNativeImageHeader(void) {
     const char *executableName = ApolloNativeExecutableImageName();
-    if (!executableName) return 0;
+    if (!executableName) return NULL;
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         const char *imageName = _dyld_get_image_name(i);
-        if (!imageName || strcmp(imageName, executableName) != 0) continue;
-        const struct mach_header *header = _dyld_get_image_header(i);
-        if (!header || header->magic != MH_MAGIC_64 ||
-            header->sizeofcmds > ApolloMaximumMachOLoadCommandBytes) return 0;
-        // dyld has already validated/mapped this loaded image. The reader
-        // additionally bounds every command within its declared header area.
-        size_t length = sizeof(struct mach_header_64) + header->sizeofcmds;
-        return ApolloSDKVersionFromMachO(header, length);
+        if (imageName && strcmp(imageName, executableName) == 0) {
+            return _dyld_get_image_header(i);
+        }
     }
-    return 0;
+    return NULL;
+}
+
+static uint32_t GetLinkedSDKVersion(void) {
+    const struct mach_header *header = ApolloNativeImageHeader();
+    if (!header || header->magic != MH_MAGIC_64 ||
+        header->sizeofcmds > ApolloMaximumMachOLoadCommandBytes) return 0;
+    // dyld has already validated/mapped this loaded image. The reader
+    // additionally bounds every command within its declared header area.
+    size_t length = sizeof(struct mach_header_64) + header->sizeofcmds;
+    return ApolloSDKVersionFromMachO(header, length);
 }
 
 // Both the selected Apollo variant and the running OS must support glass.
-BOOL IsLiquidGlass(void) {
-    static BOOL checked = NO;
-    static BOOL available = NO;
+// Keep eligibility separate from the launch choice: the settings switch must
+// remain reachable after selecting classic mode, and every glass-specific
+// hook must see one immutable choice for the entire process lifetime.
+static BOOL sLiquidGlassBuildAvailable;
+static BOOL sLiquidGlassCanToggle;
+static NSBundle *sLiquidGlassAppBundle;
+static NSDictionary *(*sLiquidGlassOriginalInfoDictionary)(id, SEL);
+static id (*sLiquidGlassOriginalInfoValue)(id, SEL, NSString *);
+static NSString *const kApolloDesignCompatibilityKey = @"UIDesignRequiresCompatibility";
 
-    if (!checked) {
-        checked = YES;
+static NSInteger ApolloLogicalDeviceDisplayCount(void) {
+    // Duo requires iOS 27.1. On iOS 26 and earlier there is no foldable
+    // display. Scene/window geometry is unavailable during +load and a closed
+    // Duo can otherwise be mistaken for a regular phone. This capability
+    // counts the built-in logical displays before UIKit creates a scene, in
+    // either pose (the Device Hub Duo simulator reports 2, phones report 1).
+    static NSInteger count;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27) {
+            count = 1;
+            return;
+        }
+        void *gestalt = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY | RTLD_LOCAL);
+        CFIndex (*displayCount)(void) = gestalt ? dlsym(gestalt, "MGGetLogicalDeviceDisplayCount") : NULL;
+        CFIndex gestaltCount = displayCount ? displayCount() : 0;
+        if (gestalt) dlclose(gestalt);
+        // Real Duo hardware reports one logical display here, so also check
+        // the model. sysctl reads the raw identifier (uname is remapped by
+        // the tweak); the simulator reports the host arch instead.
+        char machine[64] = {0};
+        size_t length = sizeof(machine) - 1;
+        if (sysctlbyname("hw.machine", machine, &length, NULL, 0) != 0) machine[0] = '\0';
+        const char *model = machine;
+        if (strncmp(machine, "iPhone", 6) != 0) {
+            const char *simModel = getenv("SIMULATOR_MODEL_IDENTIFIER");
+            if (simModel) model = simModel;
+        }
+        BOOL duoModel = ApolloMachineIsIPhoneDuo(model);
+        count = duoModel ? MAX(gestaltCount, 2) : gestaltCount;
+        ApolloLog(@"[DeviceDuo] model=%s logical displays=%ld duo=%d",
+                  model, (long)gestaltCount, count > 1);
+    });
+    return count;
+}
+
+BOOL ApolloDeviceIsDuo(void) {
+    return ApolloLogicalDeviceDisplayCount() > 1;
+}
+
+static BOOL ApolloLiquidGlassDisabledForLaunch(__unused id object, __unused SEL selector) {
+    return NO;
+}
+
+static Method ApolloLiquidGlassRuntimeSelectionMethod(void) {
+    // UIKit's Solarium feature is the Liquid Glass design gate. Its cached
+    // getters call this method once at launch on iOS 26/27. Unlike changing
+    // dyld's SDK answers, overriding this gate does not change unrelated SDK
+    // compatibility decisions or Duo's executable stamp. Validate the ABI
+    // before replacing it, and never install it in a host such as LiveContainer.
+    Class features = objc_lookUpClass("_UIKitFeatures");
+    Method method = class_getClassMethod(features,
+        sel_registerName("uncachedSolariumEnabledForCurrentDeviceIdiom"));
+    if (!method || method_getNumberOfArguments(method) != 2) return NULL;
+    char resultType[8] = {0};
+    method_getReturnType(method, resultType, sizeof(resultType));
+    return strcmp(resultType, @encode(BOOL)) == 0 ? method : NULL;
+}
+
+static BOOL ApolloLiquidGlassTryDisableRuntimeDesign(Method designMethod, BOOL (*designEnabled)(void)) {
+    if (!designMethod || !designEnabled) return NO;
+    IMP original = method_setImplementation(designMethod, (IMP)ApolloLiquidGlassDisabledForLaunch);
+    // UIKit may already have cached its design before our +load. Restore the
+    // original method when verification fails so the caller can retain Glass.
+    if (designEnabled()) {
+        method_setImplementation(designMethod, original);
+        return NO;
+    }
+    return YES;
+}
+
+static NSDictionary *ApolloLiquidGlassInfoDictionary(NSBundle *bundle, SEL selector) {
+    NSDictionary *original = sLiquidGlassOriginalInfoDictionary(bundle, selector);
+    if (bundle != sLiquidGlassAppBundle) return original;
+
+    // Never edit the signed Info.plist or the shared Foundation dictionary.
+    // Preserve every other key (including icon metadata and the build variant).
+    NSMutableDictionary *info = [original mutableCopy];
+    info[kApolloDesignCompatibilityKey] = @(!sLiquidGlassEnabled);
+    return info;
+}
+
+static id ApolloLiquidGlassInfoValue(NSBundle *bundle, SEL selector, NSString *key) {
+    if (bundle == sLiquidGlassAppBundle && [key isEqualToString:kApolloDesignCompatibilityKey]) {
+        return @(!sLiquidGlassEnabled);
+    }
+    return sLiquidGlassOriginalInfoValue(bundle, selector, key);
+}
+
+static void ApolloInitializeLiquidGlassMode(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         BOOL glassRuntime = NO;
         if (@available(iOS 26.0, *)) {
             glassRuntime = objc_lookUpClass("UIGlassEffect") != Nil;
         }
         uint32_t sdkVersion = GetLinkedSDKVersion();
-        available = ApolloSDKEnablesLiquidGlass(sdkVersion, glassRuntime);
+        sLiquidGlassBuildAvailable = ApolloSDKEnablesLiquidGlass(sdkVersion, glassRuntime);
 
-        ApolloLog(@"[IsLiquidGlass] Apollo SDK: 0x%08X, glass runtime: %@, enabled: %@",
-                  sdkVersion, glassRuntime ? @"YES" : @"NO", available ? @"YES" : @"NO");
+        // This setting is exceptional: read it before Logos constructors, not
+        // in Tweak.xm's later defaults load. Several constructors gate their
+        // hook installation on IsLiquidGlass(). Register the default here as
+        // well so fresh installs and backups predating the key keep glass on.
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        [defaults registerDefaults:@{ UDKeyLiquidGlassEnabled: @YES }];
+        BOOL requestedGlass = [defaults boolForKey:UDKeyLiquidGlassEnabled];
+
+        // Scope the override to Apollo's main bundle. A host such as
+        // LiveContainer can expose its own main bundle or initialize UIKit
+        // before loading the guest. A guest can even substitute mainBundle, so
+        // also require a standalone executable. Leave hosted apps unchanged.
+        NSBundle *mainBundle = NSBundle.mainBundle;
+        const char *imageName = ApolloNativeExecutableImageName();
+        NSString *nativePath = imageName ? [NSString stringWithUTF8String:imageName] : nil;
+        BOOL mainBundleIsApollo = nativePath.length &&
+            [mainBundle.executablePath.stringByResolvingSymlinksInPath
+                isEqualToString:nativePath.stringByResolvingSymlinksInPath];
+        Method infoMethod = class_getInstanceMethod(NSBundle.class, @selector(infoDictionary));
+        Method valueMethod = class_getInstanceMethod(NSBundle.class, @selector(objectForInfoDictionaryKey:));
+        const struct mach_header *nativeHeader = ApolloNativeImageHeader();
+        BOOL standalone = nativeHeader && nativeHeader->filetype == MH_EXECUTE;
+        NSInteger runtimeMajor = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
+        NSInteger logicalDisplays = glassRuntime ? ApolloLogicalDeviceDisplayCount() : 0;
+        BOOL bundleCompatibility = ApolloSDKSupportsLiquidGlassCompatibility(sdkVersion, glassRuntime);
+        BOOL runtimeCompatibility = ApolloSDKSupportsLiquidGlassRuntimeSelection(sdkVersion,
+            glassRuntime, runtimeMajor, logicalDisplays);
+        Method designMethod = runtimeCompatibility ? ApolloLiquidGlassRuntimeSelectionMethod() : NULL;
+        BOOL (*designEnabled)(void) = runtimeCompatibility ? dlsym(RTLD_DEFAULT, "_UISolariumEnabled") : NULL;
+        sLiquidGlassCanToggle = logicalDisplays <= 1 &&
+            (bundleCompatibility || (designMethod && designEnabled)) &&
+            standalone && mainBundleIsApollo && infoMethod && valueMethod;
+        sLiquidGlassEnabled = !sLiquidGlassCanToggle || requestedGlass;
+
+        if (sLiquidGlassCanToggle && runtimeCompatibility && !requestedGlass) {
+            // If UIKit cached its design before our +load, restore its method
+            // and keep our own hooks in Glass mode too. Never leave mixed
+            // Standard/Glass chrome or claim an unavailable switch succeeded.
+            if (!ApolloLiquidGlassTryDisableRuntimeDesign(designMethod, designEnabled)) {
+                sLiquidGlassCanToggle = NO;
+                sLiquidGlassEnabled = YES;
+                ApolloLog(@"[LiquidGlassMode] UIKit design already cached; keeping Glass active");
+            }
+        }
+
+        if (sLiquidGlassCanToggle) {
+            // Cache the bundle BEFORE swizzling: asking for mainBundle inside
+            // the hooks can recurse through Foundation's metadata lookup.
+            sLiquidGlassAppBundle = mainBundle;
+            sLiquidGlassOriginalInfoDictionary = (void *)method_getImplementation(infoMethod);
+            sLiquidGlassOriginalInfoValue = (void *)method_getImplementation(valueMethod);
+            method_setImplementation(infoMethod, (IMP)ApolloLiquidGlassInfoDictionary);
+            method_setImplementation(valueMethod, (IMP)ApolloLiquidGlassInfoValue);
+        }
+        ApolloLog(@"[LiquidGlassMode] SDK=0x%08X runtime=%d displays=%ld switchAvailable=%d requested=%d active=%d",
+                  sdkVersion, glassRuntime, (long)logicalDisplays, sLiquidGlassCanToggle, requestedGlass,
+                  sLiquidGlassBuildAvailable && sLiquidGlassEnabled);
+    });
+}
+
+// ObjC +load runs before this dylib's C/C++ constructors, including every
+// Logos %ctor. UIKit also caches its design choice, so waiting for application
+// launch or settings initialization would leave a mixture of old/new chrome.
+@interface ApolloLiquidGlassModeBootstrap : NSObject
+@end
+
+@implementation ApolloLiquidGlassModeBootstrap
++ (void)load {
+    @autoreleasepool {
+        ApolloInitializeLiquidGlassMode();
     }
+}
+@end
 
-    return available;
+BOOL IsLiquidGlass(void) {
+    ApolloInitializeLiquidGlassMode();
+    return sLiquidGlassBuildAvailable && sLiquidGlassEnabled;
+}
+
+BOOL ApolloLiquidGlassCanToggle(void) {
+    ApolloInitializeLiquidGlassMode();
+    return sLiquidGlassCanToggle;
 }
 
 // Route a URL through Apollo's own URL handler, bypassing iOS URL dispatch.
@@ -631,57 +832,44 @@ BOOL IsLiquidGlass(void) {
 // the AppDelegate's ivar is nil. The AppDelegate's application:openURL:options:
 // handler (sub_100161d08) reads AppDelegate.tabBarController for navigation,
 // so we ensure it has a reference before calling.
-static BOOL ApolloRouteURLThroughUIApplication(NSURL *url) {
-    if (![url isKindOfClass:[NSURL class]]) {
-        return NO;
-    }
-
-    UIApplication *application = [UIApplication sharedApplication];
-    id<UIApplicationDelegate> appDelegate = [application delegate];
-
-    if (![appDelegate respondsToSelector:@selector(application:openURL:options:)]) {
-        return NO;
-    }
-
-    // Ensure AppDelegate.tabBarController is populated
+extern void *ApolloSwiftExchangePaneTabs(void *storage, const void *object);
+BOOL ApolloRouteURLThroughAppInScene(NSURL *url, UIWindowScene *scene) {
+    if (![url isKindOfClass:NSURL.class] || !NSThread.isMainThread) return NO;
+    UIApplication *application = UIApplication.sharedApplication;
+    id appDelegate = application.delegate;
+    SEL selector = @selector(application:openURL:options:);
+    if (![appDelegate respondsToSelector:selector]) return NO;
+    // Apollo's AppDelegate router uses a legacy tab ivar. Scope that bridge to
+    // this synchronous callback and restore it even if native routing throws.
+    // Never persist one scene's tab controller into a process-global delegate.
+    UITabBarController *tabs = (id)ApolloMainTabBarControllerForScene(scene);
+    if (![tabs isKindOfClass:UITabBarController.class]) return NO;
+    if (scene && tabs.viewIfLoaded.window.windowScene != scene) return NO;
+    Ivar ivar = class_getInstanceVariable([appDelegate class], "tabBarController");
+    Ivar next = class_getInstanceVariable([appDelegate class], "apolloProProducts");
+    // Verified in AppDelegate's native destructor at 0x10016cb10: ldr +
+    // objc_release, followed by apolloProProducts eight bytes later. Swift's
+    // mangled Optional encoding is deliberately not interpreted as ObjC @.
+    if (![appDelegate isMemberOfClass:objc_getClass("_TtC6Apollo11AppDelegate")] || !ivar || !next ||
+        ivar_getOffset(next) - ivar_getOffset(ivar) != sizeof(void *)) return NO;
+    void *storage = (uint8_t *)(__bridge void *)appDelegate + ivar_getOffset(ivar);
+    id previous = (__bridge_transfer id)ApolloSwiftExchangePaneTabs(storage, (__bridge const void *)tabs);
     @try {
-        Ivar appTabBarIvar = class_getInstanceVariable([appDelegate class], "tabBarController");
-        if (appTabBarIvar && !object_getIvar(appDelegate, appTabBarIvar)) {
-            for (UIScene *scene in application.connectedScenes) {
-                if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                id sceneDelegate = [(UIWindowScene *)scene delegate];
-                if (!sceneDelegate) continue;
-                Ivar sceneTabBarIvar = class_getInstanceVariable([sceneDelegate class], "tabBarController");
-                if (!sceneTabBarIvar) continue;
-                id sceneTabBar = object_getIvar(sceneDelegate, sceneTabBarIvar);
-                if (sceneTabBar) {
-                    ApolloLog(@"[ApolloRouteURL] Copying SceneDelegate tabBarController to AppDelegate");
-                    object_setIvar(appDelegate, appTabBarIvar, sceneTabBar);
-                    break;
-                }
-            }
-        }
-    } @catch (NSException *e) {
-        ApolloLog(@"[ApolloRouteURL] Failed to copy tabBarController: %@", e);
-    }
-
-    // Call the app delegate's URL handler directly — stays in-process,
-    // never hits iOS's URL scheme dispatch.
-    @try {
-        BOOL (*msgSend)(id, SEL, id, id, id) = (BOOL (*)(id, SEL, id, id, id))objc_msgSend;
-        msgSend(appDelegate, @selector(application:openURL:options:), application, url, @{});
-        return YES;
-    } @catch (NSException *exception) {
-        ApolloLogError(@"[ApolloRouteURL] application:openURL:options: threw: %@", exception);
+        return ((BOOL (*)(id, SEL, id, id, id))objc_msgSend)(appDelegate, selector, application, url, @{});
+    } @catch (__unused NSException *exception) {
+        ApolloLogError(@"[ApolloRouteURL] native route failed");
         return NO;
+    } @finally {
+        __unused id replaced = (__bridge_transfer id)ApolloSwiftExchangePaneTabs(storage, (__bridge const void *)previous);
     }
 }
 
-// Public wrapper: route a reddit URL through Apollo's own handler so posts,
-// comments, subreddits and users open the native views. Returns NO when the
-// handler is unavailable, so callers can fall back to a web view.
+static BOOL ApolloRouteURLThroughUIApplication(NSURL *url) {
+    return ApolloRouteURLThroughAppInScene(url, nil);
+}
+
 BOOL ApolloRouteURLThroughApp(NSURL *url) {
-    return ApolloRouteURLThroughUIApplication(url);
+    return ApolloRouteURLThroughAppInScene(url, nil);
 }
 
 NSURL *ApolloURLByConvertingResolvedURLToApolloScheme(NSURL *url) {
@@ -915,6 +1103,16 @@ BOOL ApolloIsJunkNumericTitle(NSString *title) {
     return NO;
 }
 
+NSString *ApolloMobileSafariUserAgent(void) {
+    NSArray<NSString *> *parts = [UIDevice.currentDevice.systemVersion componentsSeparatedByString:@"."];
+    NSString *major = parts.count > 0 ? parts[0] : @"18";
+    NSString *minor = parts.count > 1 ? parts[1] : @"0";
+    BOOL pad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    NSString *os = pad ? [NSString stringWithFormat:@"iPad; CPU OS %@_%@ like Mac OS X", major, minor]
+                       : [NSString stringWithFormat:@"iPhone; CPU iPhone OS %@_%@ like Mac OS X", major, minor];
+    return [NSString stringWithFormat:@"Mozilla/5.0 (%@) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/%@.%@ Mobile/15E148 Safari/604.1", os, major, minor];
+}
+
 NSString *ApolloWebsiteNameFromHost(NSString *host) {
     if (host.length == 0) return nil;
 
@@ -963,26 +1161,170 @@ NSString *ApolloWebsiteNameFromHost(NSString *host) {
     return [first stringByAppendingString:[label substringFromIndex:1]];
 }
 
+// Register both appearances so visible image views follow trait changes.
+static NSMapTable<UIImageAsset *, NSArray<UIImage *> *> *ApolloSettingsIconAssets(void) {
+    static NSMapTable *assets;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ assets = [NSMapTable weakToStrongObjectsMapTable]; });
+    return assets;
+}
+
+static void ApolloRegisterSettingsIconVariants(UIImageAsset *asset, NSArray<UIImage *> *images) {
+    for (NSNumber *style in @[@(UIUserInterfaceStyleLight), @(UIUserInterfaceStyleDark)]) {
+        BOOL dark = sSettingsIconAppearance == ApolloSettingsIconAppearanceDark ||
+            (sSettingsIconAppearance == ApolloSettingsIconAppearanceSystem && style.integerValue == UIUserInterfaceStyleDark);
+        UIImage *source = images[dark ? 1 : 0];
+        // Keep the stored originals independent of UIKit's asset-owned wrappers.
+        UIImage *image = [[UIImage imageWithCGImage:source.CGImage scale:source.scale orientation:source.imageOrientation]
+                          imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        [asset registerImage:image withTraitCollection:[UITraitCollection traitCollectionWithTraitsFromCollections:@[
+            [UITraitCollection traitCollectionWithUserInterfaceStyle:style.integerValue],
+            [UITraitCollection traitCollectionWithDisplayScale:source.scale]
+        ]]];
+    }
+}
+
+UIImage *ApolloSettingsIconImage(UIImage *lightImage, UIImage *darkImage, UITraitCollection *traits) {
+    if (!lightImage.CGImage || !darkImage.CGImage) return lightImage;
+    UIImageAsset *asset = [UIImageAsset new];
+    NSArray *images = @[lightImage, darkImage];
+    [ApolloSettingsIconAssets() setObject:images forKey:asset];
+    ApolloRegisterSettingsIconVariants(asset, images);
+    return [asset imageWithTraitCollection:traits ?: UITraitCollection.currentTraitCollection];
+}
+
+UIImage *ApolloResolveSettingsIconImage(UIImage *image, UITraitCollection *traits) {
+    UIImageAsset *asset = image.imageAsset;
+    return asset && [ApolloSettingsIconAssets() objectForKey:asset]
+        ? [asset imageWithTraitCollection:traits ?: UITraitCollection.currentTraitCollection] : image;
+}
+
+static void ApolloRefreshSettingsIconViews(UIView *view) {
+    if ([view isKindOfClass:UIImageView.class]) {
+        UIImageView *imageView = (UIImageView *)view;
+        UIImageAsset *asset = imageView.image.imageAsset;
+        if (asset && [ApolloSettingsIconAssets() objectForKey:asset]) {
+            imageView.image = [asset imageWithTraitCollection:imageView.traitCollection];
+        }
+    }
+    for (UIView *subview in view.subviews) ApolloRefreshSettingsIconViews(subview);
+}
+
+UIImage *ApolloResizeSettingsIconImage(UIImage *image, CGFloat size, UITraitCollection *traits) {
+    if (!image || size <= 0) return image;
+    traits = traits ?: UITraitCollection.currentTraitCollection;
+    NSArray<UIImage *> *variants = image.imageAsset ? [ApolloSettingsIconAssets() objectForKey:image.imageAsset] : nil;
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = traits.displayScale ?: UIScreen.mainScreen.scale;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size) format:format];
+    NSMutableArray<UIImage *> *resized = [NSMutableArray array];
+    for (UIImage *source in variants ?: @[image]) {
+        [resized addObject:[[renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *context) {
+            [source drawInRect:CGRectMake(0, 0, size, size)];
+        }] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]];
+    }
+    return variants ? ApolloSettingsIconImage(resized[0], resized[1], traits) : resized[0];
+}
+
+static void ApolloRefreshSettingsIconControllers(UIViewController *controller) {
+    ApolloRefreshSettingsIconViews(controller.viewIfLoaded);
+    for (UIViewController *child in controller.childViewControllers) ApolloRefreshSettingsIconControllers(child);
+    if (controller.presentedViewController) ApolloRefreshSettingsIconControllers(controller.presentedViewController);
+}
+
+void ApolloSetSettingsIconAppearance(NSInteger appearance) {
+    if (appearance < ApolloSettingsIconAppearanceSystem || appearance > ApolloSettingsIconAppearanceDark) {
+        appearance = ApolloSettingsIconAppearanceLight;
+    }
+    if (sSettingsIconAppearance == appearance) return;
+    sSettingsIconAppearance = (ApolloSettingsIconAppearance)appearance;
+    [[NSUserDefaults standardUserDefaults] setInteger:appearance forKey:UDKeySettingsIconAppearance];
+    NSMapTable *assets = ApolloSettingsIconAssets();
+    for (UIImageAsset *asset in assets.keyEnumerator.allObjects) {
+        ApolloRegisterSettingsIconVariants(asset, [assets objectForKey:asset]);
+    }
+    // Include loaded screens behind Appearance so popping back needs no table reload.
+    for (UIWindow *window in ApolloAllWindows()) {
+        ApolloRefreshSettingsIconViews(window);
+        ApolloRefreshSettingsIconControllers(window.rootViewController);
+    }
+    ApolloLog(@"[Settings] icon appearance -> %ld", (long)appearance);
+}
+
+UIImage *ApolloSettingsTileImage(UIColor *color, CGFloat size, UITraitCollection *traits,
+                                       void (^drawContent)(BOOL dark, UIColor *resolvedColor)) {
+    if (size <= 0) size = 29.0;
+    traits = traits ?: UITraitCollection.currentTraitCollection;
+    color = color ?: UIColor.secondarySystemFillColor;
+    CGFloat cornerRadius = 6.0 * size / 29.0;
+    NSMutableArray<UIImage *> *images = [NSMutableArray arrayWithCapacity:2];
+    for (NSNumber *styleValue in @[@(UIUserInterfaceStyleLight), @(UIUserInterfaceStyleDark)]) {
+        UIUserInterfaceStyle style = (UIUserInterfaceStyle)styleValue.integerValue;
+        UITraitCollection *appearance = [UITraitCollection traitCollectionWithUserInterfaceStyle:style];
+        UITraitCollection *variantTraits = [UITraitCollection traitCollectionWithTraitsFromCollections:@[traits, appearance]];
+        BOOL dark = style == UIUserInterfaceStyleDark;
+        UIColor *resolvedColor = [color resolvedColorWithTraitCollection:variantTraits];
+        UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+        format.scale = traits.displayScale ?: UIScreen.mainScreen.scale;
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size) format:format];
+        UIImage *image = [renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *context) {
+            UIBezierPath *tile = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size) cornerRadius:cornerRadius];
+            if (dark) {
+                CGContextRef cg = context.CGContext;
+                CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+                const CGFloat backgroundColors[] = {
+                    0.13, 0.13, 0.13, 1.0,
+                    0.055, 0.055, 0.055, 1.0
+                };
+                CGGradientRef background = CGGradientCreateWithColorComponents(colorSpace, backgroundColors, NULL, 2);
+                CGContextSaveGState(cg);
+                [tile addClip];
+                CGContextDrawLinearGradient(cg, background, CGPointMake(size / 2, 0), CGPointMake(size / 2, size), 0);
+                CGContextRestoreGState(cg);
+                CGGradientRelease(background);
+
+                CGFloat edgeWidth = 0.5 * size / 29.0;
+                UIBezierPath *edge = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(CGRectMake(0, 0, size, size), edgeWidth / 2, edgeWidth / 2)
+                                                              cornerRadius:cornerRadius - edgeWidth / 2];
+                const CGFloat rimColors[] = {
+                    0.24, 0.24, 0.24, 1.0,
+                    0.10, 0.10, 0.10, 1.0,
+                    0.16, 0.16, 0.16, 1.0
+                };
+                const CGFloat rimLocations[] = { 0.0, 0.55, 1.0 };
+                CGGradientRef rim = CGGradientCreateWithColorComponents(colorSpace, rimColors, rimLocations, 3);
+                CGContextSaveGState(cg);
+                CGContextAddPath(cg, edge.CGPath);
+                CGContextSetLineWidth(cg, edgeWidth);
+                CGContextReplacePathWithStrokedPath(cg);
+                CGContextClip(cg);
+                CGContextDrawLinearGradient(cg, rim, CGPointMake(size / 2, 0), CGPointMake(size / 2, size), 0);
+                CGContextRestoreGState(cg);
+                CGGradientRelease(rim);
+                CGColorSpaceRelease(colorSpace);
+            } else {
+                [resolvedColor setFill];
+                [tile fill];
+            }
+            drawContent(dark, resolvedColor);
+        }];
+        [images addObject:image];
+    }
+    return ApolloSettingsIconImage(images[0], images[1], traits);
+}
+
 UIImage *ApolloEmojiSettingsIcon(NSString *emoji, UIColor *backgroundColor, CGFloat size) {
     if (emoji.length == 0) return nil;
     if (size <= 0.0) size = 29.0;
 
-    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
-    format.opaque = NO;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size) format:format];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-        CGRect bounds = CGRectMake(0, 0, size, size);
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:6.0];
-        UIColor *fill = backgroundColor ?: [UIColor secondarySystemFillColor];
-        [fill setFill];
-        [path fill];
-
+    return ApolloSettingsTileImage(backgroundColor, size, nil,
+                                  ^(__unused BOOL dark, __unused UIColor *resolvedColor) {
         UIFont *font = [UIFont systemFontOfSize:size * 0.58];
         NSDictionary *attrs = @{NSFontAttributeName: font};
         CGSize textSize = [emoji sizeWithAttributes:attrs];
         CGPoint origin = CGPointMake((size - textSize.width) / 2.0, (size - textSize.height) / 2.0 - 0.5);
         [emoji drawAtPoint:origin withAttributes:attrs];
-    }];
+    });
 }
 
 NSAttributedString *ApolloSymbolAttachment(NSString *symbolName, UIFont *font, UIColor *tint) {
@@ -1173,10 +1515,89 @@ static UIImage *ApolloRoundedPNGSettingsIcon(UIImage *source, CGFloat size) {
     }];
 }
 
+// Separates the bundled coffee icon's three colors, preserving antialiased edges.
+static UIImage *ApolloBuyMeACoffeeDarkArtwork(UIImage *artwork) {
+    static UIImage *darkArtwork;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        CGImageRef source = artwork.CGImage;
+        if (!source) return;
+        size_t width = CGImageGetWidth(source), height = CGImageGetHeight(source);
+        if (width < 32 || height < 32 || width > 1024 || height > 1024) return;
+        uint8_t *pixels = (uint8_t *)calloc(width * height, 4);
+        if (!pixels) return;
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = CGBitmapContextCreate(pixels, width, height, 8, width * 4, colorSpace,
+                                                     kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(colorSpace);
+        if (!context) { free(pixels); return; }
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), source);
+
+        // Sample the known asset's background, outline, and white fill.
+        size_t sampleRows[] = { height / 8, height / 5, height * 3 / 4 };
+        CGFloat colors[3][3];
+        for (size_t sample = 0; sample < 3; sample++) {
+            const uint8_t *pixel = pixels + (sampleRows[sample] * width + width / 2) * 4;
+            for (size_t channel = 0; channel < 3; channel++) colors[sample][channel] = pixel[channel];
+        }
+        CGFloat inkRed = colors[1][0] - colors[0][0];
+        CGFloat inkBlue = colors[1][2] - colors[0][2];
+        CGFloat fillRed = colors[2][0] - colors[0][0];
+        CGFloat fillBlue = colors[2][2] - colors[0][2];
+        CGFloat determinant = inkRed * fillBlue - inkBlue * fillRed;
+        if (fabs(determinant) < 1.0) {
+            CGContextRelease(context);
+            free(pixels);
+            return;
+        }
+        for (size_t index = 0; index < width * height; index++) {
+            uint8_t *pixel = pixels + index * 4;
+            // Exclude the source tile's rounded edge; the cup is inside this area.
+            size_t x = index % width, y = index / width;
+            if (x < width / 8 || x >= width - width / 8 ||
+                y < height / 8 || y >= height - height / 8) {
+                memset(pixel, 0, 4);
+                continue;
+            }
+            CGFloat sourceAlpha = pixel[3] / 255.0;
+            if (sourceAlpha == 0.0) continue;
+            CGFloat red = pixel[0] / sourceAlpha - colors[0][0];
+            CGFloat blue = pixel[2] / sourceAlpha - colors[0][2];
+            CGFloat ink = MAX(0.0, MIN(1.0, (red * fillBlue - blue * fillRed) / determinant));
+            CGFloat fill = MAX(0.0, MIN(1.0 - ink, (inkRed * blue - inkBlue * red) / determinant));
+            for (size_t channel = 0; channel < 3; channel++) {
+                pixel[channel] = (uint8_t)lround((ink * colors[0][channel] + fill * colors[2][channel]) * sourceAlpha);
+            }
+            pixel[3] = (uint8_t)lround((ink + fill) * sourceAlpha * 255.0);
+        }
+        CGImageRef cutout = CGBitmapContextCreateImage(context);
+        if (cutout) {
+            darkArtwork = [UIImage imageWithCGImage:cutout scale:artwork.scale orientation:artwork.imageOrientation];
+            CGImageRelease(cutout);
+        }
+        CGContextRelease(context);
+        free(pixels);
+    });
+    return darkArtwork;
+}
+
 UIImage *ApolloBuyMeACoffeeSettingsIcon(CGFloat size) {
-    UIImage *icon = ApolloRoundedPNGSettingsIcon(ApolloCachedBundledPNGNamed(@"buymeacoffee-icon"), size);
-    if (icon) return icon;
-    return ApolloEmojiSettingsIcon(@"☕️", [UIColor colorWithRed:0.98 green:0.74 blue:0.02 alpha:1.0], size > 0.0 ? size : 29.0);
+    if (size <= 0.0) size = 29.0;
+    UIImage *artwork = ApolloCachedBundledPNGNamed(@"buymeacoffee-icon");
+    UIImage *lightIcon = ApolloRoundedPNGSettingsIcon(artwork, size);
+    if (!lightIcon) return ApolloEmojiSettingsIcon(@"☕️", [UIColor colorWithRed:0.98 green:0.74 blue:0.02 alpha:1.0], size);
+    UIImage *darkArtwork = ApolloBuyMeACoffeeDarkArtwork(artwork);
+    if (!darkArtwork) return lightIcon;
+    return ApolloSettingsTileImage(UIColor.whiteColor, size, nil,
+                                  ^(BOOL dark, __unused UIColor *resolvedColor) {
+        CGRect bounds = CGRectMake(0, 0, size, size);
+        if (dark) {
+            [darkArtwork drawInRect:bounds];
+        } else {
+            CGContextClearRect(UIGraphicsGetCurrentContext(), bounds);
+            [lightIcon drawInRect:bounds];
+        }
+    });
 }
 
 UIImage *ApolloRebornOptionsSettingsIcon(CGFloat size) {
@@ -1343,23 +1764,201 @@ static UIViewController *ApolloTabBarControllerIvarOn(id object) {
     }
 }
 
-UIViewController *ApolloMainTabBarController(void) {
+static UIViewController *ApolloTabBarControllerForWindowScene(UIWindowScene *scene) {
+    if (![scene isKindOfClass:UIWindowScene.class]) return nil;
+
+    UIViewController *fromDelegate = ApolloTabBarControllerIvarOn(scene.delegate);
+    if (fromDelegate) return fromDelegate;
+
+    // Prefer the key window, then visible normal-level windows. A scene may
+    // also own transient keyboard/alert windows whose roots are unrelated to
+    // Apollo's tab hierarchy.
+    NSMutableArray<UIWindow *> *ordered = [NSMutableArray array];
+    for (UIWindow *window in scene.windows) if (window.isKeyWindow) [ordered addObject:window];
+    for (UIWindow *window in scene.windows) {
+        if (![ordered containsObject:window] && !window.hidden &&
+            window.windowLevel == UIWindowLevelNormal) [ordered addObject:window];
+    }
+    for (UIWindow *window in scene.windows) {
+        if (![ordered containsObject:window]) [ordered addObject:window];
+    }
+    for (UIWindow *window in ordered) {
+        UIViewController *root = window.rootViewController;
+        if ([root isKindOfClass:UITabBarController.class]) return root;
+        if ([root.presentedViewController isKindOfClass:UITabBarController.class]) {
+            return root.presentedViewController;
+        }
+    }
+    return nil;
+}
+
+UIViewController *ApolloMainTabBarControllerForScene(UIWindowScene *originatingScene) {
+    UIViewController *originating = ApolloTabBarControllerForWindowScene(originatingScene);
+    if (originating) return originating;
+
     UIApplication *application = UIApplication.sharedApplication;
+    NSArray<UIScene *> *scenes = application.connectedScenes.allObjects;
 
-    for (UIScene *scene in application.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+    // Prefer a foreground-active scene with a key window. Enumerating the
+    // connectedScenes set directly is unordered and can send an action into a
+    // background or external-display window when more than one scene exists.
+    for (UIScene *candidate in scenes) {
+        if (![candidate isKindOfClass:UIWindowScene.class] ||
+            candidate.activationState != UISceneActivationStateForegroundActive) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)candidate;
+        BOOL hasKeyWindow = NO;
+        for (UIWindow *window in windowScene.windows) {
+            if (window.isKeyWindow) { hasKeyWindow = YES; break; }
+        }
+        if (!hasKeyWindow) continue;
+        UIViewController *controller = ApolloTabBarControllerForWindowScene(windowScene);
+        if (controller) return controller;
+    }
+    for (UIScene *candidate in scenes) {
+        if (![candidate isKindOfClass:UIWindowScene.class] ||
+            candidate.activationState != UISceneActivationStateForegroundActive) continue;
+        UIViewController *controller = ApolloTabBarControllerForWindowScene((UIWindowScene *)candidate);
+        if (controller) return controller;
+    }
+    for (UIScene *candidate in scenes) {
+        if (![candidate isKindOfClass:UIWindowScene.class]) continue;
+        UIViewController *controller = ApolloTabBarControllerForWindowScene((UIWindowScene *)candidate);
+        if (controller) return controller;
+    }
+    return ApolloTabBarControllerIvarOn(application.delegate);
+}
 
-        UIViewController *fromDelegate = ApolloTabBarControllerIvarOn([(UIWindowScene *)scene delegate]);
-        if (fromDelegate) return fromDelegate;
+UIViewController *ApolloMainTabBarController(void) {
+    return ApolloMainTabBarControllerForScene(nil);
+}
 
-        for (UIWindow *window in [(UIWindowScene *)scene windows]) {
-            UIViewController *root = window.rootViewController;
-            if ([root isKindOfClass:UITabBarController.class]) return root;
-            if ([root.presentedViewController isKindOfClass:UITabBarController.class]) return root.presentedViewController;
+// ApolloCommon is included by nearly every file, so it must not import the pane
+// module. The pane nevertheless has to be the authority for its real navigation
+// controllers: UIKit wraps our plain secondary host in another navigation
+// controller, and `viewControllerForColumn:` can therefore return either that
+// wrapper or the host rather than Apollo's navigation controller nested inside
+// it. Ask for the pane's public column accessor dynamically first, then retain a
+// plain-UIKit fallback for split controllers that do not belong to this feature.
+static UINavigationController *ApolloNavigationControllerForSplitColumn(UISplitViewController *split,
+                                                                        UISplitViewControllerColumn column) {
+    SEL paneAccessor = NSSelectorFromString(@"apollo_navigationControllerForColumn:");
+    if ([split respondsToSelector:paneAccessor]) {
+        @try {
+            // ApolloPaneColumn intentionally uses the same 0/1/2 values as
+            // UISplitViewControllerColumn for primary/supplementary/secondary.
+            // Keep the call scalar so this common module needs no ipad/ import.
+            id result = ((id (*)(id, SEL, NSInteger))objc_msgSend)(split, paneAccessor, (NSInteger)column);
+            if ([result isKindOfClass:[UINavigationController class]]) {
+                return (UINavigationController *)result;
+            }
+            ApolloLog(@"[Common] pane column %ld returned non-navigation controller %@",
+                      (long)column, result ? NSStringFromClass([result class]) : @"nil");
+        } @catch (NSException *exception) {
+            ApolloLog(@"[Common] pane navigation accessor threw on %@ column %ld: %@",
+                      split, (long)column, exception);
         }
     }
 
-    return ApolloTabBarControllerIvarOn(application.delegate);
+    UIViewController *columnController = nil;
+    if ([split respondsToSelector:@selector(viewControllerForColumn:)]) {
+        @try {
+            columnController = [split viewControllerForColumn:column];
+        } @catch (NSException *exception) {
+            ApolloLog(@"[Common] viewControllerForColumn: threw on %@: %@", split, exception);
+        }
+    }
+    // A split controller built with the legacy `viewControllers` API answers nil
+    // for every column. Fall back to positional lookup so such a controller
+    // still resolves instead of silently returning nothing.
+    if (!columnController) {
+        NSArray<UIViewController *> *children = split.viewControllers;
+        NSUInteger index = (column == UISplitViewControllerColumnSecondary) ? 1 : 0;
+        if (index < children.count) columnController = children[index];
+    }
+    return [columnController isKindOfClass:[UINavigationController class]]
+        ? (UINavigationController *)columnController
+        : nil;
+}
+
+BOOL ApolloViewControllerContains(UIViewController *ancestor, UIViewController *descendant) {
+    if (!ancestor || !descendant) return NO;
+    for (UIViewController *node = descendant; node != nil; node = node.parentViewController) {
+        if (node == ancestor) return YES;
+    }
+    return NO;
+}
+
+BOOL ApolloSelectTabContainingViewController(UITabBarController *tabBarController,
+                                             UIViewController *descendant) {
+    if (![tabBarController isKindOfClass:[UITabBarController class]] || !descendant) return NO;
+
+    // Climb to whichever ancestor is the tab bar controller's own child: that is
+    // the navigation controller itself in the stock layout, and the enclosing
+    // split view controller under the pane layout.
+    for (UIViewController *node = descendant; node != nil; node = node.parentViewController) {
+        if (node.parentViewController == tabBarController) {
+            tabBarController.selectedViewController = node;
+            return YES;
+        }
+    }
+    ApolloLog(@"[Common] %@ is not inside any tab of %@; selection unchanged",
+              NSStringFromClass([descendant class]), NSStringFromClass([tabBarController class]));
+    return NO;
+}
+
+UIViewController *ApolloContentColumnForSplitViewController(UISplitViewController *split) {
+    if (![split isKindOfClass:[UISplitViewController class]]) return split;
+
+    SEL preferred = NSSelectorFromString(@"apollo_preferredContentColumnController");
+    if ([split respondsToSelector:preferred]) {
+        @try {
+            UIViewController *column = ((UIViewController *(*)(id, SEL))objc_msgSend)(split, preferred);
+            if (column) return column;
+        } @catch (NSException *exception) {
+            ApolloLog(@"[Common] preferred content column threw on %@: %@", split, exception);
+        }
+    }
+
+    // Any other split view controller: the trailing column is the detail one.
+    UIViewController *fallback = split.viewControllers.lastObject ?: split.viewControllers.firstObject;
+    return fallback ?: split;
+}
+
+UINavigationController *ApolloNavigationControllerForTabChild(UIViewController *child) {
+    if (!child) return nil;
+    if ([child isKindOfClass:[UINavigationController class]]) return (UINavigationController *)child;
+    if ([child isKindOfClass:[UISplitViewController class]]) {
+        return ApolloNavigationControllerForSplitColumn((UISplitViewController *)child,
+                                                        UISplitViewControllerColumnPrimary);
+    }
+    // Not a container we recognize — fall back to the controller's own
+    // navigation controller, which covers a plain view controller hosted
+    // directly in a tab.
+    return child.navigationController;
+}
+
+NSArray<UINavigationController *> *ApolloAllNavigationControllersForTabChild(UIViewController *child) {
+    if (!child) return @[];
+
+    if ([child isKindOfClass:[UISplitViewController class]]) {
+        UISplitViewController *split = (UISplitViewController *)child;
+        NSMutableArray<UINavigationController *> *navs = [NSMutableArray arrayWithCapacity:3];
+        const UISplitViewControllerColumn columns[] = {
+            UISplitViewControllerColumnPrimary,
+            UISplitViewControllerColumnSupplementary,
+            UISplitViewControllerColumnSecondary,
+        };
+        for (size_t i = 0; i < sizeof(columns) / sizeof(columns[0]); i++) {
+            UINavigationController *nav = ApolloNavigationControllerForSplitColumn(split, columns[i]);
+            // A two-column install answers the same controller for more than one
+            // column; de-duplicate so walkers do not visit a stack twice.
+            if (nav && ![navs containsObject:nav]) [navs addObject:nav];
+        }
+        return navs;
+    }
+
+    UINavigationController *nav = ApolloNavigationControllerForTabChild(child);
+    return nav ? @[ nav ] : @[];
 }
 
 #pragma mark - Color Helpers

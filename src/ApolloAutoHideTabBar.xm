@@ -4,11 +4,15 @@
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import "ApolloAutoHideTabBar.h"
 #import "ApolloCommon.h"
 #import "ApolloTopBarScrollPresentation.h"
 #import "ApolloCompactTabBarView.h"
 #import "ApolloListLayoutSupport.h"
 #import "ApolloState.h"
+#import "ApolloDuoRail.h"
+#import "ipad/ApolloPaneLayout.h"
+#import "ipad/ApolloPaneSplitViewController.h"
 #import "ApolloUserAvatars.h"
 #import "UserDefaultConstants.h"
 #import "ApolloClasses.h"
@@ -29,8 +33,8 @@
 //   reverse scroll expands before the top, and the first following collapse
 //   gesture is consumed so the second collapses. Classic uses the normalized
 //   one-gesture response: reverse motion expands and the very next downward
-//   gesture collapses. Both modes re-expand after 30 seconds idle. Left/Right
-//   reveal through UIKit's floating provider; Fade/Down/Minimize use custom
+//   gesture collapses. Left/Right reveal through UIKit's floating provider;
+//   Fade/Down/Minimize use custom
 //   presentation animations. Hide Top Bar Too optionally springs the navigation
 //   bar out and back with the same targets, leaving native layout intact.
 //
@@ -61,14 +65,12 @@ static char kApolloNativeBottomGuardInteractionKey;
 static void ApolloPrepareNativeScrollAwayBottomGuard(UITabBarController *tbc);
 static void ApolloRefreshNativeScrollAwayBottomGuard(UITabBarController *tbc);
 
-static const NSTimeInterval ApolloIdleRevealDelaySeconds = 30.0;
-static const NSTimeInterval ApolloIdleRevealRescheduleInterval = 0.25;
 // UIKit's native collapse settles quickly; use the same compact cadence for
 // our provider-driven reveal so reversing scroll direction feels symmetric.
 static const NSTimeInterval ApolloAnimatedRevealDurationSeconds = 0.18;
 static const NSTimeInterval ApolloTabBarPresentationDurationSeconds = 0.25;
-static const NSTimeInterval ApolloIdleRevealTransientRetrySeconds = 0.12;
-static const NSInteger ApolloIdleRevealMaxTransientRetries = 8;
+static const NSTimeInterval ApolloRevealTransientRetrySeconds = 0.12;
+static const NSInteger ApolloRevealMaxTransientRetries = 8;
 static const CGFloat ApolloTwoGestureUpwardRevealDistanceThreshold = 120.0;
 static const CGFloat ApolloTabBarPresentationDirectionThreshold = 12.0;
 static NSUInteger sApolloScrollGestureToken = 0;
@@ -105,15 +107,14 @@ static ApolloTabBarMinimizeBehavior ApolloDesiredTabBarMinimizeBehavior(BOOL ena
 @end
 
 // One controller-owned mutable state object replaces the former collection of
-// boxed associated values. In particular, scroll-frame timer resets now mutate
-// primitive fields without allocating an NSNumber on every content-offset
-// update.
+// boxed associated values. Scroll tracking mutates primitive fields without
+// allocating an NSNumber on every content-offset update.
 @interface ApolloTabBarRuntimeState : NSObject
 @property (nonatomic, assign) BOOL hasAppliedMinimizeBehavior;
+@property (nonatomic, assign) BOOL hasDuoScrollPolicy;
+@property (nonatomic, assign) BOOL duoBottomBarEligible;
+@property (nonatomic, assign) BOOL duoPolicyUpdateScheduled;
 @property (nonatomic, assign) NSInteger appliedMinimizeBehavior;
-@property (nonatomic, strong) dispatch_source_t idleRevealTimer;
-@property (nonatomic, assign) NSTimeInterval idleRevealTimerScheduledAt;
-@property (nonatomic, assign) NSInteger idleRevealGeneration;
 @property (nonatomic, strong) ApolloTabBarRevealAnimator *revealAnimator;
 @property (nonatomic, weak) UIViewController *scrollToTopOwner;
 @property (nonatomic, assign) BOOL twoGestureRevealActive;
@@ -236,6 +237,7 @@ static void ApolloApplyMinimizeBehaviorInternal(UITabBarController *tbc,
                                                 ApolloTabBarMinimizeBehavior behavior,
                                                 BOOL reconcileUIKitState) {
     if (!tbc || !ApolloSupportsNativeTabBarScrollBehavior()) return;
+    if (!ApolloDuoAllowsTabBarScrollHiding()) behavior = ApolloTabBarMinimizeBehaviorNever;
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
     if (state.hasAppliedMinimizeBehavior &&
         state.appliedMinimizeBehavior == (NSInteger)behavior) {
@@ -310,19 +312,130 @@ static BOOL ApolloNavWantsNativeTabBarMinimize(UINavigationController *nav) {
     return nav.hidesBarsOnSwipe;
 }
 
-static BOOL ApolloTabBarControllerWantsNativeMinimize(UITabBarController *tbc) {
-    if (!tbc) return NO;
-    for (UIViewController *child in tbc.viewControllers) {
-        UINavigationController *nav = nil;
-        if ([child isKindOfClass:[UINavigationController class]]) {
-            nav = (UINavigationController *)child;
+// This predicate sits directly in UIScrollView.setContentOffset: while Mode B
+// is enabled. The generic shared enumerator returns a newly-created NSArray for
+// every tab child, which previously meant at least one autoreleased allocation
+// per content-offset update on iPhone and several mutable/immutable arrays per
+// update on iPad. Keep the two real app topologies allocation-free and reserve
+// the generic enumerator for an unrelated UISplitViewController fallback.
+#if APOLLO_SIM_BUILD
+static NSUInteger sApolloAutoHideDirectTabScans = 0;
+static NSUInteger sApolloAutoHidePaneTabScans = 0;
+static NSUInteger sApolloAutoHideGenericFallbackScans = 0;
+#endif
+
+static BOOL ApolloTabChildWantsNativeMinimize(UIViewController *child) {
+    if (!child) return NO;
+
+    if ([child isKindOfClass:[UINavigationController class]]) {
+#if APOLLO_SIM_BUILD
+        sApolloAutoHideDirectTabScans++;
+#endif
+        return ApolloNavWantsNativeTabBarMinimize((UINavigationController *)child);
+    }
+
+    if (ApolloPaneLayoutActive() &&
+        [child isKindOfClass:[ApolloPaneSplitViewController class]]) {
+#if APOLLO_SIM_BUILD
+        sApolloAutoHidePaneTabScans++;
+#endif
+        ApolloPaneSplitViewController *pane = (ApolloPaneSplitViewController *)child;
+        if (!pane.isCollapsed) return NO; // Neighboring pane context rows stay fixed.
+        UIViewController *visible = [pane apollo_preferredContentColumnController];
+        return [visible isKindOfClass:UINavigationController.class] &&
+            ApolloNavWantsNativeTabBarMinimize((id)visible);
+    }
+
+    if ([child isKindOfClass:[UISplitViewController class]]) {
+#if APOLLO_SIM_BUILD
+        sApolloAutoHideGenericFallbackScans++;
+#endif
+        for (UINavigationController *nav in ApolloAllNavigationControllersForTabChild(child)) {
+            if (ApolloNavWantsNativeTabBarMinimize(nav)) return YES;
         }
-        if (nav && ApolloNavWantsNativeTabBarMinimize(nav)) {
-            return YES;
+        return NO;
+    }
+
+    // Plain tab children are rare in Apollo, but this preserves the shared
+    // helper's stock fallback without creating a one-element array.
+    UINavigationController *nav = child.navigationController;
+#if APOLLO_SIM_BUILD
+    sApolloAutoHideDirectTabScans++;
+#endif
+    return ApolloNavWantsNativeTabBarMinimize(nav);
+}
+
+static BOOL ApolloTabBarControllerWantsNativeMinimize(UITabBarController *tbc) {
+    if (!tbc || !ApolloDuoAllowsTabBarScrollHiding()) return NO;
+    return ApolloTabChildWantsNativeMinimize(tbc.selectedViewController);
+}
+
+#if APOLLO_SIM_BUILD
+NSString *ApolloAutoHideTabBarSimScanStatus(NSUInteger iterations) {
+    UIViewController *controller = ApolloMainTabBarController();
+    UITabBarController *tbc = [controller isKindOfClass:[UITabBarController class]]
+        ? (UITabBarController *)controller : nil;
+    if (!tbc) return @"no tab bar controller pass=0";
+
+    iterations = MIN(MAX(iterations, 1), 100000);
+    sApolloAutoHideDirectTabScans = 0;
+    sApolloAutoHidePaneTabScans = 0;
+    sApolloAutoHideGenericFallbackScans = 0;
+    CFTimeInterval started = CACurrentMediaTime();
+    BOOL wanted = NO;
+    for (NSUInteger index = 0; index < iterations; index++) {
+        wanted = ApolloTabBarControllerWantsNativeMinimize(tbc);
+    }
+    CFTimeInterval elapsed = CACurrentMediaTime() - started;
+    BOOL pane = ApolloPaneLayoutActive();
+    BOOL pass = sApolloAutoHideGenericFallbackScans == 0 &&
+        (pane ? sApolloAutoHidePaneTabScans > 0 : sApolloAutoHideDirectTabScans > 0);
+    return [NSString stringWithFormat:
+        @"iterations=%lu pane=%d directScans=%lu paneScans=%lu "
+         "genericFallbackArrayScans=%lu elapsedMs=%.3f checksum=%d pass=%d",
+        (unsigned long)iterations, pane,
+        (unsigned long)sApolloAutoHideDirectTabScans,
+        (unsigned long)sApolloAutoHidePaneTabScans,
+        (unsigned long)sApolloAutoHideGenericFallbackScans,
+        elapsed * 1000.0, wanted, pass];
+}
+
+NSString *ApolloAutoHideTabBarSimSetPolicy(BOOL enabled) {
+    UIViewController *controller = ApolloMainTabBarController();
+    UITabBarController *tbc = [controller isKindOfClass:[UITabBarController class]]
+        ? (UITabBarController *)controller : nil;
+    if (!tbc) return @"policy unavailable pass=0";
+    for (UIViewController *child in tbc.viewControllers) {
+        if ([child isKindOfClass:[UINavigationController class]]) {
+            ((UINavigationController *)child).hidesBarsOnSwipe = enabled;
+            continue;
+        }
+        if (ApolloPaneLayoutActive() &&
+            [child isKindOfClass:[ApolloPaneSplitViewController class]]) {
+            ApolloPaneSplitViewController *pane = (ApolloPaneSplitViewController *)child;
+            UINavigationController *primary =
+                [pane apollo_navigationControllerForColumn:ApolloPaneColumnPrimary];
+            UINavigationController *detail =
+                [pane apollo_navigationControllerForColumn:ApolloPaneColumnSecondary];
+            primary.hidesBarsOnSwipe = enabled;
+            if (detail != primary) detail.hidesBarsOnSwipe = enabled;
+            continue;
+        }
+        for (UINavigationController *navigationController in
+                ApolloAllNavigationControllersForTabChild(child)) {
+            navigationController.hidesBarsOnSwipe = enabled;
         }
     }
-    return NO;
+    BOOL wanted = ApolloTabBarControllerWantsNativeMinimize(tbc);
+    NSInteger behavior = ApolloCurrentMinimizeBehavior(tbc);
+    BOOL pass = wanted == enabled && behavior == (enabled
+        ? ApolloTabBarMinimizeBehaviorOnScrollDown
+        : ApolloTabBarMinimizeBehaviorNever);
+    return [NSString stringWithFormat:
+        @"enabled=%d wanted=%d behavior=%ld pane=%d pass=%d", enabled, wanted,
+        (long)behavior, ApolloPaneLayoutActive(), pass];
 }
+#endif
 
 BOOL ApolloTabBarIsHideOnScrollPresentationOwned(UITabBar *tabBar) {
     return [objc_getAssociatedObject(tabBar,
@@ -371,6 +484,8 @@ static CGRect ApolloMinimizeCompactFrame(UITabBar *tabBar, ApolloCompactTabBarVi
 }
 
 static BOOL ApolloMinimizeCanPresent(UITabBarController *tbc, CGRect expanded) {
+    // Release Minimize when a fold moves the bottom bar into the side rail.
+    if (!ApolloDuoAllowsTabBarScrollHiding()) return NO;
     UITabBar *tabBar = tbc.tabBar;
     if (CGRectIsNull(expanded) || CGRectIsEmpty(expanded) || !tabBar.window || tabBar.hidden) return NO;
     if (@available(iOS 18.0, *)) {
@@ -735,6 +850,7 @@ static void ApolloSetTabBarPresentationHidden(UITabBarController *tbc,
                                               NSString *reason) {
     UITabBar *tabBar = tbc.tabBar;
     if (!tabBar) return;
+    if (hidden && !ApolloDuoAllowsTabBarScrollHiding()) return;
 
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
     if (hidden && state.scrollToTopOwner &&
@@ -744,7 +860,7 @@ static void ApolloSetTabBarPresentationHidden(UITabBarController *tbc,
         ApolloSetMinimizePresentation(tbc, hidden && style == ApolloTabBarHideStyleMinimize, animated, reason);
         return;
     }
-    if (style == ApolloTabBarHideStyleDown) {
+    if (style == ApolloTabBarHideStyleDown && ApolloDuoAllowsTabBarScrollHiding()) {
         ApolloNormalizeDownTabBarGeometry(tbc);
     }
     ApolloTopBarSetScrollHidden(tbc, hidden, animated, reason);
@@ -843,6 +959,7 @@ void ApolloRestoreHideOnScrollPresentation(UITabBarController *tabBarController,
 // Down's slide distance depends on the bar's height. Recompute its hidden
 // transform after rotation/layout without resizing UIKit's tab-bar frame.
 static void ApolloRevalidateHiddenDownPresentation(UITabBarController *tbc) {
+    if (!ApolloDuoAllowsTabBarScrollHiding()) return;
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, NO);
     if (!state.hasPresentationTarget || !state.presentationTargetHidden ||
         state.presentationStyle != ApolloTabBarHideStyleDown ||
@@ -1047,7 +1164,7 @@ static void ApolloScheduleMinimizePresentationRevalidation(UITabBarController *t
 }
 
 - (void)apollo_step:(CADisplayLink *)displayLink {
-    if (!self.controller || !self.provider) {
+    if (!self.controller || !self.provider || !ApolloDuoAllowsTabBarScrollHiding()) {
         [self finishProviderTracking];
         return;
     }
@@ -1181,7 +1298,8 @@ static void ApolloObserveNativeProviderProgress(id provider, double rawProgress)
     ApolloNativeTopBarObserverState *observer =
         objc_getAssociatedObject(provider, &kApolloNativeTopBarObserverStateKey);
     UITabBarController *tbc = observer.controller;
-    if (!tbc || !ApolloTabBarManualNativeMorphEnabled() || !isfinite(rawProgress)) return;
+    if (!tbc || !ApolloDuoAllowsTabBarScrollHiding() ||
+        !ApolloTabBarManualNativeMorphEnabled() || !isfinite(rawProgress)) return;
 
     CGFloat progress = MIN(1.0, MAX(0.0, rawProgress));
     ApolloTabBarRuntimeState *runtimeState = ApolloRuntimeState(tbc, NO);
@@ -1424,7 +1542,8 @@ static void ApolloRefreshNativeScrollAwayBottomGuard(UITabBarController *tbc) {
 
 static ApolloTabBarRevealResult ApolloSetNativeTabBarManuallyHidden(
     UITabBarController *tbc, BOOL hidden, BOOL animated, NSString *reason) {
-    if (!tbc || !ApolloSupportsNativeTabBarScrollBehavior()) {
+    if (!tbc || !ApolloSupportsNativeTabBarScrollBehavior() ||
+        !ApolloDuoAllowsTabBarScrollHiding()) {
         return ApolloTabBarRevealResultUnsupported;
     }
     // A native-provider reset for Fade/Down/Minimize must not cancel the
@@ -1450,8 +1569,8 @@ static ApolloTabBarRevealResult ApolloSetNativeTabBarManuallyHidden(
         return ApolloTabBarRevealResultStarted;
     }
     // Never restart an animation from a guessed endpoint while UIKit reports
-    // an unsettled morph. The idle path retries; scroll input can simply issue
-    // its target again on the next meaningful direction change.
+    // an unsettled morph. Navigation/status-bar requests retry; scroll input
+    // can issue its target again on the next meaningful direction change.
     if (morphTarget == 1) return ApolloTabBarRevealResultTransient;
     if (morphTarget != 0 && morphTarget != 2) {
         ApolloLog(@"[AutoHideTabBarFix] Unknown tab-bar morph target=%ld; manual morph skipped",
@@ -1584,20 +1703,10 @@ static ApolloTabBarRevealResult ApolloStartTwoGestureReveal(UITabBarController *
     return result;
 }
 
-static void ApolloCancelIdleRevealTimer(UITabBarController *tbc) {
-    ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, NO);
-    if (!state) return;
-    state.idleRevealGeneration += 1;
-    if (state.idleRevealTimer) dispatch_source_cancel(state.idleRevealTimer);
-    state.idleRevealTimer = nil;
-    state.idleRevealTimerScheduledAt = 0.0;
-}
-
 static void ApolloReapplyNativeMinimizeBehavior(UITabBarController *tbc, NSString *reason) {
     if (!tbc || !ApolloSupportsNativeTabBarScrollBehavior()) return;
 
     BOOL anyWantsMinimize = ApolloTabBarControllerWantsNativeMinimize(tbc);
-    ApolloCancelIdleRevealTimer(tbc);
     ApolloFinishAnimatedTabBarReveal(tbc);
     ApolloClearTwoGestureRevealState(tbc);
 
@@ -1658,6 +1767,50 @@ static void ApolloReconcileNativeMinimizeBehaviorAfterActivation(UITabBarControl
     ApolloTopBarSetScrollHidden(tbc, NO, NO, @"foreground reconciliation");
     ApolloLog(@"[AutoHideTabBarFix] Reconciled native minimize desired=%d customMode=%d reason=%@",
               anyWantsMinimize, customPresentationMode, reason ?: @"unknown");
+}
+
+static void ApolloRefreshDuoHeaderPolicies(UIViewController *controller) {
+    if (!controller || !ApolloDuoUsesAdaptiveBars()) return;
+    ApolloTopBarApplyNativeScrollPolicy(controller, nil);
+    for (UIViewController *child in controller.childViewControllers) {
+        ApolloRefreshDuoHeaderPolicies(child);
+    }
+}
+
+// Layout only observes a change of pose. Reconcile once outside that layout
+// pass so UIKit can finish moving its native bar before we change its policy.
+void ApolloScheduleDuoBarPolicyUpdate(UITabBarController *tbc) {
+    if (!tbc || !ApolloDuoUsesAdaptiveBars()) return;
+    ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
+    BOOL eligible = ApolloDuoAllowsTabBarScrollHiding();
+    if (state.duoPolicyUpdateScheduled ||
+        (state.hasDuoScrollPolicy && state.duoBottomBarEligible == eligible)) return;
+    state.duoPolicyUpdateScheduled = YES;
+    __weak UITabBarController *weakTabs = tbc;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITabBarController *tabs = weakTabs;
+        ApolloTabBarRuntimeState *current = ApolloRuntimeState(tabs, NO);
+        if (!tabs || !current) return;
+        BOOL bottomBar = ApolloDuoAllowsTabBarScrollHiding();
+        current.hasDuoScrollPolicy = YES;
+        current.duoBottomBarEligible = bottomBar;
+        if (!bottomBar && current.presentationAnimationActive) {
+            // Invalidate the old completion before restoring its presentation.
+            // Only cancel our own fade/slide, never UIKit's fold animation.
+            ++current.presentationGeneration;
+            current.presentationAnimationActive = NO;
+            [tabs.tabBar.layer removeAnimationForKey:@"opacity"];
+            [tabs.tabBar.layer removeAnimationForKey:@"transform"];
+            [tabs.tabBar.layer removeAnimationForKey:@"sublayerTransform"];
+        }
+        ApolloReapplyNativeMinimizeBehavior(tabs, @"Duo bar placement changed");
+        ApolloRefreshDuoHeaderPolicies(tabs);
+        // Folding can keep the content scroll views in the same window.
+        // Reconcile Minimize's bottom edge without waiting for reattachment.
+        ApolloApplyScrollEdgeEffectStyleToViewController(tabs);
+        current.duoPolicyUpdateScheduled = NO;
+        ApolloLog(@"[AutoHideTabBarFix] Duo bottom-scroll eligible=%d", bottomBar);
+    });
 }
 
 // Non-static: ApolloListBottomInsetGuard reads these to stand down while a
@@ -1798,11 +1951,11 @@ static void ApolloAttemptScrollToTopReveal(UITabBarController *controller,
     }
     // UIKit can still be settling its previous morph when the jump finishes.
     // Retry only that transient state, bounded and tied to this return action.
-    if (result != ApolloTabBarRevealResultTransient || attempt >= ApolloIdleRevealMaxTransientRetries) return;
+    if (result != ApolloTabBarRevealResultTransient || attempt >= ApolloRevealMaxTransientRetries) return;
     __weak UITabBarController *weakController = controller;
     __weak UIViewController *selected = controller.selectedViewController;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-        (int64_t)(ApolloIdleRevealTransientRetrySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        (int64_t)(ApolloRevealTransientRetrySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UITabBarController *live = weakController;
         if (!live || live.selectedViewController != selected) return;
         ApolloAttemptScrollToTopReveal(live, generation, attempt + 1);
@@ -1811,14 +1964,13 @@ static void ApolloAttemptScrollToTopReveal(UITabBarController *controller,
 
 void ApolloTabBarRevealAfterScrollToTop(UITabBarController *controller) {
     if (!controller) return;
-    ApolloCancelIdleRevealTimer(controller);
     ApolloTabBarCancelScrollToTopReveal(controller);
     NSUInteger generation = [objc_getAssociatedObject(controller, &kApolloScrollToTopRevealGeneration) unsignedIntegerValue];
     ApolloAttemptScrollToTopReveal(controller, generation, 0);
 }
 
 static void ApolloHideTabBar(UITabBarController *tbc, BOOL animated) {
-    if (!tbc) return;
+    if (!tbc || !ApolloDuoAllowsTabBarScrollHiding()) return;
     UITabBar *tabBar = tbc.tabBar;
     if (tabBar.hidden) return;
 
@@ -1935,113 +2087,6 @@ static void ApolloHideTabBar(UITabBarController *tbc, BOOL animated) {
     [CATransaction commit];
 }
 
-static void ApolloRetryTransientIdleReveal(UITabBarController *tbc,
-                                           NSInteger generation,
-                                           NSInteger attempt) {
-    if (!tbc || attempt >= ApolloIdleRevealMaxTransientRetries) return;
-    __weak UITabBarController *weakTBC = tbc;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-        (int64_t)(ApolloIdleRevealTransientRetrySeconds * NSEC_PER_SEC)),
-        dispatch_get_main_queue(), ^{
-        UITabBarController *strongTBC = weakTBC;
-        if (!strongTBC ||
-            UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
-            !ApolloTabBarControllerWantsNativeMinimize(strongTBC) ||
-            ApolloRuntimeState(strongTBC, NO).idleRevealGeneration != generation) return;
-
-        if (ApolloTabBarCustomPresentationEnabled()) {
-            if (sClassicTabBarScrollBehavior) {
-                ApolloSetTabBarPresentationHidden(strongTBC, NO, YES,
-                                                  @"idle transient retry");
-            } else {
-                ApolloStartTwoGestureReveal(strongTBC,
-                                            @"idle transient retry", 0);
-            }
-            return;
-        }
-
-        ApolloTabBarRevealResult result = sClassicTabBarScrollBehavior
-            ? ApolloStartAnimatedTabBarReveal(strongTBC, @"idle transient retry")
-            : ApolloStartTwoGestureReveal(strongTBC, @"idle transient retry", 0);
-        if (result == ApolloTabBarRevealResultTransient) {
-            ApolloRetryTransientIdleReveal(strongTBC, generation, attempt + 1);
-        }
-    });
-}
-
-static void ApolloScheduleIdleRevealTimer(UITabBarController *tbc) {
-    if (!tbc || !ApolloTabBarControllerWantsNativeMinimize(tbc)) return;
-
-    NSTimeInterval now = CACurrentMediaTime();
-    ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
-    // Every meaningful scroll update invalidates a transient retry, even when
-    // the 250ms throttle lets the existing dispatch-source deadline stand.
-    state.idleRevealGeneration += 1;
-    dispatch_source_t existingTimer = state.idleRevealTimer;
-    if (existingTimer && state.idleRevealTimerScheduledAt > 0.0 &&
-        now - state.idleRevealTimerScheduledAt < ApolloIdleRevealRescheduleInterval) {
-        return;
-    }
-
-    if (existingTimer) {
-        dispatch_source_set_timer(existingTimer,
-                                  dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ApolloIdleRevealDelaySeconds * NSEC_PER_SEC)),
-                                  DISPATCH_TIME_FOREVER,
-                                  (uint64_t)(50 * NSEC_PER_MSEC));
-        state.idleRevealTimerScheduledAt = now;
-        return;
-    }
-
-    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    if (!timer) return;
-
-    __weak UITabBarController *weakTBC = tbc;
-    dispatch_source_set_timer(timer,
-                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ApolloIdleRevealDelaySeconds * NSEC_PER_SEC)),
-                              DISPATCH_TIME_FOREVER,
-                              (uint64_t)(50 * NSEC_PER_MSEC));
-    dispatch_source_set_event_handler(timer, ^{
-        UITabBarController *strongTBC = weakTBC;
-        if (!strongTBC) return;
-        ApolloTabBarRuntimeState *strongState = ApolloRuntimeState(strongTBC, NO);
-        strongState.idleRevealTimer = nil;
-        strongState.idleRevealTimerScheduledAt = 0.0;
-        // A timer armed before backgrounding fires immediately (overdue) when
-        // the process resumes — its reveal would then land
-        // exactly as the user's first post-foreground gesture begins. The
-        // willEnterForeground cancel in %ctor covers the notification path;
-        // this covers the race where the overdue fire beats that observer.
-        if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-        if (!ApolloTabBarControllerWantsNativeMinimize(strongTBC)) return;
-        NSInteger fireGeneration = strongState.idleRevealGeneration;
-        if (ApolloTabBarCustomPresentationEnabled()) {
-            if (sClassicTabBarScrollBehavior) {
-                ApolloSetTabBarPresentationHidden(strongTBC, NO, YES, @"idle");
-            } else {
-                ApolloStartTwoGestureReveal(strongTBC, @"idle", 0);
-            }
-            return;
-        }
-        // Classic collapses on the next downward gesture. Two-Gesture
-        // preserves its historical consumed first gesture.
-        ApolloTabBarRevealResult result = sClassicTabBarScrollBehavior
-            ? ApolloStartAnimatedTabBarReveal(strongTBC, @"idle")
-            : ApolloStartTwoGestureReveal(strongTBC, @"idle", 0);
-        if (result == ApolloTabBarRevealResultTransient) {
-            ApolloRetryTransientIdleReveal(strongTBC, fireGeneration, 0);
-            return;
-        }
-        if (result != ApolloTabBarRevealResultUnsupported) return;
-        // A future UIKit layout may remove or change the private provider
-        // callback. Skipping one idle reveal is safer than guessing at a new
-        // private layout.
-        ApolloLog(@"[AutoHideTabBarFix] Animated idle reveal unavailable");
-    });
-    state.idleRevealTimer = timer;
-    state.idleRevealTimerScheduledAt = now;
-    dispatch_resume(timer);
-}
-
 static UITabBarController *ApolloResolveTabBarControllerForScrollView(UIScrollView *scrollView) {
     if (!scrollView) return nil;
 
@@ -2088,12 +2133,16 @@ static BOOL ApolloCachedScrollWantsNativeMinimize(
     if (!state.hasCachedMinimizeEligibility) {
         ApolloRefreshScrollMinimizeEligibility(scrollView, state);
     }
-    return state.cachedMinimizeEligibility;
+    // Eligibility can change during a live drag when the phone folds.
+    return state.cachedMinimizeEligibility && ApolloDuoAllowsTabBarScrollHiding();
 }
 
 static BOOL ApolloTabBarScrollViewParticipates(UIScrollView *scrollView) {
+    // Search's landing uses a plain scroll view in place of Apollo's table.
+    // Keep its hide/reveal gestures eligible without admitting nested scrollers.
     return [scrollView isKindOfClass:UITableView.class] ||
-           [scrollView isKindOfClass:UICollectionView.class];
+           [scrollView isKindOfClass:UICollectionView.class] ||
+           [scrollView.accessibilityIdentifier isEqualToString:@"ApolloSearchLanding.Scroll"];
 }
 
 static void ApolloBeginTwoGestureRearm(ApolloTabBarScrollRuntimeState *scrollState) {
@@ -2209,6 +2258,7 @@ static BOOL ApolloBarSwipeGestureActive(UINavigationController *nav) {
     UIViewController *controller = (UIViewController *)self;
     UINavigationController *nav = controller.navigationController;
     if (nav.topViewController != controller) return;
+    ApolloTopBarApplyNativeScrollPolicy(controller, nav);
 
     // Reordering and the alphabet index can return to the top without the
     // reverse pan UIKit expects to reveal its bars. Keep Done reachable for
@@ -2277,6 +2327,11 @@ static BOOL sApolloInBarHideSwipeHandler = NO;
 
 %hook UIViewController
 
+- (void)viewWillAppear:(BOOL)animated {
+    %orig(animated);
+    ApolloTopBarApplyNativeScrollPolicy(self, nil);
+}
+
 - (UITabBarController *)tabBarController {
     if (sApolloInBarHideSwipeHandler &&
         [self isMemberOfClass:ApolloClassApolloNavigationController]) {
@@ -2324,10 +2379,10 @@ static void ApolloAnimateBarsForNavigation(UINavigationController *navigationCon
     ApolloTabBarRevealResult result = ApolloStartAnimatedTabBarReveal(tbc, reason);
     // Left/Right may still be settling a native collapse when navigation starts.
     // Retry only that transient state; new navigation/scroll input cancels it.
-    if (result != ApolloTabBarRevealResultTransient || attempt >= ApolloIdleRevealMaxTransientRetries) return;
+    if (result != ApolloTabBarRevealResultTransient || attempt >= ApolloRevealMaxTransientRetries) return;
     __weak UINavigationController *weakNav = navigationController;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-        (int64_t)(ApolloIdleRevealTransientRetrySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        (int64_t)(ApolloRevealTransientRetrySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UINavigationController *nav = weakNav;
         if (nav.viewIfLoaded.window) ApolloAnimateBarsForNavigation(nav, reason, generation, attempt + 1);
     });
@@ -2345,7 +2400,6 @@ static void ApolloRestoreBarsForNavigationTransition(UINavigationController *nav
     UITabBarController *tbc = ApolloLocateTabBarController(navigationController);
     ApolloTopBarRevealNavigationController(navigationController, reason);
     if (!tbc) return;
-    ApolloCancelIdleRevealTimer(tbc);
     ApolloTabBarCancelScrollToTopReveal(tbc);
     ApolloCancelNavigationReveal(tbc);
     ApolloClearTwoGestureRevealState(tbc);
@@ -2357,6 +2411,7 @@ static void ApolloRestoreBarsForNavigationTransition(UINavigationController *nav
 
 - (void)pushViewController:(UIViewController *)viewController animated:(BOOL)animated {
     ApolloRestoreBarsForNavigationTransition(self, @"navigation push");
+    ApolloTopBarApplyNativeScrollPolicy(viewController, self);
     %orig(viewController, animated);
 }
 
@@ -2377,11 +2432,13 @@ static void ApolloRestoreBarsForNavigationTransition(UINavigationController *nav
 
 - (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers animated:(BOOL)animated {
     ApolloRestoreBarsForNavigationTransition(self, @"navigation stack replacement");
+    for (UIViewController *controller in viewControllers) ApolloTopBarApplyNativeScrollPolicy(controller, self);
     %orig(viewControllers, animated);
 }
 
 - (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers {
     ApolloRestoreBarsForNavigationTransition(self, @"navigation stack replacement");
+    for (UIViewController *controller in viewControllers) ApolloTopBarApplyNativeScrollPolicy(controller, self);
     %orig(viewControllers);
 }
 
@@ -2427,7 +2484,6 @@ static void ApolloRestoreBarsForNavigationTransition(UINavigationController *nav
                 ApolloApplyMinimizeBehavior(tbc, behavior);
             }
             if (!effectiveValue) {
-                ApolloCancelIdleRevealTimer(tbc);
                 ApolloFinishAnimatedTabBarReveal(tbc);
                 ApolloClearTwoGestureRevealState(tbc);
                 ApolloSetNativeTabBarManuallyHidden(tbc, NO, NO,
@@ -2565,6 +2621,7 @@ static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
     BOOL customPresentationMode = ApolloTabBarCustomPresentationEnabled();
     BOOL mainList = ApolloTabBarScrollViewParticipates(self);
     if (!sApolloNativeHideBarsOnScrollPreferenceEnabled ||
+        !ApolloDuoAllowsTabBarScrollHiding() ||
         !ApolloSupportsNativeTabBarScrollBehavior() || !self.window ||
         !(self.tracking || self.dragging || self.decelerating)) {
         %orig(contentOffset);
@@ -2623,13 +2680,10 @@ static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
         deltaY = deltaY * panDeltaY > 0.0
             ? copysign(MIN(fabs(deltaY), fabs(panDeltaY)), panDeltaY) : 0.0;
     }
-    UITabBarController *tbc = nil;
-    BOOL shouldScheduleIdleReveal = NO;
-
     if (fabs(deltaY) >= 0.5) {
         ApolloTabBarScrollRuntimeState *scrollState =
             ApolloScrollRuntimeState(self, YES);
-        tbc = ApolloCachedTabBarControllerForScrollView(self, scrollState);
+        UITabBarController *tbc = ApolloCachedTabBarControllerForScrollView(self, scrollState);
         if (ApolloCachedScrollWantsNativeMinimize(self, scrollState)) {
             BOOL userDrivenTowardTop = mainList && userDriven && deltaY < 0.0;
             BOOL userDrivenTowardBottom = mainList && userDriven && deltaY > 0.0;
@@ -2665,7 +2719,6 @@ static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
                             if (scrollState.gestureToken == 0) {
                                 scrollState.gestureToken = ++sApolloScrollGestureToken;
                             }
-                            ApolloCancelIdleRevealTimer(tbc);
                             ApolloStartTwoGestureReveal(tbc,
                                 @"two-gesture upward scroll",
                                 scrollState.gestureToken);
@@ -2696,15 +2749,10 @@ static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
                     }
                 }
             }
-            shouldScheduleIdleReveal = YES;
         }
     }
 
     %orig(contentOffset);
-
-    if (shouldScheduleIdleReveal) {
-        ApolloScheduleIdleRevealTimer(tbc);
-    }
 }
 
 %end
@@ -2725,7 +2773,6 @@ static void ApolloRevealBarsForTopScrollView(UIScrollView *scroll) {
         }
         return;
     }
-    ApolloCancelIdleRevealTimer(self);
     if (sClassicTabBarScrollBehavior) {
         ApolloSetTabBarPresentationHidden(self, NO, YES, @"compact pill tapped");
     } else {
@@ -2849,7 +2896,6 @@ static void ApolloRevealBarsForScrollToTop(UIViewController *owner) {
         return;
     }
     if (!ApolloTabBarControllerWantsNativeMinimize(tbc)) return;
-    ApolloCancelIdleRevealTimer(tbc);
     ApolloTabBarRuntimeState *state = ApolloRuntimeState(tbc, YES);
     state.scrollToTopOwner = nav.topViewController;
     // Start both existing presentation animations in the same run-loop turn.
@@ -2882,11 +2928,8 @@ static void ApolloRevealBarsForScrollToTop(UIViewController *owner) {
             ApolloNativeHideBarsOnScrollPreferenceEnabled();
         ApolloForEachVisibleTabBarController(^(UITabBarController *tbc) {
             ApolloReapplyNativeMinimizeBehavior(tbc, @"scrollBehaviorChanged");
+            ApolloRefreshDuoHeaderPolicies(tbc);
             ApolloTopBarSetScrollHidden(tbc, NO, NO, @"scroll behavior changed");
-            // Reapply cancels the previous timer/gesture state. A real mode
-            // change must immediately re-arm the idle guarantee so a tab bar
-            // that is already collapsed cannot remain there indefinitely.
-            ApolloScheduleIdleRevealTimer(tbc);
         });
     }];
 
@@ -2898,10 +2941,7 @@ static void ApolloRevealBarsForScrollToTop(UIViewController *owner) {
     //
     // Keyed off a real background->foreground transition: bare didBecomeActive
     // (Notification/Control Center dismissal) cannot restore stale policy, and
-    // reconciling there churned behavior state mid-interaction. The foreground
-    // observer also cancels armed idle timers so a fire that went overdue
-    // during suspension cannot pulse .never right as scrolling resumes (the
-    // handler's applicationState check covers the overdue-beats-observer race).
+    // reconciling there churned behavior state mid-interaction.
     static BOOL sPendingForegroundReconcile = NO;
     [center addObserverForName:UIApplicationWillEnterForegroundNotification
                         object:nil
@@ -2914,7 +2954,6 @@ static void ApolloRevealBarsForScrollToTop(UIViewController *owner) {
         sApolloNativeHideBarsOnScrollPreferenceEnabled =
             ApolloNativeHideBarsOnScrollPreferenceEnabled();
         ApolloForEachVisibleTabBarController(^(UITabBarController *tbc) {
-            ApolloCancelIdleRevealTimer(tbc);
             ApolloFinishAnimatedTabBarReveal(tbc);
             ApolloClearTwoGestureRevealState(tbc);
         });

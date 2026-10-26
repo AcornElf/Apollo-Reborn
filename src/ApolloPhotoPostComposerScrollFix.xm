@@ -8,8 +8,10 @@
 #import <objc/runtime.h>
 
 #import "ApolloCommon.h"
+#import "ApolloImageUploadHost.h"
 #import "ApolloState.h"
 #import "ApolloSwiftRuntime.h"
+#import "ApolloTableSnapshot.h"
 #import "ApolloThemeRuntime.h"
 #import "fishhook.h"
 #import "ApolloClasses.h"
@@ -1944,6 +1946,10 @@ static CGFloat ApolloMediaComposerTitleHeightWithEmbeddedBody(UITableView *table
 // returns a concrete height, so nothing re-queries it as the title wraps - the second half
 // of issue #791. Schedule a coalesced height-only update pass whenever the title text
 // mutates so the row keeps tracking the caret.
+// Main thread only: whether the current stretch of stale-table skips has been
+// logged at the persisted level yet (one skip per keystroke otherwise).
+static BOOL sApolloMediaComposerLoggedStaleSkip;
+
 static void ApolloMediaComposerScheduleTitleRowRemeasure(UIViewController *controller) {
     controller = ApolloMediaComposerCanonicalBodyController(controller) ?: controller;
     if (!controller) return;
@@ -1959,6 +1965,21 @@ static void ApolloMediaComposerScheduleTitleRowRemeasure(UIViewController *contr
         if (!ApolloMediaComposerShouldInsertBodyRow(strongController)) return; // non-Media tabs self-size natively
         UITableView *tableView = ApolloMediaComposerFindPrimaryTableView(strongController);
         if (!tableView || !tableView.window) return;
+        // Even an empty pass is a batch, and UIKit checks it against the row counts it cached
+        // at the last reload. If the composer's rows changed since then and the table hasn't
+        // been told yet, the pass throws "Invalid batch updates" (#1339). There's nothing to
+        // re-measure on a table in that state: the reload that brings it up to date asks for
+        // the row heights again, and its title cell schedules a fresh pass from cellForRow.
+        if (ApolloTableSnapshotIsStale(tableView)) {
+            if (!sApolloMediaComposerLoggedStaleSkip) {
+                sApolloMediaComposerLoggedStaleSkip = YES;
+                ApolloLog(@"[MediaPostBody] skipped title row height pass: composer rows changed since the table's last reload");
+            } else {
+                os_log_info(ApolloFixLog(), "[ApolloFix] [MediaPostBody] skipped title row height pass again: table still out of date");
+            }
+            return;
+        }
+        sApolloMediaComposerLoggedStaleSkip = NO;
         // Height-only pass: re-queries heightForRowAtIndexPath (our measured title height)
         // without reloading cells, so the keyboard and first responder stay untouched.
         [tableView beginUpdates];
@@ -3896,22 +3917,61 @@ static void ApolloComposeBodyEditorLogRedirectOnce(UINavigationItem *navigationI
 
 %end
 
+// Apollo computes its caret position from the ORIGINAL album URL after
+// replaceRange: returns (RE: sub_1001bc3a8). Resolve on the next main-queue turn,
+// after that callback and its Add Title To Link action have finished, then map
+// the selection through the replacement. Read the current text, never a stale
+// insertion snapshot. The post photo picker keeps its ID for submit_gallery.
+static char kApolloMediaComposerAlbumResolutionScheduled;
+static void ApolloMediaComposerScheduleAlbumResolution(UITextView *textView, NSString *insertedText) {
+    if ([insertedText rangeOfString:@"imgur.com" options:NSCaseInsensitiveSearch].location == NSNotFound || !insertedText.length) return;
+    id editor = textView.delegate;
+    if (![editor isKindOfClass:ApolloClassComposeViewController] ||
+        ApolloObjectIvar(editor, "composeTextView") != textView ||
+        [objc_getAssociatedObject(textView, &kApolloMediaComposerAlbumResolutionScheduled) boolValue]) return;
+    objc_setAssociatedObject(textView, &kApolloMediaComposerAlbumResolutionScheduled, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UITextView *weakTextView = textView;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITextView *strongTextView = weakTextView;
+        if (!strongTextView) return;
+        id currentEditor = strongTextView.delegate;
+        if ([currentEditor isKindOfClass:ApolloClassComposeViewController] &&
+            ApolloObjectIvar(currentEditor, "composeTextView") == strongTextView) {
+            NSRange selection = strongTextView.selectedRange;
+            NSString *text = strongTextView.text;
+            NSString *resolved = ApolloImageUploadResolveAlbumTextWithSelection(text, &selection);
+            if (![resolved isEqualToString:text]) {
+                // The scheduled flag suppresses reentry through setText:.
+                strongTextView.text = resolved;
+                strongTextView.selectedRange = selection;
+                if ([currentEditor respondsToSelector:@selector(textViewDidChange:)]) {
+                    [currentEditor textViewDidChange:strongTextView];
+                }
+            }
+        }
+        objc_setAssociatedObject(strongTextView, &kApolloMediaComposerAlbumResolutionScheduled, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    });
+}
+
 %hook UITextView
 
 - (void)setText:(NSString *)text {
     %orig;
+    ApolloMediaComposerScheduleAlbumResolution(self, text);
     ApolloMediaComposerCaptureBodyTextViewMutation(self, @"setText:");
     ApolloMediaComposerNudgeTitleRowHeight(self);
 }
 
 - (void)setAttributedText:(NSAttributedString *)attributedText {
     %orig;
+    ApolloMediaComposerScheduleAlbumResolution(self, attributedText.string);
     ApolloMediaComposerCaptureBodyTextViewMutation(self, @"setAttributedText:");
     ApolloMediaComposerNudgeTitleRowHeight(self);
 }
 
 - (void)insertText:(NSString *)text {
     %orig;
+    ApolloMediaComposerScheduleAlbumResolution(self, text);
     ApolloMediaComposerCaptureBodyTextViewMutation(self, @"insertText:");
     ApolloMediaComposerNudgeTitleRowHeight(self);
 }
@@ -3924,6 +3984,7 @@ static void ApolloComposeBodyEditorLogRedirectOnce(UINavigationItem *navigationI
 
 - (void)replaceRange:(UITextRange *)range withText:(NSString *)text {
     %orig;
+    ApolloMediaComposerScheduleAlbumResolution(self, text);
     ApolloMediaComposerCaptureBodyTextViewMutation(self, @"replaceRange:withText:");
     ApolloMediaComposerNudgeTitleRowHeight(self);
 }

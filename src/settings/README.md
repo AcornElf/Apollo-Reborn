@@ -19,9 +19,51 @@ Other native screens have their own single owners: the Settings root and About i
 4. **Row** — add an `ApolloSettingsRow` to the right screen's `-buildForm`. For a plain toggle that's 5 lines (see any converted screen). Conditional row? Set `.visible` and call `[self visibilityDidChange]` from whatever toggle drives it — never compute indices.
 5. **Consume** — read the `s*` global from your feature module.
 
+**Launch-time exception:** `UDKeyLiquidGlassEnabled` is registered and latched in
+`ApolloCommon.m`’s `+load`, before UIKit selects its design and before Logos
+constructors install appearance-specific hooks. Its switch saves only the next
+launch’s preference; never reload `sLiquidGlassEnabled` during a running session.
+
 Do **not** add the setting to `ApolloBackupRestore.m`'s statics re-sync block: settings ride `standardUserDefaults`, so they're in Backup/Restore for free, and restore always force-exits (`exit(0)`) so `%ctor` re-reads everything on relaunch. The re-sync list is intentionally partial.
 
 ## ApolloSettingsForm quick reference
+
+### Setup Assistant
+
+`ApolloSetupAssistant` is a four-page modal UIKit pager (connect/restore, starting
+point, appearance, summary), with decorative artwork, swipe navigation and a
+fixed footer. All Settings/search/deep-link entry points present the same sheet.
+Its optional feature and privacy details use the shared form layer.
+`ApolloSetupPreset` owns the Foundation-only preset maps and the first-launch
+classification. The bootstrap snapshots persistent domains
+in `+load`, before constructor migrations/unlock flags can make a new install
+look configured. Existing preference domains are conservatively excluded from
+automatic onboarding; the Settings route `setup-assistant` stays available and
+starts with **Keep My Settings** for existing users.
+
+Preset, appearance and privacy choices live in a draft until Finish. Credentials
+and explicitly requested backup operations use their existing save/restore flows.
+Finish writes ordinary defaults once and requests one clean restart when effective
+values changed; no preset is reapplied on an upgrade. Liquid Glass's latched global
+is never changed live. A successful restore marks setup complete even for old or
+mid-setup backups. Skip suppresses automatic setup without applying the draft.
+
+Keep authentication, privacy, filters, sound, experimental services, AI and
+translation out of feature presets. If adding a preset-owned feature, put its key
+in **every** map so selecting Classic can reverse Full Featured. Changes to the
+map and launch policy are checked by `tests/run_setup_preset_tests.sh`.
+
+Manual verification: use a separate simulator/bundle ID with an empty data domain;
+check welcome appears without What's New/update prompts, each preset changes the
+sample and checkmark without writing its defaults, Back preserves the draft,
+Skip survives relaunch, Finish persists the chosen map and reopens without setup,
+and existing/restored preferences never trigger automatic onboarding. Run the
+Settings route again: Keep My Settings + Keep Current Appearance must preserve
+customisations. Exercise privacy disclosure on screen, supported/unsupported Glass
+builds, light/dark, Dynamic Type and iPad rotation. Account sign-in and backup import
+should be validated with private test credentials/backups outside the repository.
+
+### Form API
 
 Full API docs in `ApolloSettingsForm.h`. The load-bearing rules:
 
@@ -33,6 +75,7 @@ Full API docs in `ApolloSettingsForm.h`. The load-bearing rules:
 - **The form owns plain-string footer heights.** It measures each footer's real view once it is displayed and serves that from `heightForFooterInSection:` (UIKit's own number is a title-only estimate that every updates pass puts back on the off-screen footers; a footer sized short rides UP over the rows above it). If your screen overrides `heightForFooterInSection:`, return `[super tableView:heightForFooterInSection:]` for sections whose footer is a plain string, and if you override `willDisplayFooterView:`, call super.
 - **Don't reload from `viewWillAppear:`.** A cancelled interactive swipe-back calls it again as the gesture ends, and a `reloadData`, `rebuildForm` or `reloadRowWithID:` there goes through UIKit's post-update scroll restore, which moves the list when the top edge of the screen sits inside a section footer. To pick up state that changed while the screen was off-stack, update the affected cells in place (`cellForRowID:` returns the visible cell, or one UIKit prefetched).
 - **Section titles catch up with the theme on return.** The base styles section headers and footers in `willDisplayHeaderView:`/`willDisplayFooterView:`, and calls those again from `viewWillAppear:` for the ones the screen is showing, so a screen that was covered while the theme changed doesn't keep the old colour or font. When their fonts changed too, it runs one updates pass once the transition is over so the table takes their new heights, with the rows on screen kept where they are (the form measures its footers again in that pass). If your screen overrides those two methods, keep what they do safe to run twice.
+- **A glyph or other styling in a section title**: set the section's `headerDisplay`/`footerDisplay` block instead of overriding `willDisplayHeaderView:`/`willDisplayFooterView:` with section numbers. The block runs on every display, after the theme styling and again on a restyle pass, so build the label from the model's text, not the label's (which may already hold the glyph). Accessibility the block sets is cleared when the view is reused for another section. Footer heights are still measured from the plain footer string.
 - **Adding or removing rows while the list is scrolled** (an edit on this screen): wrap the rebuild in `performUpdateKeepingVisibleRowsInPlace:`. The same restore moves the list after a reload or batch update whenever the top edge of the screen is inside a section footer; this puts the rows that were on screen back where they were.
 - **Theming is automatic** via the `ApolloSettingsTableViewController` base (accent walk in `willDisplayCell`); don't hand-tint.
 - **Typography follows Apollo's Appearance setting** through `ApolloSettingsFont` and the shared base controller. Use semantic text styles for custom labels. When measuring custom attributed footers, use `ApolloSettingsFont(style, self.traitCollection)` for both measurement and rendering. `ApolloCustomTextSize` is **one-based** (1 = Extra Small, 4 = Large, 7 = XXX Large); verify against native rows rather than assuming Swift case indices are persisted raw values. Primary text uses Apollo's palette, including the softer gray in Pure Black mode.

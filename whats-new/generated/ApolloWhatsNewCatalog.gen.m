@@ -21,6 +21,8 @@ static const ApolloWhatsNewReleaseEntry kWhatsNewReleases[] = {
     { "3.7.1", "What's New in Apollo Reborn" },
     { "3.8.0", "What's New in Apollo Reborn" },
     { "3.8.5", "What's New in Apollo Reborn" },
+    { "3.9.0", "What's New in Apollo Reborn" },
+    { "4.0.0", "What's New in Apollo Reborn" },
 };
 
 static const ApolloWhatsNewItemEntry kWhatsNewItems[] = {
@@ -72,6 +74,23 @@ static const ApolloWhatsNewItemEntry kWhatsNewItems[] = {
     { "3.8.5", "speaker.wave.2.fill", "Video Sound Behaves", "Feed sound stays on one video, doesn't start on screens you've left, and mutes while another video is fullscreen." },
     { "3.8.5", "person.2.fill", "Accounts and Sign-In", "API-Key-Free feeds stop stalling on a spinner, avatars load for the right account, and Add Account uses your Settings key." },
     { "3.8.5", "text.bubble.fill", "Comments", "A comment that can't post now says why, image comments post cleanly, and inline images don't jump when they load." },
+    { "3.9.0", "dock.rectangle", "Liquid Glass, Your Way", "Switch to the classic look under Interface \342\206\222 Appearance, or shrink the tab bar into a small pill as you scroll." },
+    { "3.9.0", "speedometer", "Fewer Rate Limits", "API-Key-Free accounts send fewer Reddit requests, and the new Reduce Rate Limiting setting cuts them further." },
+    { "3.9.0", "arrow.left.arrow.right.circle.fill", "Subreddit Switcher", "Tap a feed's title for a native sheet with search, your favorites, and live results." },
+    { "3.9.0", "keyboard", "True Black Keyboard", "Make the keyboard pure black on OLED screens, in dark mode, light mode, or always." },
+    { "3.9.0", "arrow.down.app.fill", "Update Alerts", "Apollo Reborn now lets you know when an update is out and hands it to your sideloader." },
+    { "3.9.0", "link.circle.fill", "X Links on Nitter", "Open X and Twitter links on a Nitter instance you choose, no X account needed." },
+    { "3.9.0", "magnifyingglass.circle.fill", "Search With Kagi", "Kagi subscribers can search Reddit through Kagi from the Search tab's magnifier." },
+    { "3.9.0", "person.crop.circle.fill", "Profiles", "Edit your Reddit profile right in Apollo, and find profile settings on a new User Profiles page." },
+    { "3.9.0", "checkmark.shield.fill", "Fixes Across the App", "Crash fixes, Google and Apple sign-in, moderator tools without an API key, and no forced YouTube captions on iOS 27." },
+    { "4.0.0", "rectangle.split.2x1", "iPhone Duo", "Browse paired columns with steadier folding, centered cover titles and text that stays clear of the rail." },
+    { "4.0.0", "sidebar.left", "iPad Layout (Beta)", "Try a native sidebar and adjustable feed and reader columns on iPadOS 18 or later." },
+    { "4.0.0", "bookmark.fill", "Pick Up Where You Left Off", "Return to your last feed, post and nearby reading position after iOS closes Apollo." },
+    { "4.0.0", "square.grid.2x2.fill", "Gallery, Reworked", "Open galleries faster, pinch to change tile size, and browse Saved categories in Gallery View." },
+    { "4.0.0", "clock.fill", "Recently Read, Rebuilt", "Your reading history now uses Apollo's native feed, layouts, swipe actions and post menus." },
+    { "4.0.0", "magnifyingglass.circle.fill", "Make Search Yours", "Find recently visited subreddits and choose the order and limits of Search's sections." },
+    { "4.0.0", "slider.horizontal.3", "Setup Assistant", "Connect or restore an account, choose a starting layout, and review your preferences before applying them." },
+    { "4.0.0", "arrow.down.circle.fill", "Downvote by Tapping", "Tap a post or comment score to cycle through upvote, downvote and no vote." },
 };
 
 static NSString *S(const char *value) { return [NSString stringWithUTF8String:value]; }

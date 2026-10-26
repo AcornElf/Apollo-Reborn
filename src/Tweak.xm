@@ -10,6 +10,8 @@
 
 #import "fishhook.h"
 #import "ApolloCommon.h"
+#import "ApolloDeviceGeometry.h"
+#import "ApolloDeviceIdentity.h"
 #import "ApolloRedditMediaUpload.h"
 #import "ApolloDeletedCommentsData.h"
 #import "ApolloImageUploadHost.h"
@@ -19,14 +21,20 @@
 #import "ApolloNotificationBackend.h"
 #import "ApolloUsageHeartbeat.h"
 #import "ApolloUpdateChecker.h"
+#import "ApolloWebJSONRouteUpdates.h"
 #import "ApolloPushNotifications.h"
 #import "ApolloBarkNotifications.h"
 #import "ApolloLiquidGlassIconSelectionState.h"
 #import "ApolloState.h"
+#import "ApolloDuoRail.h"
+#import "ApolloDuoCompatibility.h"
 #import "ApolloTranslation.h"
 #import "ApolloRedgifsMissingDuration.h"
+#import "ApolloRedgifsErrorCards.h"
 #import "Tweak.h"
 #import "settings/CustomAPIViewController.h"
+#import "settings/ApolloSetupAssistant.h"
+#import "settings/ApolloSetupPreset.h"
 #import "settings/ApolloAutomaticBackup.h"
 #import "Version.h"
 #import "UserDefaultConstants.h"
@@ -37,11 +45,13 @@
 #import "ApolloToast.h"
 #import "ApolloWebJSON.h"
 #import "ApolloWebSessionStore.h"
+#import "ApolloReduceRateLimiting.h"
 #import "ApolloWebSessionLoginViewController.h"
 #import "ApolloMessageDraftStore.h"
 #import "ApolloAccountCredentials.h"
 #import "ApolloPerAccountFavorites.h"
 #import "ApolloFavoritesSorting.h"
+#import "ApolloSubredditInfoCache.h"
 #import "ApolloAICloudBridge.h"
 #import "crash/ApolloCrashManager.h"
 #import "crash/ApolloCrashContext.h"
@@ -1091,7 +1101,10 @@ static void ApolloLogAccountSnapshot(NSString *reason) {
 
     ApolloLoginDiag(@"[AccountSnapshot] %@ | device=%@ | keychain: len=%ld status=%d accessible=%@ | defaults: len=%ld index=%ld accounts=%ld withUser=%ld | mirror: len=%ld | active=%@",
                     reason, ApolloProtectedDataString(), kcLen, (int)kcStatus, accessible ?: @"?",
-                    defaultsLen, (long)index, (long)acctCount, (long)acctWithUser, mirrorLen, active ?: @"(nil)");
+                    defaultsLen, (long)index, (long)acctCount, (long)acctWithUser, mirrorLen,
+                    // A fingerprint, not the name: this file outlives sign-outs and
+                    // account removals, so the export scrub can't know every name in it.
+                    active.length ? [@"#" stringByAppendingString:ApolloLogFingerprint(active.lowercaseString)] : @"(nil)");
     // The access-group breakdown (root-cause confirmation) — separate line to keep both legible.
     ApolloLoginDiag(@"[AccountBlobGroups] %@ | %@", reason, ApolloAccountsBlobGroupBreakdown(keychainItems, kcStatus));
 }
@@ -1546,61 +1559,37 @@ static OSStatus SecItemDelete_replacement(CFDictionaryRef query) {
 }
 
 // --- Device detection (for media chrome, Pixel Pals and Dynamic Island behaviour) ---
-// Apollo's device model mapper (sub_1007a3cdc) only recognizes models up to iPhone 14 Pro Max.
-// Newer models return "unknown" (0x3f) and get no Pixel Pals.
-// Remap newer machine identifiers to "iPhone15,2" (iPhone 14 Pro) so Apollo
-// treats them as Dynamic Island devices and enables full Pixel Pals + FauxCutOutView.
-// This also keeps the portrait gallery counter at the top right;
-// unknown devices get the centered "1 of 5" layout.
-// Apollo then lays Pixel Pals out for the 14 Pro's 125x37 island;
-// ApolloPixelPals.xm remaps that onto the device's real island (position on
-// every DI device, and size on the iPhone 18 Pro's smaller island).
+// Apollo's model mapper only recognizes devices through iPhone 14 Pro Max.
+// Map newer models through ApolloDeviceIdentity.h (14 Pro = island, 14 = notch),
+// preserving media chrome and Pixel Pals on regular phones. ApolloPixelPals.xm
+// follows the real island's size and position.
 static void *uname_orig;
 static int uname_replacement(struct utsname *buf) {
     int ret = ((int (*)(struct utsname *))uname_orig)(buf);
     if (ret != 0) return ret;
 
-    // iPhone15,4+ are all unrecognized by Apollo's mapper.
-    // Map Dynamic Island models to iPhone15,2 (iPhone 14 Pro) and notch models to iPhone14,7 (iPhone 14)
-    static NSDictionary *modelRemap;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSString *di    = @"iPhone15,2";  // iPhone 14 Pro (Dynamic Island)
-        NSString *notch = @"iPhone14,7";  // iPhone 14 (notch)
-
-        modelRemap = @{
-            @"iPhone15,4": di,    // iPhone 15
-            @"iPhone15,5": di,    // iPhone 15 Plus
-            @"iPhone16,1": di,    // iPhone 15 Pro
-            @"iPhone16,2": di,    // iPhone 15 Pro Max
-            @"iPhone17,1": di,    // iPhone 16 Pro
-            @"iPhone17,2": di,    // iPhone 16 Pro Max
-            @"iPhone17,3": di,    // iPhone 16
-            @"iPhone17,4": di,    // iPhone 16 Plus
-            @"iPhone17,5": notch, // iPhone 16e
-            @"iPhone18,1": di,    // iPhone 17 Pro
-            @"iPhone18,2": di,    // iPhone 17 Pro Max
-            @"iPhone18,3": di,    // iPhone 17
-            @"iPhone18,4": di,    // iPhone Air
-            @"iPhone18,5": notch, // iPhone 17e
-            @"iPhone19,2": di,    // iPhone 18 Pro
-            @"iPhone19,3": di,    // iPhone 18 Pro Max
-        };
-    });
-
     NSString *machine = @(buf->machine);
 #if APOLLO_SIM_BUILD
     // The simulator's uname reports the host arch ("arm64"), so Apollo's
     // device mapper sees "unknown" and hides Pixel Pals. Substitute the
-    // simulated device's identifier so the same remap table below applies.
+    // simulated device's identifier so the same classification applies.
     if (![machine hasPrefix:@"iPhone"]) {
         const char *simModel = getenv("SIMULATOR_MODEL_IDENTIFIER");
         if (simModel) machine = @(simModel);
     }
 #endif
-    NSString *remap = modelRemap[machine];
+
+    // Classification only — uname is called from arbitrary threads before
+    // UIKit is up. A live cutout is applied later per window.
+    ApolloDeviceIdentityKind kind =
+        ApolloDeviceIdentityKindForMachine(machine.UTF8String, false, false);
+    const char *remap = ApolloDeviceIdentityModelForKind(kind);
     if (remap) {
-        strlcpy(buf->machine, remap.UTF8String, sizeof(buf->machine));
+        strlcpy(buf->machine, remap, sizeof(buf->machine));
+        static dispatch_once_t logOnce;
+        dispatch_once(&logOnce, ^{
+            ApolloLog(@"[DeviceIdentity] %@ → %s", machine, remap);
+        });
     }
 #if APOLLO_SIM_BUILD
     else if (![@(buf->machine) isEqualToString:machine]) {
@@ -2841,10 +2830,11 @@ static void ApolloImgurRetryAlbumViaTextProxy(NSString *albumID,
     // claimed for Reddit regardless of the Media Upload Host (see
     // ApolloShouldUseCookieRedditUpload), so their multi-image albums must be
     // synthesized into Reddit galleries too. The synthesis only succeeds when
-    // >= 2 of the album's member tokens map to RECORDED Reddit uploads, so a
+    // all of the album's member tokens map to RECORDED Reddit uploads, so a
     // genuine Imgur album (Imgur-hosted member ids) still passes through to
-    // Imgur untouched. ImgChest keeps its own album responder below.
-    NSData *redditAlbumResponseData = sImageUploadProvider != ImageUploadProviderImgChest ? ApolloRedditSyntheticImgurAlbumResponseDataForRequest(request) : nil;
+    // Imgur untouched. Claim by member ownership, since Comment Link Host /
+    // Auto can override Media Upload Host. ImgChest has its own responder below.
+    NSData *redditAlbumResponseData = completionHandler ? ApolloRedditSyntheticImgurAlbumResponseDataForRequest(request) : nil;
     if (redditAlbumResponseData.length > 0) {
         NSHTTPURLResponse *fakeHTTPResponse = [[NSHTTPURLResponse alloc] initWithURL:url
                                                                           statusCode:200
@@ -2859,9 +2849,7 @@ static void ApolloImgurRetryAlbumViaTextProxy(NSString *albumID,
     // ImgChest host: combine the member uploads into one multi-image ImgChest
     // post and answer the Imgur album creation with its link.
     ApolloImgChestAlbumResponder imgChestAlbumResponder = nil;
-    if (sImageUploadProvider == ImageUploadProviderImgChest) {
-        imgChestAlbumResponder = ApolloImgChestAlbumCreationResponderForRequest(request);
-    }
+    if (completionHandler) imgChestAlbumResponder = ApolloImgChestAlbumCreationResponderForRequest(request);
     if (completionHandler && imgChestAlbumResponder) {
         __block __weak NSURLSessionDataTask *proxyTask = nil;
         void (^wrappedHandler)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
@@ -2895,6 +2883,10 @@ static void ApolloImgurRetryAlbumViaTextProxy(NSString *albumID,
     // ApolloRedgifsMissingDuration.h). Rebinding the parameter hands the
     // repaired completion to every RedGIFs path below.
     if (completionHandler && [host isEqualToString:@"api.redgifs.com"] && [path hasPrefix:@"/v2/gifs/"]) {
+        // Innermost, so it sees the response Apollo finally gets (after the
+        // token retry and the duration fill): a failed lookup's card then says
+        // why (see ApolloRedgifsErrorCards.xm).
+        completionHandler = ApolloRedgifsCompletionRecordingLookupResult(self, request, completionHandler);
         completionHandler = ApolloRedgifsCompletionFillingMissingDuration(self, request, completionHandler,
             ^NSURLSessionDataTask *(NSURLRequest *headerRequest, ApolloRedgifsLookupCompletion headerCompletion) {
                 return %orig(headerRequest, headerCompletion);
@@ -2929,6 +2921,9 @@ static void ApolloImgurRetryAlbumViaTextProxy(NSString *albumID,
         [modifiedRequest setValue:nil forHTTPHeaderField:@"Content-Length"];
 
         void (^newCompletionHandler)(NSData *data, NSURLResponse *response, NSError *error) = ^(NSData *data, NSURLResponse *response, NSError *error) {
+            // When minting fails Apollo fails its queued lookups unsent; their
+            // cards say why (see ApolloRedgifsErrorCards.xm).
+            ApolloRedgifsRecordTokenMintResult(data, response, error);
             if (!error && data) {
                 NSError *jsonError = nil;
                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
@@ -3371,39 +3366,63 @@ static void ApolloBarkCaptureInitialIconSelection(void) {
     });
 }
 
-// On a build that can never receive push (a free-account sideload with no
-// `aps-environment` entitlement), Apollo's Notifications settings are a dead end:
-// every toggle ends in the suppressed registration error above, and nothing the
-// user enables can ever deliver. Showing the working-looking controls would give
-// folks false hope, so we replace the screen's contents with a clear,
-// non-interactive explanation. Builds that *can* receive push (a paid-account
-// sideload, or the App Store binary on a jailbreak) are detected via the
-// entitlement and left completely untouched.
+// Apollo's Notifications settings are a dead end in two cases, and showing the
+// working-looking controls would only give folks false hope, so we replace the
+// screen's contents with a clear, non-interactive explanation:
+//
+// - No `aps-environment` entitlement (a free-account sideload): every toggle
+//   ends in the suppressed registration error above and nothing can deliver.
+// - Push-capable signing (a paid-account or store-signed sideload such as
+//   FlareStore) but no self-hosted notification backend: the screen waits on
+//   requests to the legacy push hosts, which the blocklist cancels, so it can
+//   never load (issue #828 — previously an endless spinner).
+//
+// Bark mode implies a configured backend and makes the stock screen fully
+// functional, so it is always left alone.
 //
 // `_TtC6Apollo27NotificationsViewController` is only forward-declared here, so
 // the install logic lives in a C helper taking a plain UIViewController*.
 static void ApolloInstallNotificationsUnavailableOverlay(UIViewController *controller) {
-    if (ApolloPushNotificationsSupported()) {
-        return;
-    }
-    // Bark mode makes the stock Notifications screen fully functional (the
-    // synthetic registration above answers Apollo's token fetch), so leave it
-    // alone. The overlay's copy points users at the Bark setup when this
-    // returns NO.
-    if (ApolloBarkModeActive()) {
-        return;
-    }
     // 'APNU' — unique enough to find our overlay again without a second add.
     static const NSInteger kApolloNotificationsUnavailableTag = 0x41504E55;
     UIView *root = controller.view;
-    if (!root || [root viewWithTag:kApolloNotificationsUnavailableTag]) {
+    if (!root) {
         return;
     }
-    UIView *overlay = ApolloMakeNotificationsUnavailableView();
+
+    BOOL hasReason = NO;
+    ApolloNotificationsUnavailableReason reason = ApolloNotificationsUnavailableReasonNoPushEntitlement;
+    if (ApolloBarkModeActive()) {
+        hasReason = NO;
+    } else if (!ApolloPushNotificationsSupported()) {
+        hasReason = YES;
+        reason = ApolloNotificationsUnavailableReasonNoPushEntitlement;
+    } else if (!ApolloIsNotificationBackendConfigured()) {
+        hasReason = YES;
+        reason = ApolloNotificationsUnavailableReasonNoBackend;
+    }
+
+    // The backend/Bark settings can change while this controller stays alive,
+    // so re-evaluate on every appearance: drop a stale overlay, and rebuild one
+    // whose reason no longer matches.
+    UIView *existing = [root viewWithTag:kApolloNotificationsUnavailableTag];
+    if (existing) {
+        NSNumber *existingReason = objc_getAssociatedObject(existing, &kApolloNotificationsUnavailableTag);
+        if (hasReason && existingReason.integerValue == reason) {
+            return;
+        }
+        [existing removeFromSuperview];
+    }
+    if (!hasReason) {
+        return;
+    }
+
+    UIView *overlay = ApolloMakeNotificationsUnavailableView(reason);
     if (!overlay) {
         return;
     }
     overlay.tag = kApolloNotificationsUnavailableTag;
+    objc_setAssociatedObject(overlay, &kApolloNotificationsUnavailableTag, @(reason), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     overlay.translatesAutoresizingMaskIntoConstraints = NO;
     [root addSubview:overlay];
     [root bringSubviewToFront:overlay];
@@ -3413,7 +3432,9 @@ static void ApolloInstallNotificationsUnavailableOverlay(UIViewController *contr
         [overlay.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
         [overlay.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
     ]];
-    ApolloLog(@"[Push] No aps-environment entitlement on this signing — replacing the Notifications screen with the 'unavailable' explanation.");
+    ApolloLog(@"[Push] Notifications screen can't work on this install (reason=%ld: %@) — showing the 'unavailable' explanation.",
+              (long)reason,
+              reason == ApolloNotificationsUnavailableReasonNoBackend ? @"no notification backend configured" : @"no aps-environment entitlement");
 }
 
 %hook _TtC6Apollo27NotificationsViewController
@@ -3612,6 +3633,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // be configured once per process, so this must not move later.
     @autoreleasepool {
         [[ApolloCrashManager sharedManager] installCrashRecorderIfEnabled];
+        // Update saved icons before Apollo's native tracker loads them.
+        ApolloSubredditPrepareNativeIcons();
         [ApolloCrashContext start];
         [[ApolloCrashPromptCoordinator sharedCoordinator] start];
     }
@@ -3631,6 +3654,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyAutomaticBackupDestination: @0,
                                     UDKeyCrashCaptureEnabled: @YES,
                                     UDKeyTrendingSubredditsLimit: @"5",
+                                    UDKeyRecentlyVisitedSubredditsLimit: @"5",
+                                    UDKeySearchTabSectionOrder: @[@"trending", @"random", @"recent"],
                                     UDKeyShowRandNsfw: @NO,
                                     UDKeyRandomSubredditsSource: defaultRandomSubredditsSource,
                                     UDKeyRandNsfwSubredditsSource: @"",
@@ -3647,8 +3672,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyPassiveDeletedComments: @NO,
                                     UDKeyEnableFlairColors: @NO,
                                     UDKeyBoldPostTitles: @NO,
-                                    UDKeyShowRecentlyReadThumbnails: @YES,
                                     UDKeyFeedTextPostThumbnails: @YES,
+                                    UDKeyRestoreReadingSession: @YES,
                                     UDKeyFeedGalleryCarousel: @YES,
                                     UDKeyFeedGalleryEdgeSwipeNav: @NO,
                                     UDKeyGalleryAutoplayVideos: @YES,
@@ -3702,6 +3727,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyShowSubredditHeaders: @NO,
                                     UDKeySubredditHeaderImmersive: @YES,
                                     UDKeySubredditShowBanner: @YES,
+                                    UDKeySubredditShowIcon: @YES,
                                     UDKeySubredditShowJoinButton: @YES,
                                     UDKeySubredditShowUserFlairButton: @NO,
                                     UDKeySubredditShowSidebarButton: @NO,
@@ -3711,13 +3737,17 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeySubredditLayoutPreviewPinned: @YES,
                                     UDKeyCommunityHighlights: @NO,
                                     UDKeyCommunityHighlightsWeb: @NO,
-                                    UDKeyAutoHideTabBarShowOnIdle: @YES,
                                     UDKeyClassicTabBarScrollBehavior: @NO,
                                     UDKeyHideTopBarOnScroll: @NO,
                                     UDKeyTabBarCollapseSide: @0,
                                     UDKeyKeepSearchBarInPlace: @NO,
                                     UDKeyIPadTabBarBottom: @NO,
+                                    UDKeySettingsIconAppearance: @(ApolloSettingsIconAppearanceLight),
                                     UDKeyTabBarSwipeNavigation: @NO,
+                                    UDKeyDuoLandscapeFeedLayout: @0,
+                                    UDKeyDuoSubredditPanelGlassEnabled: @NO,
+                                    UDKeyIPadPaneLayout: @NO,
+                                    UDKeyLiquidGlassEnabled: @YES,
                                     UDKeyIconRowMagnifier: @YES,
                                     UDKeyInfoRowTapUpvote: @YES,
                                     UDKeyInfoRowTapComments: @YES,
@@ -3727,6 +3757,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyScrollReturnButton: @YES,
                                     UDKeyCenterTitleBetweenButtons: @NO,
                                     UDKeyInfoRowTapTranslation: @YES,
+                                    UDKeyThreeStateVoting: @NO,
                                     UDKeyLiveCommentsFollow: @YES,
                                     UDKeyPerPostCommentSort: @NO,
                                     UDKeyEnableBulkTranslation: @NO,
@@ -3750,6 +3781,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyAIPostWordThreshold: @150,
                                     UDKeyAIPostSummaryDetail: @(ApolloAISummaryDetailBalanced),
                                     UDKeyAICommentSummaryDetail: @(ApolloAISummaryDetailBalanced),
+                                    UDKeyAISummaryLanguage: @"",
                                     UDKeyEnableTapToSummarize: @NO,
                                     UDKeyEnableAIAutoExpandSummaries: @NO,
                                     UDKeyAISummaryProvider: @"apple",
@@ -3773,6 +3805,9 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                     UDKeyImgurAlbumFallbackProxies: @YES,
                                     UDKeyAutomaticUpdateChecks: @YES,
                                     UDKeyWebJSONEnabled: @NO,
+                                    UDKeyReduceRateLimiting: @NO,
+                                    UDKeyKeylessRouteUpdates: @YES,
+                                    UDKeyReduceRateLimitingOffered: @NO,
                                     UDKeyUseModernRedditChat: @NO,
                                     UDKeyUseModernRedditModmail: @NO,
                                     UDKeyNotificationBackendURL: @"",
@@ -3807,8 +3842,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
         sPassiveDeletedComments = NO;
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:UDKeyPassiveDeletedComments];
     }
-    sShowRecentlyReadThumbnails = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowRecentlyReadThumbnails];
     sFeedTextPostThumbnails = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedTextPostThumbnails];
+    sRestoreReadingSession = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyRestoreReadingSession];
     sFeedGalleryCarousel = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedGalleryCarousel];
     sFeedGalleryEdgeSwipeNav = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyFeedGalleryEdgeSwipeNav];
     sGalleryAutoplayVideos = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyGalleryAutoplayVideos];
@@ -3852,6 +3887,9 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
         sAICommentSummaryDetail = ApolloAISummaryDetailBalanced;
         [standardDefaults setInteger:sAICommentSummaryDetail forKey:UDKeyAICommentSummaryDetail];
     }
+    NSString *aiSummaryLanguage = (NSString *)[standardDefaults objectForKey:UDKeyAISummaryLanguage];
+    sAISummaryLanguage = ([aiSummaryLanguage isKindOfClass:[NSString class]] && aiSummaryLanguage.length > 0)
+        ? [aiSummaryLanguage copy] : nil;
     sEnableTapToSummarize = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyEnableTapToSummarize];
     sEnableAIAutoExpandSummaries = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyEnableAIAutoExpandSummaries];
     // "Tap to Summarize" and "Open Summaries Automatically" are mutually exclusive in
@@ -3998,6 +4036,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     sShowSubredditHeaders = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyShowSubredditHeaders];
     sSubredditHeaderImmersive = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditHeaderImmersive];
     sSubredditShowBanner = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditShowBanner];
+    sSubredditShowIcon = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditShowIcon];
     sSubredditShowJoinButton = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditShowJoinButton];
     sSubredditShowUserFlairButton = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditShowUserFlairButton];
     sSubredditShowSidebarButton = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeySubredditShowSidebarButton];
@@ -4008,13 +4047,6 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     sCommunityHighlightsWeb = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyCommunityHighlightsWeb];
     sClassicTabBarScrollBehavior = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyClassicTabBarScrollBehavior];
     sHideTopBarOnScroll = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyHideTopBarOnScroll];
-    if (ApolloSupportsNativeTabBarScrollBehavior() &&
-        ![standardDefaults boolForKey:UDKeyAutoHideTabBarShowOnIdle]) {
-        // Idle re-expansion is now bundled into both selectable scroll modes.
-        // Normalize older/restored independent-switch state on supported OSes.
-        [standardDefaults setBool:YES forKey:UDKeyAutoHideTabBarShowOnIdle];
-        ApolloLog(@"[AutoHideTabBarFix] Migrated scroll behavior to include idle re-expansion");
-    }
     NSInteger storedTabBarHideStyle =
         [[NSUserDefaults standardUserDefaults] integerForKey:UDKeyTabBarCollapseSide];
     if (storedTabBarHideStyle < ApolloTabBarHideStyleLeft ||
@@ -4024,7 +4056,23 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     sTabBarHideStyle = (ApolloTabBarHideStyle)storedTabBarHideStyle;
     sKeepSearchBarInPlace = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyKeepSearchBarInPlace];
     sIPadTabBarBottom = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIPadTabBarBottom];
+    NSInteger settingsIconAppearance = [standardDefaults integerForKey:UDKeySettingsIconAppearance];
+    sSettingsIconAppearance = settingsIconAppearance >= ApolloSettingsIconAppearanceSystem && settingsIconAppearance <= ApolloSettingsIconAppearanceDark
+        ? (ApolloSettingsIconAppearance)settingsIconAppearance : ApolloSettingsIconAppearanceLight;
+    // sLiquidGlassEnabled was already latched in ApolloCommon +load. Do not
+    // reload it here: UIKit and early hook constructors use that launch choice.
     sTabBarSwipeNavigation = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyTabBarSwipeNavigation];
+    sDuoLandscapeFeedLayout = [standardDefaults integerForKey:UDKeyDuoLandscapeFeedLayout];
+    sDuoSubredditPanelGlassEnabled = [standardDefaults boolForKey:UDKeyDuoSubredditPanelGlassEnabled];
+    // Value 1 belonged to the removed side-by-side experiment. Keep Focused
+    // feed at 2 so existing selections survive this menu cleanup.
+    if (sDuoLandscapeFeedLayout != 0 && sDuoLandscapeFeedLayout != 2) {
+        sDuoLandscapeFeedLayout = 0;
+        [standardDefaults setInteger:0 forKey:UDKeyDuoLandscapeFeedLayout];
+    }
+    // Read once here: ApolloPaneInstall.xm builds the split controllers during
+    // scene connect, which happens after %ctor and never again for the process.
+    sIPadPaneLayout = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIPadPaneLayout];
     sIconRowMagnifier = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyIconRowMagnifier];
     sInfoRowTapUpvote = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapUpvote];
     sInfoRowTapComments = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapComments];
@@ -4036,6 +4084,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // it (ApolloInfoTapFired / SRTActivateTarget check it first).
     if (sInfoRowPopupMode && sInfoRowOverlayMode) sInfoRowPopupMode = NO;
     sInfoRowTapTranslation = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyInfoRowTapTranslation];
+    sThreeStateVoting = [standardDefaults boolForKey:UDKeyThreeStateVoting];
     sLiveCommentsFollow = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyLiveCommentsFollow];
     sPerPostCommentSort = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyPerPostCommentSort];
     // Both sort memories on = stale state from an older build or a restored backup;
@@ -4161,6 +4210,8 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // installed below — in the simulator the keychain is virtualized by those
     // hooks, so reading before they're in place returns nothing.
     sWebJSONEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyWebJSONEnabled];
+    sReduceRateLimiting = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyReduceRateLimiting];
+    sKeylessRouteUpdates = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyKeylessRouteUpdates];
     sPollsFeatureEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:UDKeyPollsEnabled];
     sPollOptionAlignment = [[NSUserDefaults standardUserDefaults] integerForKey:UDKeyPollOptionAlignment];
     if (sPollOptionAlignment != ApolloPollOptionAlignmentCenter && sPollOptionAlignment != ApolloPollOptionAlignmentLeft) {
@@ -4184,7 +4235,11 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification *note) {
-        ApolloShowRedditRateLimitToast([note.userInfo[@"seconds"] doubleValue]);
+        NSTimeInterval seconds = [note.userInfo[@"seconds"] doubleValue];
+        // An account that signed in before the Reduce Rate Limiting offer
+        // existed gets it here, once, in place of the toast.
+        if (ApolloReduceRateLimitingOfferAtRateLimit(seconds)) return;
+        ApolloShowRedditRateLimitToast(seconds);
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
@@ -4309,6 +4364,7 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     sRandNsfwSubredditsSource = (NSString *)[[NSUserDefaults standardUserDefaults] objectForKey:UDKeyRandNsfwSubredditsSource];
     sTrendingSubredditsSource = (NSString *)[[NSUserDefaults standardUserDefaults] objectForKey:UDKeyTrendingSubredditsSource];
     sTrendingSubredditsLimit = (NSString *)[[NSUserDefaults standardUserDefaults] objectForKey:UDKeyTrendingSubredditsLimit];
+    sRecentlyVisitedSubredditsLimit = [[NSUserDefaults standardUserDefaults] stringForKey:UDKeyRecentlyVisitedSubredditsLimit] ?: @"5";
 
     // Launch hooks are cache-only and fail open until this off-main seed lands.
     // The seed also queues refreshes after loading the last-known-good values.
@@ -4454,17 +4510,31 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
     // Mirror the selected app icon for Bark notification icon passthrough.
     ApolloBarkCaptureInitialIconSelection();
 
+    ApolloSetupAssistantStart();
+
     // Redirect user to Custom API settings if no API credentials are set — but not
     // when at least one web-session account is configured (no API key is expected
     // for those). Checked by configured-account count, not the active account, so
     // this doesn't depend on which account happens to be current right now.
-    if ([sRedditClientId length] == 0 && !(sWebJSONEnabled && ApolloWebSessionUsernames().count > 0)) {
+    if ([standardDefaults integerForKey:UDKeySetupAssistantState] == ApolloSetupStateExistingInstall &&
+        !ApolloSetupAssistantBlocksLaunchPrompts() &&
+        [sRedditClientId length] == 0 && !(sWebJSONEnabled && ApolloWebSessionUsernames().count > 0)) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (ApolloSetupAssistantBlocksLaunchPrompts()) return;
             UIWindow *mainWindow = ((UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject).windows.firstObject;
             UITabBarController *tabBarController = (UITabBarController *)mainWindow.rootViewController;
             // Navigate to Settings tab
             tabBarController.selectedViewController = [tabBarController.viewControllers lastObject];
-            UINavigationController *settingsNavController = (UINavigationController *) tabBarController.selectedViewController;
+            // The selected child is the navigation controller in the stock
+            // layout, but a UISplitViewController under the iPad pane layout —
+            // unwrap rather than casting, or this push hits the split
+            // controller and throws.
+            UINavigationController *settingsNavController =
+                ApolloNavigationControllerForTabChild(tabBarController.selectedViewController);
+            if (!settingsNavController) {
+                ApolloLog(@"[Tweak] no navigation controller for the settings tab; skipping Custom API redirect");
+                return;
+            }
 
             // Push Custom API directly
             CustomAPIViewController *vc = [[CustomAPIViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
@@ -4480,6 +4550,9 @@ static void ApolloShowRedditRateLimitToast(NSTimeInterval seconds) {
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *note) {
+        // Silent, so the Setup Assistant doesn't hold it back.
+        ApolloWebJSONRouteUpdatesCheckIfNeeded();
+        if (ApolloSetupAssistantBlocksLaunchPrompts()) return;
         ApolloSendUsageHeartbeatIfNeeded();
         ApolloUpdateCheckIfNeeded();
     }];

@@ -529,7 +529,9 @@ static ApolloActionMenuSlotState *ApolloActionMenuSlotsForController(id controll
     state.context = context;
     objc_setAssociatedObject(controller, kApolloActionMenuSlotStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (matched.count > 0) {
-        ApolloLog(@"[ActionMenu] %lu spec(s) matched '%@': %@", (unsigned long)matched.count, menuTitle,
+        // No menuTitle: like the catalogue line below, a sheet title can carry
+        // a username, subreddit, post title or link.
+        ApolloLog(@"[ActionMenu] %lu spec(s) matched (context %@): %@", (unsigned long)matched.count, context ?: @"(none)",
                   [matched valueForKey:@"identifier"]);
     }
     {
@@ -962,7 +964,7 @@ static UIMenu *ApolloActionMenuLayoutContextMenu(UIMenu *menu, ApolloActionMenuC
     // Hidden rows go. Then, under a saved order, the catalogued rows are
     // sorted by it and dealt back into the slots catalogued rows occupied, so
     // a row this context doesn't know keeps Apollo's position — the comments
-    // header's Moderator row stays first and Remind Me In… last.
+    // header's Moderator row stays first.
     NSSet<NSString *> *hidden = ApolloActionMenuHiddenItemIDs(context);
     NSMutableArray<UIMenuElement *> *kept = [NSMutableArray arrayWithCapacity:children.count];
     NSMutableArray *keptIDs = [NSMutableArray arrayWithCapacity:children.count];

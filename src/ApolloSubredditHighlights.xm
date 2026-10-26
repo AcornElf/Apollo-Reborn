@@ -39,9 +39,11 @@
 #import "ApolloPostReadState.h"
 #import "ApolloThemeRuntime.h"
 #import "ApolloAccountCredentials.h"
+#import "ApolloReduceRateLimiting.h"
 #import "ApolloWebJSON.h"
 #import "ApolloWebSessionStore.h"
 #import "ApolloClasses.h"
+#import "ApolloDuoRail.h"
 
 NSNotificationName const ApolloCommunityHighlightsDataReadyNotification =
     @"ApolloCommunityHighlightsDataReadyNotification";
@@ -106,6 +108,12 @@ static NSTimeInterval const kApolloHLWebTimeout = 18.0;
 // cheap (no refetch on every visit) while picking up a mod's pin change on its own;
 // pull-to-refresh always forces an immediate refresh regardless of this window.
 static NSTimeInterval const kApolloHLCacheTTL = 120.0;
+// The same window under Reduce Rate Limiting (API-Key-Free accounts only, see
+// ApolloReduceRateLimiting.h): pins rarely change, and every refresh is two or
+// three requests on the session's small Reddit budget.
+static NSTimeInterval const kApolloHLReducedRequestsCacheTTL = 30.0 * 60.0;
+// How long an /api/info answer for a highlight post is reused (ApolloHLEnrichViaInfo).
+static NSTimeInterval const kApolloHLInfoReuseTTL = 120.0;
 
 #pragma mark - Associated-object keys
 
@@ -123,6 +131,7 @@ static const void *kApolloHLContainerKey       = &kApolloHLContainerKey;      //
 static const void *kApolloHLHeaderChangeGenKey     = &kApolloHLHeaderChangeGenKey;     // NSNumber on the table: latest ApplyHeaderChange generation
 static const void *kApolloHLHeaderChangePendingKey = &kApolloHLHeaderChangePendingKey; // BOOL on the table: a deferred header change awaits scroll settle
 static char kApolloHLHiddenRowsKey;            // NSMutableSet<NSNumber*> of de-duped sticky rows, per ASTableNode
+static char kApolloHLDeDupSubKey;               // NSString subreddit whose separators this ASTableNode may collapse
 static char kApolloHLStickyCountKey;           // NSNumber (REST sticky count N) per feed ASTableNode — breaker rule
 static char kApolloHLFeedOwnedMaskKey;         // NSNumber (bitmask of sticky rows the feed keeps) per feed ASTableNode
 static char kApolloHLFeedWatchKey;             // ApolloHLFeedWatch on a PostsViewController's feed UITableView (in-place switch watcher)
@@ -1156,6 +1165,15 @@ static NSString *ApolloHLRequestBearerToken(void) {
 // Fetches the subreddit's stickied posts and calls completion on the main queue
 // with the (possibly empty) item array. Caches the result. completion may be nil
 // (warm the cache only).
+// YES while Reddit is refusing the active API-Key-Free account (HTTP 429 until
+// its ten-minute window resets; see ApolloWebJSONOptionalReadBackoff). These
+// fetches spend the same budget as the feed, so during a hold they stand down:
+// the cached carousel stays up and nothing is negative-cached, so the next
+// visit after the reset fetches as usual. Always NO for API-key accounts.
+static BOOL ApolloHLRateLimitHoldActive(void) {
+    return ApolloWebJSONOptionalReadBackoff(ApolloActiveWebSessionUsername()) > 0;
+}
+
 static void ApolloHLFetchHighlights(NSString *subredditName, BOOL force, void (^completion)(NSArray<ApolloHLItem *> *items)) {
     NSString *key = subredditName.lowercaseString;
     if (key.length == 0) { if (completion) completion(@[]); return; }
@@ -1167,6 +1185,8 @@ static void ApolloHLFetchHighlights(NSString *subredditName, BOOL force, void (^
         if (cached) { if (completion) completion(cached); return; }
     }
     if ([ApolloHLInFlight() containsObject:key]) { if (completion) completion(nil); return; }
+    // nil = "nothing to apply, try later", the same answer a failed request gives.
+    if (ApolloHLRateLimitHoldActive()) { if (completion) completion(nil); return; }
     [ApolloHLInFlight() addObject:key];
 
     NSMutableCharacterSet *allowed = [[NSCharacterSet alphanumericCharacterSet] mutableCopy];
@@ -1675,6 +1695,7 @@ static void ApolloHLToggleCollapsed(NSString *sub); // fwd (defined after ApplyI
 @property (nonatomic) BOOL settingsPreview;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UIImageView *chevronView;
+@property (nonatomic, strong) UIImageView *pinView;
 @property (nonatomic, strong) UIView *headerTapView;
 - (void)ahlResizeToWidth:(CGFloat)width;
 @property (nonatomic, copy) NSArray<ApolloHLItem *> *items;
@@ -1769,16 +1790,32 @@ static void ApolloHLToggleCollapsed(NSString *sub); // fwd (defined after ApplyI
     ApolloRouteResolvedURLViaApolloScheme(url);
 }
 
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self ahlResizeToWidth:CGRectGetWidth(self.bounds)];
+}
+- (void)safeAreaInsetsDidChange {
+    [super safeAreaInsetsDidChange];
+    [self setNeedsLayout];
+}
 - (void)ahlResizeToWidth:(CGFloat)width {
     if (width <= 0.0) return;
-    self.titleLabel.frame = CGRectMake(kApolloHLSidePadding + 18.0, 2.0,
-                                       width - kApolloHLSidePadding * 2 - 18.0 - 20.0,
+    // The table header spans the whole feed, including the Duo's rail.
+    // Keep both the collapse target and the carousel in its usable area.
+    UIEdgeInsets insets = !self.settingsPreview && ApolloDuoDeviceDetected()
+        ? self.safeAreaInsets : UIEdgeInsetsZero;
+    CGFloat leading = insets.left;
+    width = MAX(0.0, width - leading - insets.right);
+    self.pinView.frame = CGRectMake(leading + kApolloHLSidePadding, 6.0, 12.0, 14.0);
+    self.titleLabel.frame = CGRectMake(leading + kApolloHLSidePadding + 18.0, 2.0,
+                                       MAX(0.0, width - kApolloHLSidePadding * 2 - 18.0 - 20.0),
                                        kApolloHLTitleRowHeight - 2.0);
-    self.chevronView.frame = CGRectMake(width - kApolloHLSidePadding - 13.0, 7.0, 13.0, 11.0);
-    self.headerTapView.frame = CGRectMake(0.0, 0.0, width, kApolloHLTitleRowHeight);
+    self.chevronView.frame = CGRectMake(leading + width - kApolloHLSidePadding - 13.0, 7.0, 13.0, 11.0);
+    self.headerTapView.frame = CGRectMake(leading, 0.0, width, kApolloHLTitleRowHeight);
 
     if (self.scrollView) {
         CGRect scrollFrame = self.scrollView.frame;
+        scrollFrame.origin.x = leading;
         scrollFrame.size.width = width;
         self.scrollView.frame = scrollFrame;
         CGFloat maxOffset = MAX(0.0, self.scrollView.contentSize.width - width);
@@ -1864,6 +1901,7 @@ static ApolloHLCarouselView *ApolloHLBuildCarousel(NSString *sub, NSArray<Apollo
     pin.contentMode = UIViewContentModeScaleAspectFit;
     pin.frame = CGRectMake(kApolloHLSidePadding, 6.0, 12.0, 14.0);
     [view addSubview:pin];
+    view.pinView = pin;
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(kApolloHLSidePadding + 18.0, 2.0, width - kApolloHLSidePadding * 2 - 18.0 - 20.0, kApolloHLTitleRowHeight - 2.0)];
     titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
@@ -1894,7 +1932,11 @@ static ApolloHLCarouselView *ApolloHLBuildCarousel(NSString *sub, NSArray<Apollo
     UIScrollView *scroll = [[ApolloHLCarouselScrollView alloc] initWithFrame:CGRectMake(0, scrollY, width, kApolloHLCardHeight)];
     scroll.showsHorizontalScrollIndicator = NO;
     scroll.alwaysBounceHorizontal = YES;
-    scroll.clipsToBounds = NO;
+    BOOL duo = ApolloDuoDeviceDetected();
+    scroll.clipsToBounds = duo;
+    // Duo owns safe-area placement. Regular phones keep upstream's overflow
+    // and native inset behavior for the carousel and its card shadows.
+    if (duo) scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
     scroll.delaysContentTouches = NO;
     scroll.directionalLockEnabled = YES;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:view action:@selector(cardTapped:)];
@@ -2075,6 +2117,40 @@ static void ApolloHLClearDeDup(NSString *subreddit) {
 static void ApolloHLApplyHeaderChange(UITableView *tableView, UIView *previousCarousel, UIView *appearingView, void (^apply)(void)); // defined with InstallCarousel
 static void ApolloHLInstall(UIViewController *vc); // defined with the PostsViewController hooks
 
+static void ApolloHLClearTableDeDupState(UIViewController *vc) {
+    id tableNode = ApolloHLTypedIvar(vc, @"tableNode", ApolloClassASTableNode);
+    if (!tableNode) return;
+    @synchronized(tableNode) {
+        [(NSMutableSet *)objc_getAssociatedObject(tableNode, &kApolloHLHiddenRowsKey) removeAllObjects];
+        objc_setAssociatedObject(tableNode, &kApolloHLDeDupSubKey, nil, OBJC_ASSOCIATION_COPY);
+        objc_setAssociatedObject(tableNode, &kApolloHLStickyCountKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(tableNode, &kApolloHLFeedOwnedMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+// Subreddit Headers can enter before ApolloHLInstall; both must clear the old
+// table state before publishing a new subreddit identity.
+static void ApolloHLPrepareDeDupForSubreddit(UIViewController *vc, NSString *subreddit) {
+    if (!vc || subreddit.length == 0) return;
+    NSString *sub = subreddit.lowercaseString;
+    NSString *old = objc_getAssociatedObject(vc, kApolloHLActiveSubKey);
+    if (old.length && ![old isEqualToString:sub]) {
+        ApolloHLHideSubsRemove(old);
+        ApolloHLDidCollapseRemove(old);
+        ApolloHLClearTableDeDupState(vc);
+    }
+
+    id tableNode = ApolloHLTypedIvar(vc, @"tableNode", ApolloClassASTableNode);
+    if (tableNode) {
+        @synchronized(tableNode) {
+            objc_setAssociatedObject(tableNode, &kApolloHLDeDupSubKey, sub,
+                                     OBJC_ASSOCIATION_COPY);
+        }
+    }
+    ApolloHLHideSubsAdd(sub);
+    objc_setAssociatedObject(vc, kApolloHLActiveSubKey, sub, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
 UIView *ApolloHLUnwrapManagedHeader(UIView *headerView, UIViewController *hostVC) {
     if ([headerView isMemberOfClass:[ApolloHLHeaderContainerView class]]) {
         return ((ApolloHLHeaderContainerView *)headerView).realOriginal;
@@ -2109,9 +2185,7 @@ UIView *ApolloHLHeaderOriginalSubstitute(NSString *subreddit, UIViewController *
     NSString *sub = subreddit.lowercaseString;
     if (width <= 0) width = hostVC.view.bounds.size.width;
 
-    // De-dup membership now (the header installs before cells render).
-    ApolloHLHideSubsAdd(sub);
-    if (hostVC) objc_setAssociatedObject(hostVC, kApolloHLActiveSubKey, sub, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (hostVC) ApolloHLPrepareDeDupForSubreddit(hostVC, sub);
 
     if (existingContainer && [existingContainer.subreddit isEqualToString:sub]) {
         ApolloHLApplyHeaderSurface(existingContainer, existingContainer.hlCarouselView);
@@ -2255,13 +2329,9 @@ static void ApolloHLTeardown(UIViewController *vc, BOOL restoreNativeHeader) {
         objc_setAssociatedObject(vc, kApolloHLActiveSubKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     }
     objc_setAssociatedObject(vc, kApolloHLContainerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // Clear the per-table de-duped-sticky rows so the next sub's separators can't
-    // self-collapse against stale rows. EMPTY it (don't free the set) under the same
-    // owningTable lock — an off-main layout pass may be reading it concurrently.
-    id tableNode = ApolloHLTypedIvar(vc, @"tableNode", ApolloClassASTableNode);
-    if (tableNode) @synchronized(tableNode) {
-        [(NSMutableSet *)objc_getAssociatedObject(tableNode, &kApolloHLHiddenRowsKey) removeAllObjects];
-    }
+    // Empty, rather than free, the hidden-row set under the owning table's lock:
+    // an off-main Texture layout may be reading it concurrently.
+    ApolloHLClearTableDeDupState(vc);
     ApolloHLRestoreStandaloneHeader(vc);
 }
 
@@ -2695,6 +2765,28 @@ static void ApolloHLMergeMetadata(NSArray<ApolloHLItem *> *webItems,
     }
 }
 
+// Recent /api/info answers for highlight posts, by t3_ fullname. Opening a
+// subreddit can enrich the same pinned posts twice within a few seconds (the
+// quiet refresh of the cards seeded from disk, then the web upgrade's own
+// pass), so an answer from the last two minutes is reused instead of asked for
+// again. The items are only ever read (ApolloHLMergeMetadata copies their
+// fields onto the cards). Main queue only.
+static NSMutableDictionary<NSString *, ApolloHLItem *> *ApolloHLInfoReuse(void) {
+    static NSMutableDictionary *d; static dispatch_once_t once;
+    dispatch_once(&once, ^{ d = [NSMutableDictionary dictionary]; });
+    return d;
+}
+static NSMutableDictionary<NSString *, NSDate *> *ApolloHLInfoReuseTime(void) {
+    static NSMutableDictionary *d; static dispatch_once_t once;
+    dispatch_once(&once, ^{ d = [NSMutableDictionary dictionary]; });
+    return d;
+}
+
+static void ApolloHLForgetInfoAnswers(void) {
+    [ApolloHLInfoReuse() removeAllObjects];
+    [ApolloHLInfoReuseTime() removeAllObjects];
+}
+
 // Fetch reliable metadata for every web highlight, including the cards absent
 // from /hot. Merge into a private copy and deliver current results on main.
 static void ApolloHLEnrichViaInfo(NSString *sub, NSUInteger refreshGeneration,
@@ -2728,6 +2820,21 @@ static void ApolloHLEnrichViaInfo(NSString *sub, NSUInteger refreshGeneration,
     };
 
     if (fullnames.count == 0) { finish(@{}); return; }
+    // During a rate limit, behave like a failed request: the cards keep the
+    // metadata they already have.
+    if (ApolloHLRateLimitHoldActive()) { finish(@{}); return; }
+    NSMutableDictionary<NSString *, ApolloHLItem *> *reused = [NSMutableDictionary dictionary];
+    for (NSString *fullname in fullnames) {
+        ApolloHLItem *item = ApolloHLInfoReuse()[fullname];
+        NSDate *answeredAt = ApolloHLInfoReuseTime()[fullname];
+        if (!item || !answeredAt || -answeredAt.timeIntervalSinceNow > kApolloHLInfoReuseTTL) break;
+        reused[fullname] = item;
+    }
+    if (reused.count == fullnames.count) {
+        ApolloLog(@"[Highlights] info enrich r/%@ reused %lu recent answer(s)", sub, (unsigned long)reused.count);
+        finish(reused);
+        return;
+    }
     NSString *idParam = [fullnames componentsJoinedByString:@","];
     NSString *token = ApolloHLRequestBearerToken();
     NSString *urlString = token.length > 0
@@ -2745,6 +2852,25 @@ static void ApolloHLEnrichViaInfo(NSString *sub, NSUInteger refreshGeneration,
         ApolloLog(@"[Highlights] info enrich status=%ld ids=%lu resolved=%lu listing=%d type=%@ err=%@",
                   (long)status, (unsigned long)fullnames.count, (unsigned long)infoMap.count,
                   validListing, response.MIMEType ?: @"unknown", error.localizedDescription ?: @"nil");
+        if (infoMap.count > 0) {
+            // Queued ahead of finish's own main-queue hop, so a second pass
+            // that starts right after this one already finds the answers.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSDate *answeredAt = [NSDate date];
+                // Answers older than the reuse window are never read again.
+                if (ApolloHLInfoReuseTime().count > 64) {
+                    for (NSString *old in ApolloHLInfoReuseTime().allKeys) {
+                        if (-ApolloHLInfoReuseTime()[old].timeIntervalSinceNow <= kApolloHLInfoReuseTTL) continue;
+                        [ApolloHLInfoReuseTime() removeObjectForKey:old];
+                        [ApolloHLInfoReuse() removeObjectForKey:old];
+                    }
+                }
+                [infoMap enumerateKeysAndObjectsUsingBlock:^(NSString *fullname, ApolloHLItem *item, __unused BOOL *stop) {
+                    ApolloHLInfoReuse()[fullname] = item;
+                    ApolloHLInfoReuseTime()[fullname] = answeredAt;
+                }];
+            });
+        }
         finish(infoMap);
     }] resume];
 }
@@ -2779,6 +2905,8 @@ static void ApolloHLMaybeWebUpgrade(NSString *subreddit) {
     if (!sCommunityHighlights || !sCommunityHighlightsWeb) return;
     NSString *sub = subreddit.lowercaseString;
     if (sub.length == 0 || [ApolloHLWebDone() containsObject:sub] || ApolloHLWebFetchers()[sub]) return;
+    // Not marked done, so the upgrade runs on a visit after the limit resets.
+    if (ApolloHLRateLimitHoldActive()) return;
     if ([ApolloHLWebChallengeStrikes()[sub] intValue] >= kApolloHLWebChallengeMaxStrikes) return;
     NSDate *lastTry = ApolloHLWebChallengeLastTry()[sub];
     if (lastTry && -lastTry.timeIntervalSinceNow < kApolloHLWebChallengeRetrySpacing) return;
@@ -2968,9 +3096,13 @@ static void ApolloHLRefreshSub(NSString *subreddit, BOOL alwaysWeb) {
 static void ApolloHLMaybeRefreshStale(NSString *subreddit) {
     NSString *key = subreddit.lowercaseString;
     if (!ApolloHLCache()[key]) return; // nothing cached yet → the normal fetch path handles it
+    // The refresh couldn't go out anyway, and its time stamp isn't moved, so
+    // the first visit after the limit resets still refreshes.
+    if (ApolloHLRateLimitHoldActive()) return;
+    NSTimeInterval ttl = ApolloReduceRateLimitingActive() ? kApolloHLReducedRequestsCacheTTL : kApolloHLCacheTTL;
     NSDate *ft = ApolloHLFetchTime()[key];
-    if (ft && [[NSDate date] timeIntervalSinceDate:ft] > kApolloHLCacheTTL) {
-        ApolloLog(@"[Highlights] r/%@ cache stale (>%.0fs) → background refresh", subreddit, kApolloHLCacheTTL);
+    if (ft && [[NSDate date] timeIntervalSinceDate:ft] > ttl) {
+        ApolloLog(@"[Highlights] r/%@ cache stale (>%.0fs) → background refresh", subreddit, ttl);
         ApolloHLRefreshSub(subreddit, NO);
     }
 }
@@ -2992,12 +3124,16 @@ static BOOL ApolloHLApplyStickyCountToTable(UIViewController *vc, NSString *subr
     // The mask travels with N: both describe the same sticky run, and a change to
     // either one changes which separators are orphaned.
     NSNumber *ownedMask = ApolloDevvitFeedOwnsInteractivePosts() ? (ApolloHLFeedOwnedMask()[subKey] ?: @0) : @0;
-    NSNumber *prev = objc_getAssociatedObject(tableNode, &kApolloHLStickyCountKey);
-    NSNumber *prevMask = objc_getAssociatedObject(tableNode, &kApolloHLFeedOwnedMaskKey);
-    BOOL maskChanged = ![(prevMask ?: @0) isEqualToNumber:ownedMask];
-    if ([prev isEqualToNumber:stickyN] && !maskChanged) return NO;
-    objc_setAssociatedObject(tableNode, &kApolloHLStickyCountKey, stickyN, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(tableNode, &kApolloHLFeedOwnedMaskKey, ownedMask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSNumber *prev;
+    // Publish together for off-main layout; never reload while holding this lock.
+    @synchronized(tableNode) {
+        prev = objc_getAssociatedObject(tableNode, &kApolloHLStickyCountKey);
+        NSNumber *prevMask = objc_getAssociatedObject(tableNode, &kApolloHLFeedOwnedMaskKey);
+        BOOL maskChanged = ![(prevMask ?: @0) isEqualToNumber:ownedMask];
+        if ([prev isEqualToNumber:stickyN] && !maskChanged) return NO;
+        objc_setAssociatedObject(tableNode, &kApolloHLStickyCountKey, stickyN, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(tableNode, &kApolloHLFeedOwnedMaskKey, ownedMask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     // The cold-load fallback collapses exactly the first separator (row 1) — correct
     // only for the common 2-sticky feed. When N differs (a single sticky that lost its
     // breaker, or 3+ that kept an orphan), the already-measured separators are wrong and
@@ -3048,6 +3184,14 @@ static void ApolloHLInstall(UIViewController *vc) {
     UITableView *tableView = ApolloHLFindTableView(vc);
     if (!tableView) return;
 
+    // Reset ownership before publishing a sticky count can reload the table.
+    NSString *storedActive = objc_getAssociatedObject(vc, kApolloHLActiveSubKey);
+    if (storedActive.length && ![storedActive isEqualToString:subreddit]) {
+        ApolloHLTeardown(vc, YES);
+    }
+
+    ApolloHLPrepareDeDupForSubreddit(vc, subreddit);
+
     // First consult of this sub this session: seed the caches from the persisted
     // snapshot so the carousel below installs synchronously, before Apollo's posts
     // have rendered — no layout snap (#909). The seeded fetch date is old, so the
@@ -3092,19 +3236,6 @@ static void ApolloHLInstall(UIViewController *vc) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), pass);
         }
     }
-
-    // Subreddit changed under a reused controller — drop old state.
-    NSString *storedActive = objc_getAssociatedObject(vc, kApolloHLActiveSubKey);
-    if (storedActive.length && ![storedActive isEqualToString:subreddit]) {
-        ApolloHLTeardown(vc, YES);
-    }
-
-    // Mark this subreddit's foreground feed for inline de-duplication NOW (before
-    // its cells lay out), so the pinned posts collapse on first layout instead of
-    // flashing then collapsing once the async carousel data lands. Done in BOTH
-    // placement modes (standalone tableHeaderView, or hosted in the headers wrapper).
-    ApolloHLHideSubsAdd(subreddit);
-    objc_setAssociatedObject(vc, kApolloHLActiveSubKey, subreddit, OBJC_ASSOCIATION_COPY_NONATOMIC);
 
     // Opt-in: harvest the full highlights set (>2) via a hidden WebView, once per
     // sub. The fast API carousel shows immediately; this upgrades it when it lands.
@@ -3257,22 +3388,33 @@ static void ApolloHLRecordHiddenStickyRow(id postNode) {
     if (!owning || row < 0) return;
     @synchronized(owning) { [ApolloHLHiddenRowsSet(owning, YES) addObject:@(row)]; } // lock the stable owningTable, not the set
 }
+
 static BOOL ApolloHLSeparatorShouldCollapse(id sepNode) {
-    if ([objc_getAssociatedObject(sepNode, &kApolloHLSepCollapseKey) boolValue]) return YES; // reactive pass
     if (!sCommunityHighlights || ApolloHLHideSubsIsEmpty()) return NO;
     NSInteger r = ApolloHLNodeRow(sepNode);
     if (r < 1) return NO;
     id owning = ApolloHLOwningTableNode(sepNode);
+    if (!owning) return NO;
+    NSString *subreddit;
+    NSNumber *n;
+    NSUInteger mask;
+    // Read one consistent snapshot while main may switch or tear down the feed.
+    @synchronized(owning) {
+        subreddit = objc_getAssociatedObject(owning, &kApolloHLDeDupSubKey);
+        n = objc_getAssociatedObject(owning, &kApolloHLStickyCountKey);
+        mask = [objc_getAssociatedObject(owning, &kApolloHLFeedOwnedMaskKey) unsignedIntegerValue];
+    }
+    // Another tab's Highlights must not collapse Home/All separators (#830).
+    if (subreddit.length == 0 || !ApolloHLHideSubsContains(subreddit)) return NO;
+    if ([objc_getAssociatedObject(sepNode, &kApolloHLSepCollapseKey) boolValue]) return YES; // reactive pass
     // Race-free exact rule when the inline-sticky count N is known (warm loads):
     // stickies occupy rows 0..2N-1; their separators are the odd rows 1,3,…,2N-1; the
     // breaker is the LAST one (row 2N-1). Collapse every separator before it. This is
     // correct for any N from the FIRST measure — including N==1 (2N-1==1, so r<1 is
     // false and the lone separator is kept as the breaker).
-    NSNumber *n = owning ? objc_getAssociatedObject(owning, &kApolloHLStickyCountKey) : nil;
     if (n) {
         NSInteger N = n.integerValue;
         if (N < 1) return NO;
-        NSUInteger mask = [objc_getAssociatedObject(owning, &kApolloHLFeedOwnedMaskKey) unsignedIntegerValue];
         if (mask == 0) return r < (2 * N - 1); // every sticky collapsed — keep the last
         // Some sticky rows stay VISIBLE (a live interactive post the feed owns), so
         // "keep the last separator" is no longer right: each visible post needs its
@@ -3626,6 +3768,8 @@ static void ApolloHLSyncSwitchedFeed(UIViewController *vc) {
     NSString *sub = ApolloHLSubredditName((UIViewController *)self);
     if (sub.length) {
         ApolloLog(@"[Highlights] r/%@ pull-to-refresh → force refresh", sub);
+        // An explicit refresh wants live comment totals, not a reused answer.
+        ApolloHLForgetInfoAnswers();
         ApolloHLRefreshSub(sub, YES);
     }
 }
